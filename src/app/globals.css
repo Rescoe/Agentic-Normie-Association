@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg:        #F5F4EF;
+    --bg-card:   #EFEDE6;
+    --fg:        #0A0A0A;
+    --fg-muted:  #6B6B6B;
+    --border:    #D6D4CC;
+    --accent:    #0A0A0A;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Pixel-border utility */
+  .pixel-border {
+    box-shadow:
+      -2px 0 0 0 var(--fg),
+       2px 0 0 0 var(--fg),
+       0 -2px 0 0 var(--fg),
+       0  2px 0 0 var(--fg);
+  }
+
+  /* Pulsing live dot */
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+  }
+  .live-dot {
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  /* Scanline overlay for hero */
+  @keyframes scanline {
+    0%   { transform: translateY(-100%); }
+    100% { transform: translateY(100vh); }
+  }
+}

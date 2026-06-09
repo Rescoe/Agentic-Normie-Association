@@ -1,0 +1,40 @@
+{
+  "name": "agentic-normie-association",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "compile": "hardhat compile",
+    "test:contracts": "hardhat test",
+    "test:contracts:coverage": "hardhat coverage",
+    "typechain": "hardhat typechain",
+    "deploy:sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
+    "deploy:base": "hardhat run scripts/deploy.ts --network base",
+    "clean": "hardhat clean && rm -rf .next"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.1.0",
+    "@rainbow-me/rainbowkit": "^2.2.3",
+    "@tanstack/react-query": "^5.65.1",
+    "next": "14.2.30",
+    "react": "^18",
+    "react-dom": "^18",
+    "viem": "^2.28.3",
+    "wagmi": "^2.14.11"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.4.20",
+    "dotenv": "^16.4.7",
+    "hardhat": "^2.22.18",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
+  }
+}

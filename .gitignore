@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Hardhat
+cache/
+artifacts/
+typechain-types/
+deployments/
+
+# Environment (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Coverage
+coverage/
+coverage.json
+
+# Misc
+*.tsbuildinfo
