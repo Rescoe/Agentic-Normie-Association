@@ -11,7 +11,10 @@ const ACTION_REGISTER    = ethers.keccak256(ethers.toUtf8Bytes("REGISTER"));
 const ROLE_PRESIDENT     = ethers.keccak256(ethers.toUtf8Bytes("PRESIDENT"));
 const ROLE_VICE_PRESIDENT = ethers.keccak256(ethers.toUtf8Bytes("VICE_PRESIDENT"));
 const ROLE_SECRETARY     = ethers.keccak256(ethers.toUtf8Bytes("SECRETARY"));
-const INSTITUTIONAL_ROLES = [ROLE_PRESIDENT, ROLE_VICE_PRESIDENT, ROLE_SECRETARY];
+const ROLE_AUTHOR        = ethers.keccak256(ethers.toUtf8Bytes("AUTHOR"));
+const ROLE_CURATOR       = ethers.keccak256(ethers.toUtf8Bytes("CURATOR"));
+const ROLE_RAPPORTEUR    = ethers.keccak256(ethers.toUtf8Bytes("RAPPORTEUR"));
+const ALL_ROLES = [ROLE_PRESIDENT, ROLE_VICE_PRESIDENT, ROLE_SECRETARY, ROLE_AUTHOR, ROLE_CURATOR, ROLE_RAPPORTEUR];
 
 // ─── Helper: register a member in AssociationCore ─────────────────────────────
 
@@ -69,9 +72,9 @@ describe("ConstituentAssembly", function () {
     core = await CoreF.deploy(relayer.address, "ANA", "ANA");
     await core.waitForDeployment();
 
-    // Deploy Assembly
+    // Deploy Assembly (roles hardcoded in contract from Roles.sol)
     const AsmF = await ethers.getContractFactory("ConstituentAssembly");
-    assembly = await AsmF.deploy(await core.getAddress(), INSTITUTIONAL_ROLES);
+    assembly = await AsmF.deploy(await core.getAddress());
     await assembly.waitForDeployment();
 
     // Authorize assembly in Core
@@ -92,7 +95,7 @@ describe("ConstituentAssembly", function () {
 
     it("exposes the electable roles", async function () {
       const roles = await assembly.getElectableRoles();
-      expect(roles).to.deep.equal(INSTITUTIONAL_ROLES);
+      expect(roles).to.deep.equal(ALL_ROLES);
     });
   });
 

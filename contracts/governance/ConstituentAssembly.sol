@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "../interfaces/IAssociationCore.sol";
+import "../lib/Roles.sol";
 
 /**
  * @title ConstituentAssembly
@@ -90,23 +91,38 @@ contract ConstituentAssembly is Ownable {
     error AlreadyVotedForRole(uint256 voterTokenId, bytes32 role);
     error RoleNotElectable(bytes32 role);
     error InvalidCore();
+    error SessionActiveCannotChangeRoles();
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * @param _core           Address of AssociationCore (must have authorized this contract)
-     * @param _electableRoles List of role bytes32 IDs electable in this assembly
-     *                        (use Roles.institutionalRoles() for the constituent phase)
+     * @param _core Address of AssociationCore (must have authorized this contract)
+     * @dev  All 6 ANA roles are hardcoded from Roles.sol — no constructor args needed.
      */
-    constructor(
-        address   _core,
-        bytes32[] memory _electableRoles
-    ) Ownable(msg.sender) {
+    constructor(address _core) Ownable(msg.sender) {
         if (_core == address(0)) revert InvalidCore();
-        core           = IAssociationCore(_core);
-        electableRoles = _electableRoles;
+        core = IAssociationCore(_core);
+        electableRoles = Roles.allRoles();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Session management (admin / owner)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Configuration (owner only, before session opens)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * @notice Set or replace the list of electable roles.
+     * @dev Can be called after deployment to configure roles without redeploying.
+     *      Cannot be called while a session is active.
+     */
+    function setElectableRoles(bytes32[] memory roles) external onlyOwner {
+        if (currentSession.active) revert SessionActiveCannotChangeRoles();
+        electableRoles = roles;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

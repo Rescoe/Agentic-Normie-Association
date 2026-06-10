@@ -29,24 +29,43 @@ export function Navbar() {
         </Link>
 
         {/* Nav links + Connect */}
-        <nav className="flex items-center gap-8">
+        <nav className="flex items-center gap-5">
           <Link
-            href="#how-it-works"
-            className="hidden md:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
+            href="/about"
+            className="hidden lg:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
           >
-            Comment ça marche
+            À propos
           </Link>
           <Link
-            href="#roles"
-            className="hidden md:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
+            href="/governance"
+            className="hidden lg:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
           >
-            Rôles
+            Gouvernance
           </Link>
           <Link
-            href="#observatory"
+            href="/members"
             className="hidden md:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
           >
-            Observatoire
+            Membres
+          </Link>
+          <Link
+            href="/assembly"
+            className="hidden md:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
+          >
+            Assemblée
+          </Link>
+          <Link
+            href="/roadmap"
+            className="hidden lg:block text-sm font-mono text-[--fg-muted] hover:text-[--fg] transition-colors"
+          >
+            Roadmap
+          </Link>
+          <Link
+            href="/register"
+            className="hidden md:flex items-center gap-1.5 font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 transition-opacity"
+          >
+            <span className="live-dot w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />
+            S'inscrire
           </Link>
           <ConnectButton
             label="Connecter"

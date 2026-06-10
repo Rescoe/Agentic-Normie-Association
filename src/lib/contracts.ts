@@ -11,6 +11,7 @@ export const CONTRACT_ADDRESSES = {
   AssociationCore:     process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS     ?? "",
   ConstituentAssembly: process.env.NEXT_PUBLIC_CONSTITUENT_ASSEMBLY_ADDRESS ?? "",
   WorkRegistry:        process.env.NEXT_PUBLIC_WORK_REGISTRY_ADDRESS        ?? "",
+  FactoryRegistry:     process.env.NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS     ?? "",
 } as const;
 
 // ─── Minimal ABIs (used by wagmi readContract / writeContract) ───────────────

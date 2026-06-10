@@ -51,15 +51,10 @@ async function main() {
   await registry.waitForDeployment();
   console.log(`      ✓ FactoryRegistry : ${await registry.getAddress()}`);
 
-  // ── 3. ConstituentAssembly (institutional roles only) ─────────────────────
+  // ── 3. ConstituentAssembly (roles hardcoded in contract from Roles.sol) ──────
   console.log("\n[3/5] Deploying ConstituentAssembly...");
-  const electableRoles = [
-    ethers.keccak256(ethers.toUtf8Bytes("PRESIDENT")),
-    ethers.keccak256(ethers.toUtf8Bytes("VICE_PRESIDENT")),
-    ethers.keccak256(ethers.toUtf8Bytes("SECRETARY")),
-  ];
   const AsmF    = await ethers.getContractFactory("ConstituentAssembly");
-  const assembly = await AsmF.deploy(await core.getAddress(), electableRoles);
+  const assembly = await AsmF.deploy(await core.getAddress());
   await assembly.waitForDeployment();
   console.log(`      ✓ ConstituentAssembly : ${await assembly.getAddress()}`);
 
