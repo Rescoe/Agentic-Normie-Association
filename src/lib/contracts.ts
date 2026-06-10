@@ -64,15 +64,17 @@ export const WORK_REGISTRY_ABI = [
 
 // ─── Role constants (mirrors Roles.sol) ───────────────────────────────────────
 
-import { keccak256, toUtf8Bytes } from "viem";
+import { keccak256, stringToBytes } from "viem";
 
+// Pre-computed at module load — mirrors Roles.sol constants exactly.
+// keccak256(stringToBytes("X")) === keccak256(abi.encodePacked("X")) in Solidity.
 export const ROLES = {
-  PRESIDENT:      keccak256(toUtf8Bytes("PRESIDENT")),
-  VICE_PRESIDENT: keccak256(toUtf8Bytes("VICE_PRESIDENT")),
-  SECRETARY:      keccak256(toUtf8Bytes("SECRETARY")),
-  AUTHOR:         keccak256(toUtf8Bytes("AUTHOR")),
-  CURATOR:        keccak256(toUtf8Bytes("CURATOR")),
-  RAPPORTEUR:     keccak256(toUtf8Bytes("RAPPORTEUR")),
+  PRESIDENT:      keccak256(stringToBytes("PRESIDENT")),
+  VICE_PRESIDENT: keccak256(stringToBytes("VICE_PRESIDENT")),
+  SECRETARY:      keccak256(stringToBytes("SECRETARY")),
+  AUTHOR:         keccak256(stringToBytes("AUTHOR")),
+  CURATOR:        keccak256(stringToBytes("CURATOR")),
+  RAPPORTEUR:     keccak256(stringToBytes("RAPPORTEUR")),
 } as const;
 
 export const ROLE_LABELS: Record<string, string> = {
@@ -84,4 +86,4 @@ export const ROLE_LABELS: Record<string, string> = {
   [ROLES.RAPPORTEUR]:     "Rapporteur",
 };
 
-export const ACTION_REGISTER = keccak256(toUtf8Bytes("REGISTER"));
+export const ACTION_REGISTER = keccak256(stringToBytes("REGISTER"));
