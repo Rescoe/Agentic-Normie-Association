@@ -1,0 +1,571 @@
+"use client";
+
+/**
+ * /admin — Panneau de contrôle de l'association.
+ *
+ * Sécurité : chaque action est protégée par onlyOwner dans le contrat.
+ * Même si quelqu'un accède à cette page, le contrat refusera toute tx
+ * non signée par le wallet propriétaire. L'UI n'est que commodité.
+ *
+ * Fonctions disponibles au owner :
+ *   AssociationCore   → authorizeModule, revokeModule, setRelayer
+ *   ConstituentAssembly → openSession, closeSession
+ */
+
+import { useState, useEffect, useCallback } from "react";
+import {
+  useAccount,
+  useReadContract,
+  useWriteContract,
+  useWaitForTransactionReceipt,
+} from "wagmi";
+import { useRouter } from "next/navigation";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { isAddress } from "viem";
+import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
+import {
+  ASSOCIATION_CORE_ABI,
+  CONSTITUENT_ASSEMBLY_ABI,
+  CONTRACT_ADDRESSES,
+  ROLES,
+  ROLE_LABELS,
+} from "@/lib/contracts";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore     as `0x${string}`;
+const CA_ADDR   = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
+const contractsDeployed = !!CONTRACT_ADDRESSES.AssociationCore;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function basescanTx(hash: string) {
+  return `https://basescan.org/tx/${hash}`;
+}
+function basescanAddr(addr: string) {
+  return `https://basescan.org/address/${addr}`;
+}
+
+// ─── AdminAction — un bouton d'action avec état tx ────────────────────────────
+
+function AdminAction({
+  label,
+  description,
+  danger = false,
+  disabled = false,
+  disabledReason,
+  onExec,
+}: {
+  label:          string;
+  description:    string;
+  danger?:        boolean;
+  disabled?:      boolean;
+  disabledReason?: string;
+  onExec:         () => Promise<void>;
+}) {
+  const [state, setState]   = useState<"idle" | "pending" | "confirming" | "done" | "error">("idle");
+  const [hash,  setHash]    = useState<string | null>(null);
+  const [error, setError]   = useState<string | null>(null);
+
+  const busy = state === "pending" || state === "confirming";
+
+  const run = async () => {
+    setState("pending");
+    setError(null);
+    try {
+      await onExec();
+      // onExec sets hash externally via callback — here we just mark confirming
+      setState("confirming");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg.includes("rejected") || msg.includes("denied") ? "Transaction annulée" : msg.slice(0, 150));
+      setState("error");
+    }
+  };
+
+  return (
+    <div className="border border-[--border] p-5 space-y-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <p className="font-bold text-sm">{label}</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">{description}</p>
+        </div>
+        <button
+          onClick={run}
+          disabled={busy || disabled || state === "done"}
+          title={disabled ? disabledReason : undefined}
+          className={`shrink-0 font-mono text-xs px-4 py-2.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            state === "done"
+              ? "bg-green-100 text-green-700 border border-green-300"
+              : danger
+              ? "border border-red-400 text-red-600 hover:bg-red-50"
+              : "bg-[--fg] text-[--bg] hover:opacity-80"
+          }`}
+        >
+          {busy ? "En cours…" : state === "done" ? "✓ Confirmé" : label}
+        </button>
+      </div>
+      {error && (
+        <p className="font-mono text-xs text-red-600 leading-snug">{error}</p>
+      )}
+      {hash && (
+        <a
+          href={basescanTx(hash)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-mono text-xs text-[--fg-muted] underline break-all"
+        >
+          {hash.slice(0, 18)}…{hash.slice(-6)} ↗
+        </a>
+      )}
+    </div>
+  );
+}
+
+// ─── StatusRow ────────────────────────────────────────────────────────────────
+
+function StatusRow({ label, value, ok }: { label: string; value: React.ReactNode; ok?: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-2.5 border-b border-[--border] last:border-none">
+      <p className="font-mono text-xs text-[--fg-muted]">{label}</p>
+      <div className="flex items-center gap-2">
+        {ok !== undefined && (
+          <span className={`w-1.5 h-1.5 rounded-full inline-block ${ok ? "bg-green-500" : "bg-red-400"}`} />
+        )}
+        <span className="font-mono text-xs text-right break-all max-w-[280px]">{value}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function AdminPage() {
+  const { address, isConnected } = useAccount();
+  const router = useRouter();
+  const { writeContractAsync } = useWriteContract();
+
+  // ── Read contract owner ───────────────────────────────────────────────────
+  const { data: coreOwner } = useReadContract({
+    address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "owner",
+    query: { enabled: contractsDeployed },
+  });
+  const { data: caOwner } = useReadContract({
+    address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "owner",
+    query: { enabled: contractsDeployed },
+  });
+
+  const isCoreOwner = isConnected && address && coreOwner &&
+    address.toLowerCase() === (coreOwner as string).toLowerCase();
+  const isCaOwner = isConnected && address && caOwner &&
+    address.toLowerCase() === (caOwner as string).toLowerCase();
+
+  // ── Read state ────────────────────────────────────────────────────────────
+  const { data: memberCount } = useReadContract({
+    address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberCount",
+    query: { enabled: contractsDeployed, refetchInterval: 10_000 },
+  });
+  const { data: relayer } = useReadContract({
+    address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "relayerAddress",
+    query: { enabled: contractsDeployed },
+  });
+  const { data: isCAAuthorized } = useReadContract({
+    address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "authorizedModules",
+    args: [CA_ADDR], query: { enabled: contractsDeployed },
+  });
+  const { data: sessionRaw } = useReadContract({
+    address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession",
+    query: { enabled: contractsDeployed, refetchInterval: 10_000 },
+  });
+  const session = sessionRaw as unknown as { id: bigint; active: boolean; resolved: boolean } | undefined;
+
+  // ── Role holders ──────────────────────────────────────────────────────────
+  const { data: memberTokenIds } = useReadContract({
+    address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds",
+    query: { enabled: contractsDeployed },
+  });
+
+  // ── Input state ───────────────────────────────────────────────────────────
+  const [moduleInput,  setModuleInput]  = useState<string>(CA_ADDR);
+  const [relayerInput, setRelayerInput] = useState("");
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  const execTx = useCallback(async (
+    address_: `0x${string}`,
+    abi: typeof ASSOCIATION_CORE_ABI | typeof CONSTITUENT_ASSEMBLY_ABI,
+    functionName: string,
+    args?: unknown[]
+  ) => {
+    const hash = await writeContractAsync({
+      address: address_,
+      abi: abi as Parameters<typeof writeContractAsync>[0]["abi"],
+      functionName: functionName as never,
+      args: (args ?? []) as never,
+    });
+    router.refresh();
+    return hash;
+  }, [writeContractAsync, router]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  if (!contractsDeployed) {
+    return (
+      <>
+        <Navbar />
+        <main className="pt-28 px-6 max-w-3xl mx-auto">
+          <p className="font-mono text-xs text-red-600">
+            Contrats non configurés (NEXT_PUBLIC_* manquants dans les env vars).
+          </p>
+        </main>
+        <Footer />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Navbar />
+      <main className="pt-28 pb-24 px-6">
+        <div className="max-w-4xl mx-auto space-y-12">
+
+          {/* En-tête */}
+          <div>
+            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-3">
+              Administration
+            </p>
+            <h1 className="text-4xl font-bold mb-4">Panneau de contrôle</h1>
+            <p className="text-[--fg-muted] leading-relaxed max-w-2xl">
+              Interface réservée au propriétaire des contrats. Chaque action est protégée
+              on-chain par <code className="bg-[--bg-card] px-1">onlyOwner</code> — un wallet
+              non-autorisé verra sa transaction révoquée par le contrat.
+            </p>
+          </div>
+
+          {/* Connexion wallet */}
+          {!isConnected ? (
+            <div className="border border-[--border] bg-[--bg-card] p-8 flex flex-col items-center gap-6 text-center">
+              <p className="font-bold">Connectez le wallet propriétaire des contrats</p>
+              <ConnectButton />
+            </div>
+          ) : !isCoreOwner && !isCaOwner ? (
+            <div className="border border-red-300 bg-red-50/30 px-6 py-5">
+              <p className="font-bold text-red-700 mb-1">Accès refusé</p>
+              <p className="font-mono text-xs text-red-600">
+                Le wallet connecté ({address?.slice(0,6)}…{address?.slice(-4)}) n'est pas
+                le propriétaire des contrats. Les boutons ci-dessous seront rejetés par le contrat.
+              </p>
+            </div>
+          ) : (
+            <div className="border border-green-300 bg-green-50/30 px-6 py-4">
+              <p className="font-mono text-xs text-green-700 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                Wallet propriétaire connecté — {address?.slice(0,6)}…{address?.slice(-4)}
+              </p>
+            </div>
+          )}
+
+          {/* État des contrats */}
+          <section className="space-y-4">
+            <h2 className="text-xl font-bold">État des contrats</h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* AssociationCore */}
+              <div className="border border-[--border] p-5 space-y-0">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="font-bold text-sm">AssociationCore</p>
+                  <a
+                    href={basescanAddr(CORE_ADDR)}
+                    target="_blank" rel="noopener noreferrer"
+                    className="font-mono text-xs text-[--fg-muted] hover:underline"
+                  >
+                    Basescan ↗
+                  </a>
+                </div>
+                <StatusRow label="Adresse"    value={`${CORE_ADDR.slice(0,10)}…${CORE_ADDR.slice(-6)}`} />
+                <StatusRow label="Membres"    value={memberCount !== undefined ? String(memberCount) : "—"} />
+                <StatusRow label="Relayer"    value={relayer ? `${(relayer as string).slice(0,10)}…` : "—"} />
+                <StatusRow
+                  label="CA autorisé"
+                  value={isCAAuthorized === true ? "Oui" : isCAAuthorized === false ? "Non" : "—"}
+                  ok={isCAAuthorized === true}
+                />
+              </div>
+
+              {/* ConstituentAssembly */}
+              <div className="border border-[--border] p-5 space-y-0">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="font-bold text-sm">ConstituentAssembly</p>
+                  <a
+                    href={basescanAddr(CA_ADDR)}
+                    target="_blank" rel="noopener noreferrer"
+                    className="font-mono text-xs text-[--fg-muted] hover:underline"
+                  >
+                    Basescan ↗
+                  </a>
+                </div>
+                <StatusRow label="Adresse"   value={`${CA_ADDR.slice(0,10)}…${CA_ADDR.slice(-6)}`} />
+                <StatusRow label="Session #" value={session ? String(session.id) : "0"} />
+                <StatusRow
+                  label="Statut session"
+                  value={session?.active ? "Ouverte" : session?.resolved ? "Clôturée" : "En attente"}
+                  ok={session?.active}
+                />
+              </div>
+            </div>
+
+            {/* Members list */}
+            {Array.isArray(memberTokenIds) && (memberTokenIds as bigint[]).length > 0 && (
+              <div className="border border-[--border] p-5">
+                <p className="font-mono text-xs text-[--fg-muted] mb-2">
+                  Membres inscrits ({(memberTokenIds as bigint[]).length})
+                </p>
+                <p className="font-mono text-sm">
+                  {(memberTokenIds as bigint[]).map(id => `#${id}`).join("  ·  ")}
+                </p>
+              </div>
+            )}
+          </section>
+
+          {/* ── Actions AssociationCore ── */}
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-xl font-bold">AssociationCore</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Owner : {coreOwner ? String(coreOwner) : "—"}
+              </p>
+            </div>
+
+            {/* authorizeModule */}
+            <div className="border border-[--border] p-5 space-y-3">
+              <div>
+                <p className="font-bold text-sm">Autoriser un module</p>
+                <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+                  Donne à un contrat périphérique le droit d'appeler <code>grantRole()</code>.
+                  {isCAAuthorized === false && (
+                    <span className="text-orange-600"> ⚠ ConstituentAssembly n'est pas encore autorisé.</span>
+                  )}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={moduleInput}
+                  onChange={e => setModuleInput(e.target.value)}
+                  placeholder="0x… adresse du module"
+                  className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-[--fg]"
+                />
+                <button
+                  disabled={!isCoreOwner || !isAddress(moduleInput)}
+                  onClick={async () => {
+                    await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "authorizeModule", [moduleInput as `0x${string}`]);
+                  }}
+                  className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                >
+                  Autoriser →
+                </button>
+              </div>
+            </div>
+
+            {/* revokeModule */}
+            <AdminAction
+              label="Révoquer un module"
+              description="Retire les droits d'un module périphérique (ex: en cas de bug ou remplacement)."
+              danger
+              disabled={!isCoreOwner}
+              disabledReason="Wallet propriétaire requis"
+              onExec={async () => {
+                await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "revokeModule", [CA_ADDR]);
+              }}
+            />
+
+            {/* setRelayer */}
+            <div className="border border-[--border] p-5 space-y-3">
+              <div>
+                <p className="font-bold text-sm">Changer le relayer</p>
+                <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+                  Remplace l'adresse autorisée à signer les attestations EIP-712.
+                  À n'utiliser qu'en cas de compromission de la clé.
+                  Relayer actuel : <span className="text-[--fg]">{relayer ? String(relayer) : "—"}</span>
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={relayerInput}
+                  onChange={e => setRelayerInput(e.target.value)}
+                  placeholder="0x… nouvelle adresse relayer"
+                  className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-[--fg]"
+                />
+                <button
+                  disabled={!isCoreOwner || !isAddress(relayerInput)}
+                  onClick={async () => {
+                    await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "setRelayer", [relayerInput as `0x${string}`]);
+                  }}
+                  className="font-mono text-xs border border-red-400 text-red-600 px-4 py-2 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                >
+                  Mettre à jour
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* ── Actions ConstituentAssembly ── */}
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-xl font-bold">ConstituentAssembly</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Owner : {caOwner ? String(caOwner) : "—"}
+              </p>
+            </div>
+
+            {/* openSession */}
+            <AdminAction
+              label="Ouvrir la session de vote"
+              description={
+                session?.active
+                  ? "Une session est déjà active — clôturez-la d'abord."
+                  : "Démarre la phase de vote. Les membres pourront voter pour les 6 rôles."
+              }
+              disabled={!isCaOwner || session?.active}
+              disabledReason={session?.active ? "Session déjà ouverte" : "Wallet propriétaire requis"}
+              onExec={async () => {
+                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession");
+              }}
+            />
+
+            {/* closeSession */}
+            <AdminAction
+              label="Clôturer et résoudre la session"
+              description={
+                isCAAuthorized === false
+                  ? "⚠ ConstituentAssembly n'est pas autorisé dans Core — autorisez-le d'abord."
+                  : "Ferme le vote. Calcule les leaders. Attribue les 6 rôles on-chain via Core.grantRole()."
+              }
+              danger
+              disabled={!isCaOwner || !session?.active || isCAAuthorized === false}
+              disabledReason={
+                !session?.active ? "Aucune session active" :
+                isCAAuthorized === false ? "Module non autorisé dans Core" :
+                "Wallet propriétaire requis"
+              }
+              onExec={async () => {
+                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "closeSession");
+              }}
+            />
+          </section>
+
+          {/* ── Documentation du flow ── */}
+          <section className="space-y-6 border-t border-[--border] pt-10">
+            <h2 className="text-xl font-bold">Déroulement de l'assemblée constituante</h2>
+
+            <div className="space-y-0">
+              {[
+                {
+                  n: "01",
+                  phase: "Déploiement (terminé)",
+                  done: true,
+                  steps: [
+                    "AssociationCore déployé avec l'adresse du relayer",
+                    "ConstituentAssembly déployé avec l'adresse de Core",
+                    "authorizeModule(CA) appelé sur Core → CA peut appeler grantRole()",
+                    "FactoryRegistry déployé",
+                  ],
+                },
+                {
+                  n: "02",
+                  phase: "Phase d'inscription (ouverte maintenant)",
+                  done: false,
+                  steps: [
+                    "Tout détenteur de Normie se connecte sur /register",
+                    "Le relayer vérifie ownerOf(tokenId) sur Ethereum mainnet",
+                    "Le relayer signe une attestation EIP-712 (nonce + deadline)",
+                    "register(attestation, sig) est appelé sur Base — membre permanent",
+                  ],
+                },
+                {
+                  n: "03",
+                  phase: "Phase de vote (owner ouvre la session)",
+                  done: false,
+                  steps: [
+                    "Owner appelle openSession() sur ConstituentAssembly",
+                    "Chaque membre vote pour chacun des 6 rôles via castVote()",
+                    "Un Normie = 1 voix par rôle, voter = le membre enregistré au snapshot",
+                    "Votes visibles en temps réel sur /assembly",
+                  ],
+                },
+                {
+                  n: "04",
+                  phase: "Résolution (owner clôture)",
+                  done: false,
+                  steps: [
+                    "Owner appelle closeSession() sur ConstituentAssembly",
+                    "Le contrat calcule le leader de chaque rôle (plus de votes, sinon tokenId le plus bas)",
+                    "grantRole() appelé sur Core pour chaque rôle — 6 rôles attribués atomiquement",
+                    "Rôles visibles sur /members et /assembly",
+                  ],
+                },
+                {
+                  n: "05",
+                  phase: "Phase créative (après résolution)",
+                  done: false,
+                  steps: [
+                    "Les rôles AUTHOR, CURATOR, RAPPORTEUR peuvent publier via WorkRegistry",
+                    "publish(dataUri, authorId, curatorId, rapporteurId) — dataUri = data:text/html;base64,...",
+                    "Chaque œuvre est permanente et vérifiable on-chain",
+                  ],
+                },
+              ].map((item) => (
+                <div key={item.n} className="grid grid-cols-[64px_1fr] gap-6 py-6 border-b border-[--border] last:border-none">
+                  <div className="text-right">
+                    <span className={`font-mono text-xs px-2 py-0.5 ${
+                      item.done
+                        ? "bg-green-100 text-green-700 border border-green-300"
+                        : "bg-[--bg-card] text-[--fg-muted] border border-[--border]"
+                    }`}>
+                      {item.done ? "✓" : item.n}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="font-bold">{item.phase}</p>
+                    <ul className="space-y-1">
+                      {item.steps.map((s, i) => (
+                        <li key={i} className="font-mono text-xs text-[--fg-muted] flex gap-2">
+                          <span className="shrink-0">→</span>
+                          <span>{s}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ── Adresses ── */}
+          <section className="space-y-3 border-t border-[--border] pt-8">
+            <h2 className="text-xl font-bold">Adresses de déploiement (Base mainnet)</h2>
+            <div className="space-y-2">
+              {[
+                { name: "AssociationCore",     addr: CORE_ADDR },
+                { name: "ConstituentAssembly", addr: CA_ADDR   },
+                { name: "FactoryRegistry",     addr: CONTRACT_ADDRESSES.FactoryRegistry },
+              ].map(c => (
+                <div key={c.name} className="flex items-center justify-between border border-[--border] bg-[--bg-card] px-4 py-3">
+                  <p className="font-mono text-xs font-bold">{c.name}</p>
+                  <a
+                    href={basescanAddr(c.addr)}
+                    target="_blank" rel="noopener noreferrer"
+                    className="font-mono text-xs text-[--fg-muted] hover:underline break-all"
+                  >
+                    {c.addr} ↗
+                  </a>
+                </div>
+              ))}
+            </div>
+          </section>
+
+        </div>
+      </main>
+      <Footer />
+    </>
+  );
+}

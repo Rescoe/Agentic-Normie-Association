@@ -38,15 +38,15 @@ const ERC721_OWNER_ABI = [
 
 async function getOwnerFromApi(tokenId: number): Promise<string | null> {
   try {
-    const res = await fetch(`${NORMIES_API_BASE}/token/${tokenId}`, {
+    // Endpoint réel vérifié : GET /normie/:id/owner → { owner: "0x..." }
+    const res = await fetch(`${NORMIES_API_BASE}/normie/${tokenId}/owner`, {
       next: { revalidate: 30 }, // 30s cache — fresh enough for registration
     });
     if (!res.ok) return null;
 
     const data = await res.json();
-    // Normies API returns owner at data.owner or data.ownerAddress
-    const owner: string | undefined = data?.owner ?? data?.ownerAddress;
-    if (!owner) return null;
+    const owner: string | undefined = data?.owner ?? data?.ownerAddress ?? data?.address;
+    if (!owner || typeof owner !== "string") return null;
 
     return getAddress(owner); // checksum
   } catch {

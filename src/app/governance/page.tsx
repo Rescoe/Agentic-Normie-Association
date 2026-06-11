@@ -51,8 +51,8 @@ const STEPS = [
   {
     n:     "02",
     title: "Ouverture de session",
-    body:  "Tout membre peut appeler openSession() sur ConstituentAssembly. La session est ouverte : les membres peuvent voter pour chacun des 6 rôles.",
-    detail: "Une seule session peut être active à la fois. Il n'y a pas de délai minimum : la session peut être clôturée dès que les votes sont suffisants.",
+    body:  "Le deployer (owner du contrat) appelle openSession() sur ConstituentAssembly depuis /admin. La session est ouverte : les membres peuvent voter pour chacun des 6 rôles.",
+    detail: "Une seule session peut être active à la fois. openSession() est réservé au owner — pas n'importe quel membre. Futur : condition on-chain automatique.",
   },
   {
     n:     "03",
@@ -70,7 +70,7 @@ const STEPS = [
     n:     "05",
     title: "Cycle créatif",
     body:  "Une fois les rôles attribués, Auteur, Curateur et Rapporteur peuvent collaborer pour produire et publier une œuvre dans WorkRegistry.",
-    detail: "publish(ipfsHash, authorTokenId, curatorTokenId, rapporteurTokenId). Les trois fonctions doivent être des rôles actifs. L'œuvre est immuable une fois publiée.",
+    detail: "publish(dataUri, authorTokenId, curatorTokenId, rapporteurTokenId). dataUri est un data:text/html;base64,… stocké directement onchain. Pas de gateway externe. L'œuvre est immuable une fois publiée.",
   },
 ];
 
@@ -163,23 +163,71 @@ export default function GovernancePage() {
             <h2 className="text-3xl font-bold mb-12 leading-tight">
               Ce qui ne change jamais.
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
                 {
-                  title: "Pas de révocation de rôle",
-                  body:  "Une fois un rôle attribué via closeSession(), il ne peut pas être révoqué. Le rôle persiste jusqu'à ce qu'une nouvelle session résolue écrase l'attribution.",
+                  title: "Mandat = 1 an",
+                  body:  "Un mandat dure un an à compter de assignedAt. Après expiration, le rôle est vacant jusqu'à la prochaine session résolue.",
                 },
                 {
-                  title: "Snapshot au moment de l'inscription",
-                  body:  "Le propriétaire enregistré dans AssociationCore est celui au moment de l'appel register(). Si le NFT change de mains, l'inscription ne change pas.",
+                  title: "Le mandat suit le NFT",
+                  body:  "Si le Normie change de propriétaire, le nouveau détenteur hérite du mandat en cours. Le rôle est attaché au tokenId, pas à l'adresse.",
+                },
+                {
+                  title: "Pas de révocation de rôle",
+                  body:  "Un rôle attribué via closeSession() ne peut pas être révoqué. Il persiste jusqu'à ce qu'une nouvelle session l'écrase. Aucune autorité centrale ne peut démettre un élu.",
                 },
                 {
                   title: "Candidat = membre",
-                  body:  "On ne peut voter que pour un autre membre inscrit. Aucune élection à la volée — la légitimité vient de l'inscription préalable.",
+                  body:  "On ne peut voter que pour un membre inscrit. La légitimité vient de l'inscription préalable, pas de la décision d'un tiers.",
                 },
               ].map((item) => (
                 <div key={item.title} className="border border-[--border] p-6 space-y-3 bg-[--bg]">
                   <p className="font-bold">{item.title}</p>
+                  <p className="text-sm text-[--fg-muted] leading-relaxed">{item.body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── Économie ──────────────────────────────────────────────────────── */}
+        <section className="px-6 py-20 border-t border-[--border]">
+          <div className="max-w-6xl mx-auto">
+            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
+              Économie
+            </p>
+            <h2 className="text-3xl font-bold mb-4 leading-tight">Les rôles ont une valeur réelle.</h2>
+            <p className="text-[--fg-muted] mb-12 max-w-xl leading-relaxed">
+              L'économie de l'ANA est un axe central, pas une réflexion après coup.
+              Les rôles actifs sont rémunérés. Les œuvres publiées génèrent des récompenses.
+              Les modules économiques sont planifiés mais pas encore déployés.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              {[
+                {
+                  title:  "Récompense à la publication",
+                  status: "Planifié",
+                  body:   "Chaque publication dans WorkRegistry déclenche une distribution automatique entre Auteur, Curateur et Rapporteur. Module : GovernanceRewards.",
+                },
+                {
+                  title:  "Allocation mensuelle",
+                  status: "Planifié",
+                  body:   "Les rôles actifs (Président, VP, Secrétaire) reçoivent une allocation mensuelle depuis la trésorerie. Module : TreasuryModule.",
+                },
+                {
+                  title:  "Staking de mandat",
+                  status: "Réflexion",
+                  body:   "Un Normie élu peut staker son token pour recevoir des récompenses supplémentaires pendant son mandat. Mécanisme de pénalité si le token est transféré avant expiration.",
+                },
+              ].map((item) => (
+                <div key={item.title} className="border border-[--border] p-6 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-bold">{item.title}</p>
+                    <span className="font-mono text-xs text-[--fg-muted] border border-[--border] px-2 py-0.5">
+                      {item.status}
+                    </span>
+                  </div>
                   <p className="text-sm text-[--fg-muted] leading-relaxed">{item.body}</p>
                 </div>
               ))}

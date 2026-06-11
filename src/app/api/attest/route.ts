@@ -41,10 +41,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { tokenId, ownerAddress } = body as Record<string, unknown>;
+  const { tokenId: rawTokenId, ownerAddress } = body as Record<string, unknown>;
 
-  // Validate tokenId
-  if (typeof tokenId !== "number" || !Number.isInteger(tokenId) || tokenId < 0) {
+  // Accept number or numeric string (API can receive either)
+  const tokenId =
+    typeof rawTokenId === "number"
+      ? rawTokenId
+      : typeof rawTokenId === "string"
+      ? parseInt(rawTokenId, 10)
+      : NaN;
+
+  if (!Number.isInteger(tokenId) || tokenId < 0) {
     return NextResponse.json(
       { error: "tokenId must be a non-negative integer" },
       { status: 400 }

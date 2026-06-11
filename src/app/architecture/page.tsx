@@ -13,6 +13,7 @@ export const metadata = {
 const DEPLOYED = {
   AssociationCore:     "0x218a2C38a16F81DcC944872264d79606b1DB1C40",
   ConstituentAssembly: "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2",
+  WorkRegistry:        "0x68cBD92b0a1bcB737364945F22522BdD4324EeCE",
   FactoryRegistry:     "0xCB440879cb709aC4176B1e098B26fd350232e670",
 } as const;
 
@@ -94,7 +95,7 @@ export default function ArchitecturePage() {
                 <div className="ml-8 space-y-2">
                   {[
                     { name: "ConstituentAssembly", addr: DEPLOYED.ConstituentAssembly, label: "GOUVERNANCE", desc: "Sessions de vote → grantRole() sur Core" },
-                    { name: "WorkRegistry",         addr: "à déployer",                 label: "CRÉATIF",     desc: "Publication d'œuvres par rôles élus" },
+                    { name: "WorkRegistry",         addr: DEPLOYED.WorkRegistry,         label: "CRÉATIF",     desc: "Œuvres onchain — data URI base64 dans calldata" },
                     { name: "FactoryRegistry",      addr: DEPLOYED.FactoryRegistry,      label: "FACTORIES",   desc: "Registre des factories par type" },
                   ].map((m) => (
                     <div key={m.name} className="border border-[--border] bg-[--bg] p-4">
@@ -241,6 +242,103 @@ struct Attestation {
           </div>
         </section>
 
+        {/* ── Stockage onchain ──────────────────────────────────────────────── */}
+        <section className="px-6 py-20 border-t border-[--border]">
+          <div className="max-w-6xl mx-auto">
+            <SectionTitle
+              tag="Stockage"
+              title="Les œuvres vivent dans le contrat."
+              sub="Il n'y a pas d'IPFS dans ANA. Pas de gateway externe. Le programme source est stocké directement dans WorkRegistry."
+            />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="space-y-4">
+                <div className="border border-[--border] p-6 space-y-3">
+                  <p className="font-bold">Comment ça fonctionne</p>
+                  <ol className="space-y-2 text-sm text-[--fg-muted]">
+                    <li>1. Le programme source (HTML/JS/CSS) est encodé en base64.</li>
+                    <li>2. Un data URI est construit : <code className="bg-[--bg-card] px-1">data:text/html;base64,&lt;b64&gt;</code></li>
+                    <li>3. Ce string est passé comme argument à <code className="bg-[--bg-card] px-1">publish()</code> — il vit dans le calldata, puis dans l'état du contrat.</li>
+                    <li>4. Le frontend lit le string, décode le base64, et exécute le programme dans un iframe sandbox.</li>
+                  </ol>
+                </div>
+                <div className="border border-[--border] p-6 space-y-3">
+                  <p className="font-bold">Coût et limites</p>
+                  <p className="text-sm text-[--fg-muted] leading-relaxed">
+                    Calldata sur Base : ~0.001–0.01 ETH par KB. Limite pratique ≈ 48 KB par publication.
+                    Suffisant pour un programme HTML interactif complet.
+                  </p>
+                  <p className="text-sm text-[--fg-muted] leading-relaxed">
+                    La source est immuable une fois publiée. Aucun service externe ne peut la censurer ou la supprimer.
+                    L'œuvre existera tant que Base existe.
+                  </p>
+                </div>
+              </div>
+              <CodeBlock>{`// Publication d'une œuvre onchain (WorkRegistry.sol)
+function publish(
+  string calldata content,     // data:text/html;base64,...
+  uint256 authorTokenId,       // rôle AUTHOR
+  uint256 curatorTokenId,      // rôle CURATOR
+  uint256 rapporteurTokenId    // rôle RAPPORTEUR
+) external onlyRole(RAPPORTEUR_ROLE) {
+  works[++workCount] = Work({
+    id:               workCount,
+    content:          content,   // stocké dans l'état
+    authorTokenId:    authorTokenId,
+    curatorTokenId:   curatorTokenId,
+    rapporteurTokenId:rapporteurTokenId,
+    publishedAt:      block.timestamp,
+    archived:         false
+  });
+  emit WorkPublished(workCount, authorTokenId);
+}
+
+// Lecture côté frontend
+const { data } = useReadContract({
+  functionName: "getWork",
+  args: [workId],
+});
+// data.content == "data:text/html;base64,..."
+// → décoder + iframe srcDoc`}</CodeBlock>
+            </div>
+          </div>
+        </section>
+
+        {/* ── FactoryRegistry ───────────────────────────────────────────────── */}
+        <section className="px-6 py-16 border-t border-[--border] bg-[--bg-card]">
+          <div className="max-w-6xl mx-auto">
+            <SectionTitle
+              tag="FactoryRegistry"
+              title="Un registre de factories."
+              sub="FactoryRegistry est déployé. Il permet d'enregistrer n'importe quel type de factory par bytes32. CollectionFactory n'est pas encore écrit."
+            />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="border border-[--border] bg-[--bg] p-6 space-y-4">
+                <p className="font-bold">Ce qui est disponible aujourd'hui</p>
+                <ul className="space-y-1 text-sm text-[--fg-muted]">
+                  <li>→ <code className="bg-[--bg-card] px-1">registerFactory(bytes32 factoryType, address impl)</code></li>
+                  <li>→ <code className="bg-[--bg-card] px-1">removeFactory(bytes32 factoryType)</code></li>
+                  <li>→ <code className="bg-[--bg-card] px-1">getFactory(bytes32 factoryType) → address</code></li>
+                  <li>→ <code className="bg-[--bg-card] px-1">listFactories() → FactoryEntry[]</code></li>
+                </ul>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  Le registre est opérationnel mais vide. Il attend qu'un <code className="bg-[--bg-card] px-1">CollectionFactory</code> soit écrit et enregistré.
+                </p>
+              </div>
+              <div className="border border-[--border] bg-[--bg] p-6 space-y-4">
+                <p className="font-bold">Collections individuelles par Normie</p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  L'objectif futur : chaque Normie peut déployer sa propre collection ERC-721
+                  en appelant <code className="bg-[--bg-card] px-1">CollectionFactory.deploy(tokenId)</code>.
+                  CollectionFactory est enregistré via <code className="bg-[--bg-card] px-1">registerFactory(COLLECTION_TYPE, addr)</code>.
+                </p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  CollectionFactory reste à écrire. C'est une priorité post-assemblée.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* ── Contrats déployés ─────────────────────────────────────────────── */}
         <section className="px-6 py-20">
           <div className="max-w-6xl mx-auto">
@@ -252,7 +350,8 @@ struct Attestation {
               {[
                 { name: "AssociationCore",     addr: DEPLOYED.AssociationCore,     chainId: "8453", note: "Immuable — ne sera jamais redéployé" },
                 { name: "ConstituentAssembly", addr: DEPLOYED.ConstituentAssembly, chainId: "8453", note: "Module de gouvernance v1" },
-                { name: "FactoryRegistry",     addr: DEPLOYED.FactoryRegistry,      chainId: "8453", note: "Registre des factories par type" },
+                { name: "WorkRegistry",        addr: DEPLOYED.WorkRegistry,        chainId: "8453", note: "Œuvres onchain — data URI en calldata" },
+                { name: "FactoryRegistry",     addr: DEPLOYED.FactoryRegistry,     chainId: "8453", note: "Registre factories par type (CollectionFactory pas encore déployé)" },
                 { name: "Normies ERC-721",     addr: "0x9Eb6E2025B64f340691e424b7fe7022fFDE12438", chainId: "1", note: "Ethereum mainnet — propriété vérifiée par le relayer" },
               ].map((c) => (
                 <div key={c.name} className="grid grid-cols-1 md:grid-cols-[200px_1fr_auto] gap-4 items-center border border-[--border] p-5 bg-[--bg-card]">

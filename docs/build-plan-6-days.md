@@ -141,17 +141,17 @@
 - [ ] Page `/creative` : interface Curateur (choix famille) + preview de l'œuvre générée
 
 **Après-midi**
-- [ ] Route API `POST /api/works/publish` : upload IPFS (Pinata) + retourne le CID
-- [ ] Hook `usePublishWork(ipfsHash, participants)` : appel WorkRegistry.publish()
+- [ ] Route API `POST /api/works/publish` : upload onchain () + retourne le CID
+- [ ] Hook `usePublishWork(onchainHash, participants)` : appel WorkRegistry.publish()
 - [ ] Page `/works` : galerie des œuvres publiées
-- [ ] Page `/works/[id]` : fiche d'une œuvre (métadonnées IPFS + participants + hash on-chain)
+- [ ] Page `/works/[id]` : fiche d'une œuvre (métadonnées onchain + participants + hash on-chain)
 - [ ] Polish UI : responsive, états de chargement, messages d'erreur
 - [ ] Test du flux complet en conditions réelles (mainnet ou testnet stable)
 - [ ] Préparer le script de démo live pour le 15 juin
 
 **Définition of Done J6**
 - Flux bout-en-bout fonctionnel : inscription → vote → rôles → génération → publication
-- L'œuvre est archivée on-chain avec son hash IPFS
+- L'œuvre est archivée on-chain avec son hash onchain
 - La démo est préparée et scriptée
 
 ---

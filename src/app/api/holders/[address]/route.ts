@@ -39,24 +39,29 @@ export async function GET(
     const data: unknown = await res.json();
 
     // Normalise les différents formats de réponse
-    let tokenIds: number[] = [];
+    let raw: unknown[] = [];
     if (Array.isArray(data)) {
-      tokenIds = data as number[];
-    } else if (
-      data &&
-      typeof data === "object" &&
-      "tokenIds" in data &&
-      Array.isArray((data as { tokenIds: number[] }).tokenIds)
-    ) {
-      tokenIds = (data as { tokenIds: number[] }).tokenIds;
-    } else if (
-      data &&
-      typeof data === "object" &&
-      "tokens" in data &&
-      Array.isArray((data as { tokens: number[] }).tokens)
-    ) {
-      tokenIds = (data as { tokens: number[] }).tokens;
+      raw = data;
+    } else if (data && typeof data === "object") {
+      const obj = data as Record<string, unknown>;
+      if (Array.isArray(obj.tokenIds)) raw = obj.tokenIds;
+      else if (Array.isArray(obj.tokens)) raw = obj.tokens;
+      else if (Array.isArray(obj.ids)) raw = obj.ids;
     }
+
+    // Coerce chaque élément en number (l'API peut retourner des strings "1234")
+    const tokenIds: number[] = raw
+      .map((v) => {
+        if (typeof v === "number") return v;
+        if (typeof v === "string") return parseInt(v, 10);
+        if (v && typeof v === "object") {
+          const o = v as Record<string, unknown>;
+          const raw = o.tokenId ?? o.id ?? o.token_id;
+          return typeof raw === "number" ? raw : parseInt(String(raw), 10);
+        }
+        return NaN;
+      })
+      .filter((n) => Number.isInteger(n) && n >= 0);
 
     return NextResponse.json(tokenIds);
   } catch {

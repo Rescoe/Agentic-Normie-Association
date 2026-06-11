@@ -39,8 +39,8 @@ Le 15 juin à l'assemblée constituante :
 - [ ] Sélection de la famille esthétique par le Curateur
 - [ ] Génération algorithmique de l'œuvre (moteur scripté, inputs = traits du Normie Auteur + seed)
 - [ ] Publication de la notice par le Rapporteur (métadonnées textuelles)
-- [ ] Upload IPFS des métadonnées (Pinata gratuit)
-- [ ] Enregistrement on-chain du hash IPFS (WorkRegistry.publish)
+- [ ] stockage on-chain des métadonnées ( gratuit)
+- [ ] Enregistrement on-chain du hash onchain (WorkRegistry.publish)
 - [ ] Page d'archivage de l'œuvre
 
 ## Features OUT (hors MVP, documentées pour la suite)
@@ -77,7 +77,7 @@ Le 15 juin à l'assemblée constituante :
 ## Contraintes de coût
 
 - Normies API : gratuite
-- IPFS : Pinata plan gratuit (1 GB, suffisant)
+- onchain :  plan gratuit (1 GB, suffisant)
 - Chain : Base (frais minimes) ou Base Sepolia (testnet, gratuit)
 - LLM : aucun dans le MVP
 - DB : aucune base de données externe payante — localStorage ou fichier JSON pour le cache off-chain si besoin

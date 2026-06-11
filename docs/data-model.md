@@ -6,12 +6,12 @@
 On-chain (source de vérité métier)
     AssociationCore → membres, rôles, modules autorisés
     ConstituentAssembly → sessions, votes
-    WorkRegistry → œuvres publiées (hash IPFS + participants)
+    WorkRegistry → œuvres publiées (hash onchain + participants)
 
 Off-chain API (source de vérité identités)
     API Normies → metadata, traits, persona, level, canvas
 
-Off-chain IPFS (données larges immuables)
+Off-chain onchain (données larges immuables)
     Métadonnées JSON des œuvres
     Assets génératifs (SVG, image, texte)
     Constitution de l'association (document texte)
@@ -75,7 +75,7 @@ mapping(bytes32 => uint256[]) candidates;
 ```solidity
 struct Work {
     uint256 id;
-    string ipfsHash;           // CIDv1 des métadonnées JSON
+    string onchainHash;           // CIDv1 des métadonnées JSON
     uint256 authorTokenId;
     uint256 curatorTokenId;
     uint256 rapporteurTokenId;
@@ -88,13 +88,13 @@ Work[] works;
 
 ---
 
-## Schéma IPFS — Métadonnées d'œuvre
+## Schéma onchain — Métadonnées d'œuvre
 
 ```json
 {
   "name": "Œuvre Fondatrice #1 — Titre généré",
   "description": "Notice rédigée par le Rapporteur...",
-  "image": "ipfs://CID_DE_L_IMAGE",
+  "image": "onchain://CID_DE_L_IMAGE",
   "external_url": "https://ana.app/works/1",
   "attributes": [
     { "trait_type": "Type", "value": "Œuvre fondatrice" },
@@ -121,7 +121,7 @@ Work[] works;
 
 ---
 
-## Schéma IPFS — Constitution
+## Schéma onchain — Constitution
 
 ```json
 {
@@ -200,8 +200,8 @@ interface VoteState {
 
 interface Work {
   id: number
-  ipfsHash: string
-  ipfsData: WorkMetadata | null    // chargé depuis IPFS
+  onchainHash: string
+  onchainData: WorkMetadata | null    // chargé depuis onchain
   authorTokenId: number
   curatorTokenId: number
   rapporteurTokenId: number
@@ -222,4 +222,4 @@ On utilise :
 
 Si besoin d'un état temporaire de génération (pendant la session créative) :
 - Fichier JSON temporaire côté serveur Next.js (en mémoire ou `tmp/`) — acceptable pour le MVP
-- L'état définitif est toujours IPFS + on-chain
+- L'état définitif est toujours onchain + on-chain

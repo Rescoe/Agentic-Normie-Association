@@ -9,6 +9,7 @@
  */
 
 import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
 import { readCurrentSession, readMemberCount, contractsDeployed } from "@/lib/chainReader";
 import { AssemblyClient } from "./AssemblyClient";
 
@@ -98,6 +99,7 @@ export default async function AssemblyPage() {
           />
         </div>
       </div>
+      <Footer />
     </>
   );
 }

@@ -51,15 +51,15 @@ Les fonctions `openSession()` et `closeSession()` sont réservées à l'owner du
 
 ---
 
-### 5. Pinata ou alternative IPFS ?
+### 5. Stockage on-chain (data URI en calldata Base).
 
 Pour l'upload des métadonnées d'œuvres.
 
-- Pinata plan gratuit : 1 GB, suffisant pour le MVP
+-  plan gratuit : 1 GB, suffisant pour le MVP
 - Alternative : web3.storage (gratuit aussi)
 - Alternative : Thirdweb storage
 
-**Recommandation** : Pinata (plus mature, bonne doc, SDK disponible).
+**Recommandation** :  (plus mature, bonne doc, SDK disponible).
 
 ---
 

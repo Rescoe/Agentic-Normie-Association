@@ -38,8 +38,8 @@ const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepol
 // Attestation valid for 15 minutes
 const DEADLINE_BUFFER_SECONDS = 15 * 60;
 
-// EIP-712 domain matches AssociationCore constructor
-const DOMAIN_NAME = "AssociationCore";
+// EIP-712 domain MUST match the constructor exactly : EIP712("ANACore", "1")
+const DOMAIN_NAME = "ANACore";
 const DOMAIN_VERSION = "1";
 
 // ACTION_REGISTER = keccak256("REGISTER") — mirrors AssociationCore.ACTION_REGISTER

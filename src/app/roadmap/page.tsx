@@ -1,133 +1,168 @@
 import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
 
 export const metadata = {
   title: "Roadmap — ANA",
-  description: "Plan d'exécution MVP de l'Agentic Normie Association.",
+  description: "Plan d'action de l'Agentic Normie Association.",
 };
 
-// ─── Données roadmap — à mettre à jour au fil de l'avancement ───────────────
-
-const MISSION = `ANA est une association culturelle on-chain dont les membres sont des agents Normies (ERC-721 + ERC-8004).
-Les Normies vivent sur Ethereum mainnet. L'association (gouvernance, votes, œuvres) existe sur Base.
-L'ownership cross-chain est vérifié par un relayer signataire EIP-712 — pas d'oracle, pas de bridge.`;
-
-type ItemStatus = "done" | "in_progress" | "todo" | "blocked";
+type ItemStatus = "done" | "in_progress" | "todo" | "next" | "future";
 
 interface RoadmapItem {
-  label: string;
+  label:  string;
   status: ItemStatus;
-  note?: string;
+  note?:  string;
 }
 
-interface RoadmapDay {
-  day: string;
-  date: string;
-  label: string;
-  items: RoadmapItem[];
+interface Phase {
+  id:       string;
+  label:    string;
+  period:   string;
+  status:   "done" | "active" | "next" | "future";
+  items:    RoadmapItem[];
 }
 
-const DONE: RoadmapItem[] = [
-  { label: "Architecture décidée : AssociationCore + modules périphériques", status: "done" },
-  { label: "Contrats Solidity (AssociationCore, ConstituentAssembly, WorkRegistry, Roles)", status: "done" },
-  { label: "55 tests contrats — tous passent", status: "done" },
-  { label: "Script de déploiement (scripts/deploy.ts)", status: "done" },
-  { label: "Landing page (sections : Hero, HowItWorks, Roles, Observatory, Agents, CTA)", status: "done" },
-  { label: "Connexion wallet RainbowKit / wagmi v2", status: "done" },
-  { label: "Backend relayer EIP-712 (src/server/relayer/)", status: "done" },
-  { label: "API route POST /api/attest", status: "done" },
-  { label: "Hook useAttestation (request + tx flow)", status: "done" },
-  { label: "Fix build Vercel (toUtf8Bytes → stringToBytes, tsconfig)", status: "done" },
-  { label: "Correction endpoints Normies API (vrais endpoints vérifiés)", status: "done" },
-  { label: "Page /register avec récupération wallet + Normies", status: "done" },
-  { label: "API proxy GET /api/holders/:address", status: "done" },
-  { label: "Page /roadmap", status: "done" },
+// ─── Données ─────────────────────────────────────────────────────────────────
+
+const PHASES: Phase[] = [
+  {
+    id: "P0", label: "Phase 0 — Infrastructure", period: "9–11 juin 2026",
+    status: "done",
+    items: [
+      { label: "Architecture core/périphérie décidée et documentée", status: "done" },
+      { label: "AssociationCore, ConstituentAssembly, WorkRegistry, FactoryRegistry — Solidity + tests", status: "done" },
+      { label: "Déploiement sur Base mainnet (adresses publiées)", status: "done" },
+      { label: "Relayer EIP-712 opérationnel (attestation cross-chain Ethereum → Base)", status: "done" },
+      { label: "ABIs Hardhat directs dans le frontend (plus de parseAbi fragile)", status: "done" },
+      { label: "Page /admin — contrôles owner : openSession, closeSession, authorizeModule", status: "done" },
+      { label: "Wallet custom (aucune modal RainbowKit, dropdown ANA)", status: "done" },
+      { label: "Suppression complète de toute logique IPFS/Pinata — tout est onchain", status: "done" },
+    ],
+  },
+  {
+    id: "P1", label: "Phase 1 — Assemblée constituante", period: "11–12 juin 2026",
+    status: "active",
+    items: [
+      { label: "Inscription des Normies membres fondateurs via /register", status: "in_progress" },
+      { label: "Ouverture de la session de vote (owner → /admin)", status: "todo" },
+      { label: "Vote des 6 rôles (Président, VP, Secrétaire, Auteur, Curateur, Rapporteur)", status: "todo" },
+      { label: "Clôture + résolution on-chain (grantRole atomique)", status: "todo" },
+      { label: "Affichage des rôles élus sur /assembly et /members", status: "done" },
+      {
+        label: "Financement des wallets agents (via /admin → section agents)",
+        status: "next",
+        note: "Les agents ont des wallets liés via /agents/binding/:tokenId — besoin d'ETH Base pour gas",
+      },
+    ],
+  },
+  {
+    id: "P2", label: "Phase 2 — Première œuvre on-chain", period: "12–14 juin 2026",
+    status: "next",
+    items: [
+      { label: "Page /publish — pipeline 4 étapes pour le Rapporteur", status: "done", note: "Opérationnel dès que les rôles sont attribués" },
+      { label: "Page /works — galerie exécutable des œuvres publiées", status: "done" },
+      { label: "Stockage programme source onchain (data URI base64 dans WorkRegistry)", status: "done", note: "Pas d'IPFS. Le code vit dans le contrat." },
+      { label: "Sandbox d'exécution isolée (allow-scripts, pas de réseau)", status: "done" },
+      {
+        label: "WorkRegistry v2 — mandat suit le NFT (ownerOf dynamique)",
+        status: "todo",
+        note: "Actuellement : holderAddress figé à l'élection. v2 : ERC721.ownerOf(ra.tokenId) == msg.sender",
+      },
+      {
+        label: "Récompenses à la publication (reward on publish → Auteur/Curateur/Rapporteur)",
+        status: "future",
+        note: "Module GovernanceRewards à déployer séparément",
+      },
+    ],
+  },
+  {
+    id: "P3", label: "Phase 3 — Économie & autonomie agents", period: "Post-hackathon",
+    status: "future",
+    items: [
+      {
+        label: "Module TreasuryModule — allocation mensuelle vers rôles actifs",
+        status: "future",
+      },
+      {
+        label: "CollectionFactory — déploiement de collections par Normie via FactoryRegistry",
+        status: "future",
+        note: "FactoryRegistry déployé, accepte n'importe quel type de factory. CollectionFactory reste à écrire.",
+      },
+      {
+        label: "Collections individuelles — chaque Normie déploie sa propre collection",
+        status: "future",
+        note: "Possible via registerFactory(COLLECTION_TYPE, collectionFactoryAddr) + appel deploy(tokenId)",
+      },
+      {
+        label: "Bascule agentique — Normies LLM autonomes (dépend normie.art)",
+        status: "future",
+        note: "Les wallets agents existent déjà (/agents/binding/). Dès que normie.art expose l'exécution LLM, le pipeline ne change pas.",
+      },
+      {
+        label: "APIs publiques x402 — machine-to-machine sans clé API",
+        status: "future",
+        note: "Cohérent avec architecture agentique observable. Toutes les routes /api sont déjà publiques.",
+      },
+      {
+        label: "Observatoire live — toute activité individuelle et collective visible",
+        status: "future",
+        note: "Décisions, votes, créations, délégations, revenus, déploiements, récompenses, conflits",
+      },
+      {
+        label: "GovernanceAssembly — sessions ordinaires (post-constituante)",
+        status: "future",
+      },
+      {
+        label: "Transfert ownership vers multi-sig (Gnosis Safe 3/5) — après 6 mois de stabilité",
+        status: "future",
+        note: "Jamais vers adresse dead. L'association doit rester gouvernable en cas d'urgence.",
+      },
+    ],
+  },
 ];
 
-const DAYS: RoadmapDay[] = [
+const DECISIONS = [
   {
-    day: "Jour 1",
-    date: "10 juin",
-    label: "Wallet + Normies + Inscription (UI prête)",
-    items: [
-      { label: "Page /register — wallet connect + Normies du wallet", status: "done" },
-      { label: "API proxy /api/holders/:address", status: "done" },
-      { label: "Cartes Normies avec image + traits + bouton Inscrire", status: "done" },
-      { label: "Mode preview (contrats non déployés) propre", status: "done" },
-      { label: "Page /roadmap intégrée dans le nav", status: "done" },
-      { label: "Variables env documentées (.env.example)", status: "in_progress", note: "Vérifier .env.example à jour" },
-    ],
+    question: "IPFS ou onchain pour les œuvres ?",
+    decision: "Onchain — toujours.",
+    detail: "Les œuvres sont stockées comme data URI base64 dans WorkRegistry. Pas de dépendance externe.",
   },
   {
-    day: "Jour 2",
-    date: "11 juin",
-    label: "Déploiement testnet + Relayer opérationnel",
-    items: [
-      { label: "Déploiement contrats sur Base Sepolia (hardhat deploy:sepolia)", status: "todo" },
-      { label: "Configurer RELAYER_PRIVATE_KEY + RELAYER_ADDRESS", status: "blocked", note: "Besoin : générer keypair relayer" },
-      { label: "Configurer NORMIES_CONTRACT_ADDRESS sur mainnet", status: "blocked", note: "Besoin : adresse contrat Normies ERC-721" },
-      { label: "Tester POST /api/attest en local avec vrai wallet", status: "todo" },
-      { label: "Configurer NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID", status: "blocked", note: "Besoin : project ID WalletConnect" },
-      { label: "Variables env dans Vercel (env dashboard)", status: "todo" },
-    ],
+    question: "Le mandat suit-il le NFT ou le wallet ?",
+    decision: "Le NFT. Un an, non réductible.",
+    detail: "Si le Normie change de mains, le nouveau détenteur hérite du mandat. WorkRegistry v2 implémente ownerOf dynamique.",
   },
   {
-    day: "Jour 3",
-    date: "12 juin",
-    label: "Inscription on-chain + Membres + Session constituante",
-    items: [
-      { label: "Inscription Normie on-chain (mode 'ready' activé)", status: "todo" },
-      { label: "Page /members — liste des membres inscrits", status: "todo" },
-      { label: "StatusBar avec vraies stats on-chain (memberCount)", status: "todo" },
-      { label: "Ouvrir session constituante (ConstituentAssembly.openSession)", status: "todo" },
-      { label: "Page /vote — liste des rôles + vote par Normie", status: "todo" },
-    ],
+    question: "Qui déclenche la session constituante ?",
+    decision: "Le deployer (owner du contrat), manuellement depuis /admin.",
+    detail: "Futur : condition on-chain (quorum atteint) ou Président élu. MVP : manuel uniquement.",
   },
   {
-    day: "Jour 4",
-    date: "13-15 juin",
-    label: "Votes + Rôles + Polish + Démo",
-    items: [
-      { label: "Clôture session + attribution rôles on-chain", status: "todo" },
-      { label: "Affichage rôles élus (President, VP, etc.)", status: "todo" },
-      { label: "Flux on-chain observatoire (lecture events Base)", status: "todo" },
-      { label: "Premier cycle créatif — WorkRegistry.publish()", status: "todo" },
-      { label: "Polish UI : loading states, transitions, responsive", status: "todo" },
-      { label: "Démo finale + submission hackathon", status: "todo" },
-    ],
+    question: "Le Président a-t-il des pouvoirs contractuels ?",
+    decision: "Non en MVP. Le deployer reste owner.",
+    detail: "Attribuer des pouvoirs au Président nécessite une analyse sécurité complète (abus, destitution). Reporté post-hackathon.",
+  },
+  {
+    question: "Les APIs sont-elles publiques ?",
+    decision: "Oui, toutes.",
+    detail: "Aucune auth pour la lecture. Cohérent avec l'architecture agentique et x402.",
+  },
+  {
+    question: "Chaque Normie peut-il déployer sa propre collection ?",
+    decision: "Prévu via FactoryRegistry, pas encore implémenté.",
+    detail: "FactoryRegistry accepte n'importe quel type. Il faut écrire CollectionFactory et registerFactory(COLLECTION, addr).",
   },
 ];
 
-const BLOCKERS = [
-  {
-    label: "Adresse contrat Normies (ERC-721 mainnet)",
-    var: "NORMIES_CONTRACT_ADDRESS",
-    impact: "Fallback RPC si l'API Normies est down. Non bloquant pour le MVP si l'API est up.",
-  },
-  {
-    label: "Keypair relayer",
-    var: "RELAYER_PRIVATE_KEY + RELAYER_ADDRESS",
-    impact: "Bloquant pour l'attestation EIP-712. Générer avec ethers.Wallet.createRandom().",
-  },
-  {
-    label: "WalletConnect Project ID",
-    var: "NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID",
-    impact: "Sans ça, le wallet connect utilise un placeholder. Peut causer des erreurs en prod.",
-  },
-  {
-    label: "Déploiement contrats Base Sepolia",
-    var: "NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS etc.",
-    impact: "Bloquant pour toute interaction on-chain. Préparer hardhat + compte déployeur.",
-  },
-];
-
-// ─── Status badge ────────────────────────────────────────────────────────────
+// ─── Components ───────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: ItemStatus }) {
   const cfg: Record<ItemStatus, { label: string; className: string }> = {
-    done:        { label: "✓ Fait",       className: "bg-green-100 text-green-700 border-green-300" },
-    in_progress: { label: "⟳ En cours",   className: "bg-yellow-50 text-yellow-700 border-yellow-300" },
-    todo:        { label: "○ À faire",     className: "bg-[--bg-card] text-[--fg-muted] border-[--border]" },
-    blocked:     { label: "⚠ Bloqué",     className: "bg-red-50 text-red-600 border-red-200" },
+    done:        { label: "✓",          className: "bg-green-100 text-green-700 border-green-300" },
+    in_progress: { label: "⟳ En cours", className: "bg-yellow-50 text-yellow-700 border-yellow-300" },
+    todo:        { label: "À faire",    className: "bg-[--bg-card] text-[--fg-muted] border-[--border]" },
+    next:        { label: "Suivant",    className: "bg-blue-50 text-blue-700 border-blue-200" },
+    future:      { label: "Futur",      className: "text-[--fg-muted] border-[--border]" },
   };
   const { label, className } = cfg[status];
   return (
@@ -137,152 +172,137 @@ function StatusBadge({ status }: { status: ItemStatus }) {
   );
 }
 
+function PhaseBadge({ status }: { status: Phase["status"] }) {
+  const cfg = {
+    done:   { label: "✓ Terminé",  cls: "bg-green-100 text-green-700 border-green-300" },
+    active: { label: "⬤ En cours", cls: "bg-yellow-50 text-yellow-700 border-yellow-300" },
+    next:   { label: "Suivant",    cls: "bg-blue-50 text-blue-700 border-blue-200" },
+    future: { label: "Futur",      cls: "text-[--fg-muted] border-[--border]" },
+  }[status];
+  return (
+    <span className={`font-mono text-xs border px-2 py-0.5 ${cfg.cls}`}>{cfg.label}</span>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function RoadmapPage() {
-  const doneCount = DONE.length;
-  const totalDayItems = DAYS.flatMap((d) => d.items).length;
-  const remainingCount = DAYS.flatMap((d) => d.items).filter(
-    (i) => i.status !== "done"
-  ).length;
+  const donePhases  = PHASES.filter(p => p.status === "done").length;
+  const totalPhases = PHASES.length;
+  const doneItems   = PHASES.flatMap(p => p.items).filter(i => i.status === "done").length;
+  const totalItems  = PHASES.flatMap(p => p.items).length;
 
   return (
     <>
       <Navbar />
-      <div className="pt-16 min-h-screen">
-        {/* Header */}
-        <div className="border-b border-[--border] bg-[--bg-card]">
-          <div className="max-w-5xl mx-auto px-6 py-10">
+      <main className="pt-28 pb-24 px-6">
+        <div className="max-w-5xl mx-auto space-y-16">
+
+          {/* En-tête */}
+          <div>
             <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-3">
-              Plan d'exécution MVP
+              Plan d'action
             </p>
             <h1 className="text-4xl font-bold mb-4">Roadmap ANA</h1>
-            <p className="text-[--fg-muted] max-w-2xl leading-relaxed">{MISSION}</p>
-
-            {/* Compteurs */}
+            <p className="text-[--fg-muted] leading-relaxed max-w-2xl">
+              ANA est une institution culturelle on-chain pour agents Normies (ERC-721 + ERC-8004).
+              Ce document est vivant — il reflète l'état réel du projet, pas une présentation.
+              Pas de fonctionnalité présentée comme terminée si elle ne l'est pas.
+            </p>
             <div className="flex gap-8 mt-8">
               <div>
-                <p className="font-mono text-2xl font-bold text-green-600">{doneCount}</p>
-                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Livrables faits</p>
+                <p className="font-mono text-2xl font-bold text-green-600">{doneItems}</p>
+                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Items terminés</p>
               </div>
               <div>
-                <p className="font-mono text-2xl font-bold text-yellow-600">{remainingCount}</p>
-                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Restants (4 jours)</p>
+                <p className="font-mono text-2xl font-bold">{totalItems - doneItems}</p>
+                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Restants</p>
+              </div>
+              <div>
+                <p className="font-mono text-2xl font-bold">{donePhases}/{totalPhases}</p>
+                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Phases</p>
               </div>
               <div>
                 <p className="font-mono text-2xl font-bold">15 juin</p>
-                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Deadline hackathon</p>
+                <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Deadline MVP</p>
               </div>
             </div>
           </div>
-        </div>
 
-        <div className="max-w-5xl mx-auto px-6 py-12 space-y-16">
-
-          {/* Section : Déjà fait */}
-          <section>
-            <h2 className="text-xl font-bold mb-6 flex items-center gap-3">
-              <span className="font-mono text-xs bg-green-100 text-green-700 border border-green-300 px-2 py-1 uppercase tracking-widest">
-                Fait
-              </span>
-              Livrables complétés
-            </h2>
-            <div className="space-y-2">
-              {DONE.map((item, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-3 py-2.5 border-b border-[--border] last:border-0"
-                >
-                  <span className="text-green-600 shrink-0">✓</span>
-                  <span className="text-sm flex-1">{item.label}</span>
+          {/* Phases */}
+          <section className="space-y-8">
+            {PHASES.map(phase => (
+              <div key={phase.id} className="border border-[--border]">
+                <div className="bg-[--bg-card] border-b border-[--border] px-6 py-4 flex items-center gap-4 flex-wrap">
+                  <span className="font-mono text-xs text-[--fg-muted]">{phase.id}</span>
+                  <PhaseBadge status={phase.status} />
+                  <h2 className="font-bold">{phase.label}</h2>
+                  <span className="font-mono text-xs text-[--fg-muted] ml-auto">{phase.period}</span>
                 </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Section : Plan 4 jours */}
-          <section>
-            <h2 className="text-xl font-bold mb-8">Plan des 4 jours restants</h2>
-            <div className="space-y-10">
-              {DAYS.map((day) => (
-                <div key={day.day} className="border border-[--border]">
-                  {/* Day header */}
-                  <div className="bg-[--bg-card] border-b border-[--border] px-6 py-4 flex items-baseline gap-4">
-                    <span className="font-mono text-lg font-bold">{day.day}</span>
-                    <span className="font-mono text-xs text-[--fg-muted]">{day.date}</span>
-                    <span className="text-sm font-semibold ml-2">{day.label}</span>
-                  </div>
-                  {/* Items */}
-                  <div className="divide-y divide-[--border]">
-                    {day.items.map((item, i) => (
-                      <div key={i} className="px-6 py-3 flex items-start gap-4">
-                        <StatusBadge status={item.status} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm">{item.label}</p>
-                          {item.note && (
-                            <p className="font-mono text-xs text-[--fg-muted] mt-0.5">
-                              → {item.note}
-                            </p>
-                          )}
-                        </div>
+                <div className="divide-y divide-[--border]">
+                  {phase.items.map((item, i) => (
+                    <div key={i} className="px-6 py-3 flex items-start gap-4">
+                      <StatusBadge status={item.status} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm">{item.label}</p>
+                        {item.note && (
+                          <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+                            → {item.note}
+                          </p>
+                        )}
                       </div>
-                    ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {/* Décisions architecturales */}
+          <section className="space-y-6">
+            <h2 className="text-xl font-bold">Décisions actées</h2>
+            <p className="text-[--fg-muted] text-sm">
+              Ces décisions sont figées. Toute modification nécessite une révision explicite
+              de ce document et de <code className="bg-[--bg-card] px-1">docs/fabrication.md</code>.
+            </p>
+            <div className="space-y-0">
+              {DECISIONS.map((d, i) => (
+                <div key={i} className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 py-5 border-b border-[--border] last:border-none">
+                  <div className="space-y-1">
+                    <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Question</p>
+                    <p className="font-medium text-sm">{d.question}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-bold text-sm">{d.decision}</p>
+                    <p className="text-sm text-[--fg-muted] leading-relaxed">{d.detail}</p>
                   </div>
                 </div>
               ))}
             </div>
           </section>
 
-          {/* Section : Blocages */}
-          <section>
-            <h2 className="text-xl font-bold mb-6 flex items-center gap-3">
-              <span className="font-mono text-xs bg-red-50 text-red-600 border border-red-200 px-2 py-1 uppercase tracking-widest">
-                Dépendances
-              </span>
-              Variables manquantes / blocages
-            </h2>
-            <div className="space-y-4">
-              {BLOCKERS.map((b, i) => (
-                <div key={i} className="border border-[--border] p-5 space-y-2">
-                  <div className="flex items-start justify-between gap-4">
-                    <p className="font-semibold text-sm">{b.label}</p>
-                    <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-2 py-0.5 shrink-0">
-                      {b.var}
-                    </code>
-                  </div>
-                  <p className="text-sm text-[--fg-muted]">{b.impact}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Section : Prochaine action */}
+          {/* État d'avancement — chantier ouvert */}
           <section className="border-2 border-[--fg] p-8 space-y-4">
             <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
-              Prochaine action immédiate
+              Chantier ouvert
             </p>
-            <h3 className="text-2xl font-bold">Déployer les contrats sur Base Sepolia</h3>
-            <div className="space-y-2 font-mono text-sm">
-              <p className="text-[--fg-muted]">1. Générer keypair relayer :</p>
-              <code className="block bg-[--bg-card] border border-[--border] px-4 py-3 text-xs">
-                node -e &quot;const w=require(&apos;ethers&apos;).Wallet.createRandom(); console.log(w.privateKey, &apos;\\n&apos;, w.address)&quot;
-              </code>
-              <p className="text-[--fg-muted] pt-2">2. Configurer .env.local avec les variables manquantes</p>
-              <p className="text-[--fg-muted]">3. Déployer :</p>
-              <code className="block bg-[--bg-card] border border-[--border] px-4 py-3 text-xs">
-                npm run deploy:sepolia
-              </code>
-              <p className="text-[--fg-muted] pt-2">4. Copier les adresses dans les variables NEXT_PUBLIC_ de Vercel</p>
-              <p className="text-[--fg-muted]">5. Tester l'inscription complète (wallet → attestation → tx Base Sepolia)</p>
+            <h3 className="text-2xl font-bold">Ce projet n'est pas terminé.</h3>
+            <p className="text-[--fg-muted] leading-relaxed max-w-2xl">
+              L'intérêt de l'ANA réside précisément dans l'observation des dynamiques émergentes :
+              comment les Normies-agents prennent des décisions, créent des œuvres, allouent des
+              ressources et se gouvernent. Cela ne peut pas être simulé — ça doit être vécu en direct,
+              on-chain, observable par tous.
+            </p>
+            <div className="space-y-2 font-mono text-sm text-[--fg-muted]">
+              <p>→ La prochaine action immédiate : ouvrir la session constituante dans <a href="/admin" className="underline hover:no-underline text-[--fg]">/admin</a></p>
+              <p>→ Observer les votes sur <a href="/assembly" className="underline hover:no-underline text-[--fg]">/assembly</a></p>
+              <p>→ Publier la première œuvre via <a href="/publish" className="underline hover:no-underline text-[--fg]">/publish</a> après l'élection</p>
             </div>
           </section>
 
-          {/* Footer note */}
-          <p className="font-mono text-xs text-[--fg-muted] text-center pb-8">
-            Roadmap mise à jour le 10 juin 2026 · Deadline hackathon : 15 juin 2026
-          </p>
         </div>
-      </div>
+      </main>
+      <Footer />
     </>
   );
 }

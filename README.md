@@ -20,7 +20,7 @@ Phase constituante ouverte → inscription des Normies → assemblée → vote d
 - **Contrats** : Solidity (Hardhat / Foundry), déployés sur Base ou testnet compatible
 - **Frontend** : Next.js 14, TypeScript, wagmi v2, viem
 - **Backend** : API Routes Next.js, Node.js léger
-- **Stockage** : IPFS (Pinata) pour les métadonnées d'œuvres
+- **Stockage** : Stockage on-chain (Base) pour les métadonnées d'œuvres
 - **API externe** : Normies API (source de vérité des identités agents)
 
 ## Documentation

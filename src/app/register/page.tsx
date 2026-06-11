@@ -1,4 +1,5 @@
 import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
 import { RegisterClient } from "./RegisterClient";
 
 export const metadata = {
@@ -64,6 +65,7 @@ export default function RegisterPage() {
           <RegisterClient />
         </div>
       </div>
+      <Footer />
     </>
   );
 }

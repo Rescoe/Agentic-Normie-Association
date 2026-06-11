@@ -17,15 +17,24 @@ const NAV_GROUPS = [
       { href: "/register", label: "Inscrire mon Normie" },
       { href: "/members",  label: "Membres fondateurs" },
       { href: "/assembly", label: "Assemblée constituante" },
+      { href: "/works",    label: "Œuvres" },
     ],
   },
   {
     label: "Externe",
     links: [
-      { href: "https://normies.art",           label: "Normies.art ↗",  external: true },
-      { href: "https://basescan.org",          label: "Basescan ↗",     external: true },
+      { href: "https://normies.art",               label: "Normies.art ↗",  external: true },
+      { href: "https://x.com/RoubziArt",           label: "@RoubziArt ↗",   external: true },
+      { href: "https://basescan.org",              label: "Basescan ↗",     external: true },
     ],
   },
+];
+
+const CONTRACTS = [
+  { name: "AssociationCore",     addr: "0x218a2C38a16F81DcC944872264d79606b1DB1C40" },
+  { name: "ConstituentAssembly", addr: "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2" },
+  { name: "WorkRegistry",        addr: "0x68cBD92b0a1bcB737364945F22522BdD4324EeCE" },
+  { name: "FactoryRegistry",     addr: "0xCB440879cb709aC4176B1e098B26fd350232e670" },
 ];
 
 export function Footer() {
@@ -53,9 +62,9 @@ export function Footer() {
               Institution culturelle on-chain.
             </p>
             <div className="space-y-1 font-mono text-xs text-[--fg-muted]">
-              <p>Base mainnet</p>
-              <p>Ethereum (Normies)</p>
-              <p>IPFS — contenu</p>
+              <p>Base mainnet — contrats</p>
+              <p>Ethereum mainnet — Normies</p>
+              <p>Tout onchain, aucune dépendance</p>
             </div>
           </div>
 
@@ -92,13 +101,42 @@ export function Footer() {
           ))}
         </div>
 
+        {/* Contrats déployés */}
+        <div className="mt-12 pt-8 border-t border-[--border] space-y-3">
+          <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+            Contrats — Base mainnet
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {CONTRACTS.map((c) => (
+              <a
+                key={c.name}
+                href={`https://basescan.org/address/${c.addr}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group border border-[--border] px-3 py-2 hover:border-[--fg] transition-colors"
+              >
+                <p className="font-mono text-xs text-[--fg] group-hover:text-[--fg]">{c.name}</p>
+                <p className="font-mono text-xs text-[--fg-muted] truncate">{c.addr}</p>
+              </a>
+            ))}
+          </div>
+        </div>
+
         {/* Bottom bar */}
-        <div className="mt-12 pt-6 border-t border-[--border] flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="mt-6 pt-6 border-t border-[--border] flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-mono text-xs text-[--fg-muted]">
-            ANA · Hackathon 2026 · Open source
+            ANA · Hackathon 2026 · Open source ·{" "}
+            <a
+              href="https://x.com/RoubziArt"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-[--fg] transition-colors"
+            >
+              @RoubziArt
+            </a>
           </p>
           <p className="font-mono text-xs text-[--fg-muted]">
-            AssociationCore · immuable · modules remplaçables
+            AssociationCore immuable · modules remplaçables · tout onchain
           </p>
         </div>
       </div>
