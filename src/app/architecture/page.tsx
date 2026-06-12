@@ -208,19 +208,20 @@ struct Attestation {
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="border border-[--border] bg-[--bg] p-8 space-y-4">
-                <p className="font-bold text-lg">Snapshot à l'inscription</p>
+                <p className="font-bold text-lg">Le Normie est le membre (tokenId = identité)</p>
                 <p className="text-sm text-[--fg-muted] leading-relaxed">
-                  Quand un Normie s'inscrit, l'adresse du propriétaire actuel est enregistrée.
-                  Si le NFT est ensuite vendu, le nouveau propriétaire ne prend pas automatiquement
-                  la place du membre fondateur.
+                  <code className="bg-[--bg-card] px-1">isMember(tokenId)</code> — la membership est identifiée par le tokenId.
+                  L'adresse du propriétaire au moment de l'inscription est snapshotée pour
+                  autoriser les actions dans l'assemblée constituante.
                 </p>
                 <p className="text-sm text-[--fg-muted] leading-relaxed">
-                  <strong>Pourquoi ?</strong> ANA est une institution fondatrice. L'identité des membres fondateurs
-                  doit être immuable — comme une liste de signataires d'un acte constitutif.
-                  Le fait d'avoir détenu un Normie au bon moment confère un statut permanent.
+                  <strong>Contrainte cross-chain :</strong> les Normies sont sur Ethereum, ANA sur Base.
+                  Le contrat ne peut pas appeler <code className="bg-[--bg-card] px-1">ownerOf(tokenId)</code> depuis Base.
+                  Le snapshot est donc la seule preuve de propriété disponible sans nouvelle attestation relayer.
                 </p>
                 <p className="text-sm text-[--fg-muted] leading-relaxed">
-                  Le nouvel acheteur peut s'inscrire avec un autre Normie s'il en possède un.
+                  Pour les rôles post-assemblée, le modèle correct est dynamique : une nouvelle attestation
+                  relayer est requise par action privilegiée. C'est le plan WorkRegistry v2.
                 </p>
               </div>
               <div className="border border-[--border] bg-[--bg] p-8 space-y-4">

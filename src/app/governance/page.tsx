@@ -45,32 +45,32 @@ const STEPS = [
   {
     n:     "01",
     title: "Inscription",
-    body:  "Un détenteur de Normie appelle /register. Le backend vérifie la propriété du token sur Ethereum via l'API Normies, signe une attestation EIP-712, et l'envoi au contrat AssociationCore sur Base. L'inscription est permanente.",
-    detail: "Le propriétaire au moment de l'inscription est enregistré dans le Core. Même si le NFT change de main, l'identité du membre fondateur reste.",
+    body:  "Un détenteur de Normie appelle /register. Le backend vérifie ownerOf(tokenId) sur Ethereum, signe une attestation EIP-712, et le wallet soumet register() sur Base. Le tokenId est enregistré comme membre de l'ANA.",
+    detail: "Le Normie (tokenId) est le membre — pas son propriétaire humain. L'adresse qui inscrit est snapshotée pour autoriser les votes dans cette assemblée (voir contrainte cross-chain ci-dessous). L'inscription est permanente et non-annulable.",
   },
   {
     n:     "02",
     title: "Ouverture de session",
-    body:  "Le deployer (owner du contrat) appelle openSession() sur ConstituentAssembly depuis /admin. La session est ouverte : les membres peuvent voter pour chacun des 6 rôles.",
-    detail: "Une seule session peut être active à la fois. openSession() est réservé au owner — pas n'importe quel membre. Futur : condition on-chain automatique.",
+    body:  "Le deployer (owner du contrat) appelle openSession() depuis /admin. La session est ouverte : les membres peuvent voter pour chacun des 6 rôles.",
+    detail: "openSession() est réservé au owner — contrainte de sécurité. Futur : condition on-chain automatique (quorum atteint) ou délégué au Président élu.",
   },
   {
     n:     "03",
     title: "Vote",
-    body:  "Chaque membre inscrit peut voter pour un candidat par rôle. Il vote avec son tokenId (qui doit être le sien). Un vote par rôle par membre, non modifiable.",
-    detail: "castVote(voterTokenId, role, candidateTokenId). Le candidat doit lui aussi être membre. Le vote est enregistré on-chain, vérifiable par tous.",
+    body:  "Chaque Normie inscrit peut voter pour un candidat par rôle. 1 Normie = 1 vote par rôle, non modifiable.",
+    detail: "castVote(voterTokenId, role, candidateTokenId). Le contrat vérifie que msg.sender == adresse snapshotée à l'inscription du voterTokenId. Candidat et votant doivent être membres inscrits.",
   },
   {
     n:     "04",
     title: "Clôture et résolution",
-    body:  "Tout membre appelle closeSession(). Le contrat calcule le leader de chaque rôle (candidat avec le plus de votes) et appelle AssociationCore.grantRole() pour chaque rôle.",
-    detail: "Les rôles sont attribués pour la durée de la session. Il n'y a pas de révocation possible — les rôles perdurent jusqu'à la prochaine session résolue.",
+    body:  "Le owner appelle closeSession(). Le contrat calcule le Normie gagnant pour chaque rôle et appelle grantRole() sur AssociationCore pour chacun.",
+    detail: "Résolution atomique : tous les rôles en une seule transaction. Égalité : tokenId le plus bas gagne. Rôle sans vote = vacant. Aucune révocation possible après attribution.",
   },
   {
     n:     "05",
     title: "Cycle créatif",
-    body:  "Une fois les rôles attribués, Auteur, Curateur et Rapporteur peuvent collaborer pour produire et publier une œuvre dans WorkRegistry.",
-    detail: "publish(dataUri, authorTokenId, curatorTokenId, rapporteurTokenId). dataUri est un data:text/html;base64,… stocké directement onchain. Pas de gateway externe. L'œuvre est immuable une fois publiée.",
+    body:  "Une fois les rôles attribués, Auteur, Curateur et Rapporteur collaborent pour produire et publier une œuvre dans WorkRegistry.",
+    detail: "publish(dataUri, authorTokenId, curatorTokenId, rapporteurTokenId). dataUri = data:text/html;base64,… encodé côté client, stocké directement onchain. Pas de gateway externe. L'œuvre est immuable.",
   },
 ];
 
@@ -154,32 +154,84 @@ export default function GovernancePage() {
           </div>
         </section>
 
-        {/* ── Règles importantes ────────────────────────────────────────────── */}
+        {/* ── Modèle de membership ──────────────────────────────────────────── */}
         <section className="px-6 py-16 border-t border-[--border] bg-[--bg-card]">
-          <div className="max-w-6xl mx-auto">
-            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
-              Règles
-            </p>
-            <h2 className="text-3xl font-bold mb-12 leading-tight">
-              Ce qui ne change jamais.
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="max-w-6xl mx-auto space-y-12">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
+                Modèle de membership
+              </p>
+              <h2 className="text-3xl font-bold leading-tight">
+                Le Normie est le membre. Pas son propriétaire.
+              </h2>
+            </div>
+
+            {/* Deux régimes côte à côte */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Modèle conceptuel */}
+              <div className="border-2 border-[--fg] p-8 space-y-4">
+                <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+                  Modèle conceptuel (la règle)
+                </p>
+                <p className="font-bold text-lg">tokenId = membre</p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  <code className="bg-[--bg-card] px-1">isMember(tokenId)</code> — c'est le Normie qui adhère à l'ANA,
+                  pas un humain. Ses propriétaires successifs sont ses opérateurs.
+                </p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  Quand un Normie élu change de mains, le nouveau propriétaire hérite
+                  du mandat. <strong>Le rôle suit le NFT, pas l'adresse.</strong>
+                </p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  Mandat : <strong>1 an</strong> à compter de l'attribution. Non révocable.
+                  Vacant après expiration.
+                </p>
+              </div>
+
+              {/* Contrainte technique */}
+              <div className="border border-[--border] bg-[--bg] p-8 space-y-4">
+                <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+                  Contrainte technique (l'implémentation MVP)
+                </p>
+                <p className="font-bold text-lg">Snapshot cross-chain à l'inscription</p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  ANA est sur Base. Les Normies sont sur Ethereum.
+                  Le contrat <strong>ne peut pas appeler <code className="bg-[--bg-card] px-1">ownerOf(tokenId)</code> sur Ethereum</strong> depuis Base
+                  sans une attestation relayer fraîche.
+                </p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  Pour l'assemblée constituante, l'adresse qui a prouvé
+                  la propriété à l'inscription est snapshotée. C'est elle qui est
+                  autorisée à voter — pas nécessairement le propriétaire actuel sur Ethereum.
+                </p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  <strong>Ce que ça change si le NFT est vendu après inscription :</strong><br/>
+                  Le tokenId reste membre. L'ancien propriétaire peut encore voter dans cette assemblée (snapshot figé).
+                  Le nouveau propriétaire ne peut pas — son adresse ≠ snapshot.
+                  C'est une anomalie tolérable pour un événement fondateur unique.
+                </p>
+                <div className="border-t border-[--border] pt-4">
+                  <p className="font-mono text-xs text-[--fg-muted]">
+                    Résolution : WorkRegistry v2 demandera une fresh attestation pour chaque action privilegiée → ownership dynamique.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Invariants */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {[
                 {
-                  title: "Mandat = 1 an",
-                  body:  "Un mandat dure un an à compter de assignedAt. Après expiration, le rôle est vacant jusqu'à la prochaine session résolue.",
-                },
-                {
-                  title: "Le mandat suit le NFT",
-                  body:  "Si le Normie change de propriétaire, le nouveau détenteur hérite du mandat en cours. Le rôle est attaché au tokenId, pas à l'adresse.",
-                },
-                {
-                  title: "Pas de révocation de rôle",
+                  title: "Pas de révocation",
                   body:  "Un rôle attribué via closeSession() ne peut pas être révoqué. Il persiste jusqu'à ce qu'une nouvelle session l'écrase. Aucune autorité centrale ne peut démettre un élu.",
                 },
                 {
-                  title: "Candidat = membre",
-                  body:  "On ne peut voter que pour un membre inscrit. La légitimité vient de l'inscription préalable, pas de la décision d'un tiers.",
+                  title: "Candidat = membre inscrit",
+                  body:  "On ne peut voter que pour un Normie membre. La légitimité vient de l'inscription préalable, pas de la décision d'un tiers.",
+                },
+                {
+                  title: "Résolution déterministe",
+                  body:  "En cas d'égalité, le tokenId le plus bas gagne. Pas d'arbitrage humain. Tout est calculé et écrit on-chain dans closeSession().",
                 },
               ].map((item) => (
                 <div key={item.title} className="border border-[--border] p-6 space-y-3 bg-[--bg]">
