@@ -601,6 +601,11 @@ function CreativeAssemblySection() {
   const [llmError,   setLlmError]   = useState<string | null>(null);
   const [brief,      setBrief]      = useState<string | null>(null);
 
+  // Artwork generation
+  const [generating,    setGenerating]    = useState(false);
+  const [generatedHtml, setGeneratedHtml] = useState<string | null>(null);
+  const [genError,      setGenError]      = useState<string | null>(null);
+
   // initiateWorkSession tx
   const [txHash,  setTxHash]  = useState<`0x${string}` | null>(null);
   const [txState, setTxState] = useState<"idle"|"pending"|"confirming"|"done"|"error">("idle");
@@ -690,6 +695,27 @@ function CreativeAssemblySection() {
       setDiscussing(false);
     }
   }, [discussing, activeElected]);
+
+  // ── Générer l'œuvre HTML depuis le brief ───────────────────────────────────
+  const generateArtwork = useCallback(async (briefText: string) => {
+    setGenerating(true);
+    setGeneratedHtml(null);
+    setGenError(null);
+    try {
+      const res = await fetch("/api/llm/generate-artwork", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ brief: briefText, elected: activeElected }),
+      });
+      const data = await res.json() as { html?: string; error?: string };
+      if (!res.ok || !data.html) throw new Error(data.error ?? "Aucun HTML retourné");
+      setGeneratedHtml(data.html);
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenerating(false);
+    }
+  }, [activeElected]);
 
   // ── Initier une session de création ────────────────────────────────────────
   const initiateSession = useCallback(async () => {
@@ -848,17 +874,93 @@ function CreativeAssemblySection() {
 
       {/* Brief artistique extracted */}
       {brief && !discussing && (
-        <div className="border-2 border-[--fg] p-6 space-y-3">
+        <div className="border-2 border-[--fg] p-6 space-y-4">
           <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
             Brief artistique — décision de l'assemblée
           </p>
           <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap">{brief}</pre>
-          <a
-            href="/publish"
-            className="inline-block font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80"
-          >
-            Publier l'œuvre on-chain →
-          </a>
+
+          {/* Generate artwork from brief */}
+          <div className="border-t border-[--border] pt-4 space-y-4">
+            <p className="font-mono text-xs text-[--fg-muted]">
+              Étape suivante : générer le programme HTML/JS qui incarne ce brief.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => generateArtwork(brief)}
+                disabled={generating}
+                className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+              >
+                {generating ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin" />
+                    Génération en cours…
+                  </span>
+                ) : "Générer l'œuvre →"}
+              </button>
+              <a
+                href="/publish"
+                className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card]"
+              >
+                Publier manuellement →
+              </a>
+            </div>
+
+            {genError && (
+              <p className="font-mono text-xs text-red-600">
+                {genError.includes("GROQ_API_KEY")
+                  ? "LLM non configuré — ajoutez GROQ_API_KEY dans .env.local"
+                  : genError}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Generated artwork preview */}
+      {generatedHtml && (
+        <div className="space-y-4">
+          <div className="border-2 border-green-400 bg-[--bg]">
+            <div className="flex items-center justify-between px-5 py-3 bg-green-50/20 border-b border-green-300">
+              <p className="font-mono text-xs text-green-700 uppercase tracking-widest">
+                Œuvre générée — preview sandbox
+              </p>
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                <span className="font-mono text-xs text-green-700">Prête à publier</span>
+              </div>
+            </div>
+            <iframe
+              srcDoc={generatedHtml}
+              className="w-full h-[480px] border-0 bg-black"
+              sandbox="allow-scripts"
+              title="Œuvre générée"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Pass HTML as sessionStorage key to /publish */}
+            <button
+              onClick={() => {
+                sessionStorage.setItem("ana_generated_html", generatedHtml);
+                window.location.href = "/publish";
+              }}
+              className="font-mono text-xs bg-[--fg] text-[--bg] px-6 py-3 hover:opacity-80"
+            >
+              Publier cette œuvre on-chain →
+            </button>
+            <button
+              onClick={() => generateArtwork(brief ?? "")}
+              disabled={generating}
+              className="font-mono text-xs border border-[--border] px-5 py-3 hover:bg-[--bg-card] disabled:opacity-40"
+            >
+              {generating ? "Régénération…" : "↺ Régénérer"}
+            </button>
+          </div>
+
+          <p className="font-mono text-xs text-[--fg-muted]">
+            Le HTML sera encodé base64 et stocké directement dans WorkRegistry — aucun service externe.
+          </p>
         </div>
       )}
     </div>

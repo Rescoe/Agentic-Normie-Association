@@ -453,6 +453,15 @@ export function PublishClient() {
   const [author,  setAuthor]  = useState<number | null>(null);
   const [curator, setCurator] = useState<number | null>(null);
 
+  // Load pre-generated HTML from assembly creative section (sessionStorage)
+  useEffect(() => {
+    const stored = sessionStorage.getItem("ana_generated_html");
+    if (stored) {
+      setCode(stored);
+      sessionStorage.removeItem("ana_generated_html");
+    }
+  }, []);
+
   const { data: rapporteurRaw } = useReadContract({
     address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getRoleHolder",
     args: [ROLES.RAPPORTEUR],
