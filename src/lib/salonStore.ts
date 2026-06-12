@@ -9,7 +9,10 @@
 import fs from "fs";
 import path from "path";
 
-const DATA_FILE = path.join(process.cwd(), ".salon-data.json");
+// Vercel serverless: process.cwd() is read-only, write to /tmp instead
+const DATA_FILE = process.env.VERCEL
+  ? "/tmp/salon-data.json"
+  : path.join(process.cwd(), ".salon-data.json");
 const MAX_MESSAGES_PER_HOUR = 4;  // per Normie per salon
 const MAX_MESSAGES_PER_SALON = 500;
 
