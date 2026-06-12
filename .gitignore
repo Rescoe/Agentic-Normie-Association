@@ -24,6 +24,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Salon data (runtime store — not for git)
+.salon-data.json
+
 # Coverage
 coverage/
 coverage.json

@@ -130,19 +130,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ votes: [], message: "No registered members" });
   }
 
+  // API key check — fail fast with a clear message
+  if (!process.env.GROQ_API_KEY) {
+    return NextResponse.json({
+      error: "GROQ_API_KEY manquant dans .env.local — ajoutez GROQ_API_KEY=gsk_... et redémarrez.",
+    }, { status: 500 });
+  }
+
   // 2. Build personas for all members
   const personas = await Promise.all(memberIds.map(id => buildPersona(id).catch(() => null)));
   const validPersonas = personas.filter((p): p is NormiePersona => p !== null);
 
+  if (validPersonas.length === 0) {
+    return NextResponse.json({
+      error: "Aucun persona construit — l'API Normies est peut-être indisponible.",
+      memberIds,
+    }, { status: 503 });
+  }
+
   // 3. For each role × each member, decide vote via LLM
   const roleEntries = Object.entries(ROLES) as [string, `0x${string}`][];
   const decisions: VoteDecision[] = [];
+  const errors: string[] = [];
 
   for (const [roleName, roleHash] of roleEntries) {
     const roleLabel = ROLE_LABELS[roleHash] ?? roleName;
 
     for (const voter of validPersonas) {
-      const candidates = validPersonas; // all members are candidates
+      const candidates = validPersonas;
       try {
         const prompt   = await buildVotePrompt(voter, roleLabel, candidates);
         const response = await callGroqSimple(prompt);
@@ -159,9 +174,11 @@ export async function POST(req: NextRequest) {
             candidateName:    candidate?.name ?? `#${parsed.tokenId}`,
             reasoning:        parsed.reasoning,
           });
+        } else {
+          errors.push(`#${voter.tokenId}→${roleLabel}: parse fail "${response.slice(0, 80)}"`);
         }
-      } catch {
-        // Skip on LLM error for this voter/role pair
+      } catch (e) {
+        errors.push(`#${voter.tokenId}→${roleLabel}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }
@@ -173,6 +190,7 @@ export async function POST(req: NextRequest) {
       roleCount:     roleEntries.length,
       decisionCount: decisions.length,
       decisions,
+      errors: errors.length > 0 ? errors : undefined,
       note: "Simulation only — no transactions submitted. Set mode=execute to submit votes (requires castVoteRelayed contract update).",
     });
   }

@@ -18,16 +18,51 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "ANA — Agentic Normie Association",
-  description:
-    "La première institution culturelle on-chain d'agents NFT. Les Normies se réunissent, délibèrent, élisent et créent ensemble.",
-  icons: {
-    icon: "/favicon.ico",
+  title: {
+    default:  "ANA — Agentic Normie Association",
+    template: "%s | ANA",
   },
+  description:
+    "ANA est la première association culturelle on-chain gouvernée par des agents NFT Normies. Ils se réunissent, délibèrent, élisent leurs représentants et créent des œuvres collectives. Déployée sur Base, membres sur Ethereum.",
+  keywords: [
+    "Normies", "Normies NFT", "ANA", "Agentic Normie Association",
+    "association on-chain", "agents NFT", "ERC-8004", "Base", "gouvernance on-chain",
+    "art génératif on-chain", "première association de normies", "loi 1901 on-chain",
+    "agent IA autonome", "NFT collectif", "DAO culturelle",
+  ],
+  authors: [{ name: "Rescoe", url: "https://rescoe.com" }],
+  creator: "Rescoe",
+  metadataBase: new URL("https://app.ana.normies.art"),
+  alternates: { canonical: "/" },
+  icons: { icon: "/favicon.ico" },
   openGraph: {
-    title: "ANA — Agentic Normie Association",
-    description: "La première institution culturelle on-chain d'agents NFT.",
-    images: ["/Logo_ANA.png"],
+    type:        "website",
+    locale:      "fr_FR",
+    url:         "https://app.ana.normies.art",
+    siteName:    "ANA — Agentic Normie Association",
+    title:       "ANA — La première association de Normies on-chain",
+    description: "ANA est la première association culturelle gouvernée par des agents NFT autonomes. Déployée sur Base. Tout est on-chain.",
+    images: [{
+      url:    "/Logo_ANA.png",
+      width:  800,
+      height: 800,
+      alt:    "ANA — Agentic Normie Association",
+    }],
+  },
+  twitter: {
+    card:        "summary_large_image",
+    title:       "ANA — La première association de Normies on-chain",
+    description: "Gouvernée par des agents NFT autonomes. Déployée sur Base.",
+    images:      ["/Logo_ANA.png"],
+  },
+  robots: {
+    index:        true,
+    follow:       true,
+    googleBot: {
+      index:              true,
+      follow:             true,
+      "max-image-preview": "large",
+    },
   },
 };
 

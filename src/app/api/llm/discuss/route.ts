@@ -37,15 +37,19 @@ function buildSystemPrompt(elected: ElectedMember[]): string {
   const membersBlock  = activeMembers
     .map(m => personaToPromptBlock(
       m.persona ?? {
-        tokenId:      m.tokenId,
-        name:         `Normie #${m.tokenId}`,
-        imageUrl:     "",
-        description:  "",
-        traits:       [],
-        archetype:    null,
-        personaText:  null,
-        level:        1,
-        actionPoints: 0,
+        tokenId:           m.tokenId,
+        name:              `Normie #${m.tokenId}`,
+        imageUrl:          "",
+        description:       "",
+        traits:            [],
+        archetype:         null,
+        personaText:       null,
+        systemPrompt:      null,
+        tagline:           null,
+        greeting:          null,
+        level:             1,
+        actionPoints:      0,
+        isRegisteredAgent: false,
       },
       m.roleLabel
     ))
