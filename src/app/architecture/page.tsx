@@ -15,6 +15,13 @@ const DEPLOYED = {
   ConstituentAssembly: "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2",
   WorkRegistry:        "0x68cBD92b0a1bcB737364945F22522BdD4324EeCE",
   FactoryRegistry:     "0xCB440879cb709aC4176B1e098B26fd350232e670",
+  NormiesERC721:       "0x9Eb6E2025B64f340691e424b7fe7022fFDE12438",
+} as const;
+
+const PENDING = {
+  GovernanceCalendar: "— après redéploiement",
+  TreasuryModule:     "— après redéploiement",
+  CollectionFactory:  "— après redéploiement",
 } as const;
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -58,6 +65,127 @@ export default function ArchitecturePage() {
               Les modules périphériques peuvent évoluer, être remplacés ou étendus —
               sans jamais toucher l'identité ni la mémoire de l'association.
             </p>
+          </div>
+        </section>
+
+        {/* ── Carte complète des contrats ───────────────────────────────────── */}
+        <section className="px-6 py-16 border-y border-[--border]">
+          <div className="max-w-6xl mx-auto">
+            <SectionTitle
+              tag="Vue d'ensemble"
+              title="8 contrats, 2 chaînes, 3 acteurs."
+              sub="Ethereum mainnet (Normies ERC-721) + Base mainnet (toute la logique ANA). Les acteurs : le déployeur (owner), les Normies-membres, et le relayer backend."
+            />
+
+            {/* Diagramme ASCII */}
+            <CodeBlock>{`ETHEREUM MAINNET
+┌──────────────────────────────────────────────────────────────────┐
+│  Normies ERC-721  (0x9Eb6E2…)                                    │
+│  ownerOf(tokenId) → wallet                                       │
+│  Transfer events → burn → création automatique (GovernanceCalendar) │
+└──────────────────────┬───────────────────────────────────────────┘
+                       │  Relayer vérifie ownerOf (hors-chaîne)
+                       │  Signe une attestation EIP-712
+                       ▼
+BASE MAINNET
+┌──────────────────────────────────────────────────────────────────┐
+│  AssociationCore  [IMMUABLE]                                      │
+│  ├── members[tokenId]        → Member{ownerAddress, registeredAt}│
+│  ├── roles[bytes32]          → RoleAssignment{tokenId, holder}   │
+│  ├── authorizedModules[addr] → bool                              │
+│  └── usedNonces[nonce]       → bool (anti-replay)                │
+│                                                                  │
+│  ← register(attestation, sig)    appelé par le wallet Normie     │
+│  ← grantRole(role, tokenId)      appelé par modules autorisés    │
+│  ← authorizeModule(addr)         appelé par l'owner              │
+└──┬───────────────┬────────────────────┬────────────────┬─────────┘
+   │ lit membres   │ écrit rôles        │ lit membres    │ lit rôles
+   ▼               ▼                    ▼                ▼
+┌──────────────┐  ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐
+│ Constituent  │  │ GovernanceCal.│  │ WorkRegistry │  │ TreasuryModule   │
+│ Assembly     │  │               │  │  v2          │  │                  │
+│              │  │ events[id]    │  │ works[id]    │  │ balances[role]   │
+│ sessions[id] │  │ INSCRIPTION   │  │ sessions[n]  │  │ splits BPS/10000 │
+│ voteCounts   │  │ ELECTION      │  │ schedule     │  │ withdraw() pull  │
+│ hasVoted[][] │  │ GENERAL_ASSEM │  │              │  │                  │
+│              │  │ WORK_SESSION  │  │ permissionless│  │ receive() split  │
+│ closeSession │  │ BURN_CREATION │  │ trigger      │  │ auto à reception │
+│ → grantRole()│  │               │  │              │  │                  │
+└──────────────┘  └───────────────┘  └──────────────┘  └──────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  FactoryRegistry  [ANNUAIRE]                                      │
+│  factories[bytes32] → address                                    │
+│  keccak256("NORMIE_COLLECTION") → CollectionFactory.address      │
+│                                                                  │
+│  ← registerFactory(type, addr)  owner seulement                  │
+│  ← getFactory(type) → addr      lecture publique                 │
+└──────────────────────┬───────────────────────────────────────────┘
+                       │  lookup d'adresse (pas d'appel direct)
+                       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  CollectionFactory                                                │
+│  ← createCollection(tokenId, name, symbol)                       │
+│     vérifie core.isMember(tokenId) + core.getMemberOwner()       │
+│     déploie → NormieCollection (ERC-721 fully on-chain)          │
+│  normieCollections[tokenId][] → adresses des collections         │
+└──────────────────────────────────────────────────────────────────┘`}</CodeBlock>
+
+            {/* Légende acteurs */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
+              {[
+                {
+                  actor: "Normie membre",
+                  actions: [
+                    "register(attestation, sig) → AssociationCore",
+                    "castVote(tokenId, role, candidateId) → ConstituentAssembly",
+                    "initiateWorkSession() → WorkRegistry (quand calendrier dû)",
+                    "triggerEvent(eventId) → GovernanceCalendar (quand dû)",
+                    "createCollection(tokenId, name, sym) → CollectionFactory",
+                    "withdraw() → TreasuryModule (si role holder)",
+                  ],
+                  color: "border-blue-200 bg-blue-50/30",
+                  badge: "text-blue-700 border-blue-300",
+                },
+                {
+                  actor: "Owner / Deployer",
+                  actions: [
+                    "authorizeModule(CA) → AssociationCore",
+                    "openSession() / closeSession() → ConstituentAssembly",
+                    "setSchedule(ts, period, active) → WorkRegistry",
+                    "initializeFoundingSchedule() → GovernanceCalendar",
+                    "registerFactory(type, addr) → FactoryRegistry",
+                    "setRelayer(addr) → AssociationCore (si clé compromise)",
+                  ],
+                  color: "border-purple-200 bg-purple-50/30",
+                  badge: "text-purple-700 border-purple-300",
+                },
+                {
+                  actor: "Relayer backend",
+                  actions: [
+                    "Vérifie ownerOf(tokenId) sur Ethereum mainnet",
+                    "Signe attestation EIP-712 (tokenId, owner, nonce, deadline)",
+                    "Le wallet Normie soumet register() avec la signature",
+                    "Le Core vérifie la signature ECDSA côté contrat",
+                    "(jamais de tx on-chain — signe seulement)",
+                  ],
+                  color: "border-orange-200 bg-orange-50/30",
+                  badge: "text-orange-700 border-orange-300",
+                },
+              ].map((a) => (
+                <div key={a.actor} className={`border ${a.color} p-5 space-y-3`}>
+                  <span className={`font-mono text-xs border px-2 py-0.5 ${a.badge}`}>{a.actor}</span>
+                  <ul className="space-y-1">
+                    {a.actions.map((action, i) => (
+                      <li key={i} className="font-mono text-xs text-[--fg-muted] flex gap-2">
+                        <span className="shrink-0">→</span>
+                        <span>{action}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -304,38 +432,80 @@ const { data } = useReadContract({
           </div>
         </section>
 
-        {/* ── FactoryRegistry ───────────────────────────────────────────────── */}
+        {/* ── FactoryRegistry vs CollectionFactory ─────────────────────────── */}
         <section className="px-6 py-16 border-t border-[--border] bg-[--bg-card]">
           <div className="max-w-6xl mx-auto">
             <SectionTitle
-              tag="FactoryRegistry"
-              title="Un registre de factories."
-              sub="FactoryRegistry est déployé. Il permet d'enregistrer n'importe quel type de factory par bytes32. CollectionFactory n'est pas encore écrit."
+              tag="Factories"
+              title="FactoryRegistry ≠ CollectionFactory."
+              sub="Deux contrats distincts avec deux rôles orthogonaux. FactoryRegistry est déployé. CollectionFactory est écrit — il attend son déploiement."
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="border border-[--border] bg-[--bg] p-6 space-y-4">
-                <p className="font-bold">Ce qui est disponible aujourd'hui</p>
+
+              <div className="border-2 border-[--border] bg-[--bg] p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="font-bold">FactoryRegistry</p>
+                  <span className="font-mono text-xs border border-green-400 text-green-700 bg-green-50 px-2 py-0.5">DÉPLOYÉ</span>
+                </div>
+                <p className="text-sm text-[--fg-muted] font-semibold">Rôle : annuaire de lookup</p>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  Mappe des types <code className="bg-[--bg-card] px-1">bytes32</code> → adresses de factories.
+                  Il ne déploie <strong>rien</strong> lui-même. C'est un registre de découverte :
+                  n'importe quel code (frontend, agent, autre contrat) peut demander
+                  <em> "quelle adresse gère le type NORMIE_COLLECTION ?"</em>
+                </p>
                 <ul className="space-y-1 text-sm text-[--fg-muted]">
-                  <li>→ <code className="bg-[--bg-card] px-1">registerFactory(bytes32 factoryType, address impl)</code></li>
-                  <li>→ <code className="bg-[--bg-card] px-1">removeFactory(bytes32 factoryType)</code></li>
-                  <li>→ <code className="bg-[--bg-card] px-1">getFactory(bytes32 factoryType) → address</code></li>
-                  <li>→ <code className="bg-[--bg-card] px-1">listFactories() → FactoryEntry[]</code></li>
+                  <li>→ <code className="bg-[--bg-card] px-1">registerFactory(type, addr)</code> — owner</li>
+                  <li>→ <code className="bg-[--bg-card] px-1">getFactory(type) → address</code> — public</li>
+                  <li>→ <code className="bg-[--bg-card] px-1">listFactories()</code> — public</li>
                 </ul>
-                <p className="text-sm text-[--fg-muted] leading-relaxed">
-                  Le registre est opérationnel mais vide. Il attend qu'un <code className="bg-[--bg-card] px-1">CollectionFactory</code> soit écrit et enregistré.
-                </p>
+                <p className="font-mono text-xs text-[--fg-muted]">{DEPLOYED.FactoryRegistry}</p>
+                <div className="border-t border-[--border] pt-3">
+                  <p className="text-xs text-[--fg-muted] italic">
+                    Actuellement vide — CollectionFactory doit être enregistré après déploiement via
+                    <code className="bg-[--bg-card] px-1 ml-1">registerFactory(keccak256("NORMIE_COLLECTION"), collectionFactoryAddr)</code>
+                  </p>
+                </div>
               </div>
-              <div className="border border-[--border] bg-[--bg] p-6 space-y-4">
-                <p className="font-bold">Collections individuelles par Normie</p>
+
+              <div className="border-2 border-orange-300 bg-[--bg] p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="font-bold">CollectionFactory</p>
+                  <span className="font-mono text-xs border border-orange-400 text-orange-700 bg-orange-50 px-2 py-0.5">À DÉPLOYER</span>
+                </div>
+                <p className="text-sm text-[--fg-muted] font-semibold">Rôle : logique de déploiement</p>
                 <p className="text-sm text-[--fg-muted] leading-relaxed">
-                  L'objectif futur : chaque Normie peut déployer sa propre collection ERC-721
-                  en appelant <code className="bg-[--bg-card] px-1">CollectionFactory.deploy(tokenId)</code>.
-                  CollectionFactory est enregistré via <code className="bg-[--bg-card] px-1">registerFactory(COLLECTION_TYPE, addr)</code>.
+                  Déploie des <code className="bg-[--bg-card] px-1">NormieCollection</code> (ERC-721 fully on-chain).
+                  Vérifie que le caller est un membre ANA via AssociationCore avant de déployer.
+                  Chaque Normie membre peut créer sa propre collection d'œuvres.
                 </p>
-                <p className="text-sm text-[--fg-muted] leading-relaxed">
-                  CollectionFactory reste à écrire. C'est une priorité post-assemblée.
-                </p>
+                <ul className="space-y-1 text-sm text-[--fg-muted]">
+                  <li>→ <code className="bg-[--bg-card] px-1">createCollection(tokenId, name, symbol)</code></li>
+                  <li className="pl-4 text-xs">vérifie <code className="bg-[--bg-card] px-1">core.isMember(tokenId)</code></li>
+                  <li className="pl-4 text-xs">vérifie <code className="bg-[--bg-card] px-1">msg.sender == core.getMemberOwner(tokenId)</code></li>
+                  <li className="pl-4 text-xs">déploie <code className="bg-[--bg-card] px-1">new NormieCollection(name, symbol, tokenId, minter)</code></li>
+                  <li>→ <code className="bg-[--bg-card] px-1">getCollectionsOf(tokenId) → address[]</code></li>
+                </ul>
+                <div className="border-t border-[--border] pt-3">
+                  <p className="text-xs text-[--fg-muted] italic">
+                    Après déploiement : enregistrer dans FactoryRegistry + ajouter l'adresse dans .env.local
+                  </p>
+                </div>
               </div>
+
+            </div>
+
+            {/* NormieCollection */}
+            <div className="border border-[--border] bg-[--bg] p-6 mt-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <p className="font-bold">NormieCollection</p>
+                <span className="font-mono text-xs border border-[--border] text-[--fg-muted] px-2 py-0.5">DÉPLOYÉ PAR CollectionFactory</span>
+              </div>
+              <p className="text-sm text-[--fg-muted] leading-relaxed">
+                ERC-721 entièrement on-chain. Chaque token encode son contenu comme <code className="bg-[--bg-card] px-1">data:application/json;base64</code> dans <code className="bg-[--bg-card] px-1">tokenURI()</code>.
+                Déployé automatiquement par CollectionFactory — un contrat par collection, par Normie.
+                CollectionFactory en est le minter initial ; le Normie owner peut changer le minter.
+              </p>
             </div>
           </div>
         </section>
@@ -345,27 +515,72 @@ const { data } = useReadContract({
           <div className="max-w-6xl mx-auto">
             <SectionTitle
               tag="Déploiement"
-              title="Contrats sur Base mainnet."
+              title="Tous les contrats ANA."
             />
-            <div className="space-y-4">
+
+            <div className="space-y-2">
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">Déployés — Base mainnet (chainId 8453)</p>
               {[
-                { name: "AssociationCore",     addr: DEPLOYED.AssociationCore,     chainId: "8453", note: "Immuable — ne sera jamais redéployé" },
-                { name: "ConstituentAssembly", addr: DEPLOYED.ConstituentAssembly, chainId: "8453", note: "Module de gouvernance v1" },
-                { name: "WorkRegistry",        addr: DEPLOYED.WorkRegistry,        chainId: "8453", note: "Œuvres onchain — data URI en calldata" },
-                { name: "FactoryRegistry",     addr: DEPLOYED.FactoryRegistry,     chainId: "8453", note: "Registre factories par type (CollectionFactory pas encore déployé)" },
-                { name: "Normies ERC-721",     addr: "0x9Eb6E2025B64f340691e424b7fe7022fFDE12438", chainId: "1", note: "Ethereum mainnet — propriété vérifiée par le relayer" },
+                { name: "AssociationCore",     addr: DEPLOYED.AssociationCore,     note: "Immuable — ne sera jamais redéployé", tag: "CORE" },
+                { name: "ConstituentAssembly", addr: DEPLOYED.ConstituentAssembly, note: "Module de gouvernance — sessions de vote → grantRole", tag: "GOV" },
+                { name: "WorkRegistry",        addr: DEPLOYED.WorkRegistry,        note: "Œuvres on-chain v2 — data URI + calendrier de création", tag: "CRÉATIF" },
+                { name: "FactoryRegistry",     addr: DEPLOYED.FactoryRegistry,     note: "Annuaire de lookup — maps type → factory address", tag: "REGISTRE" },
               ].map((c) => (
-                <div key={c.name} className="grid grid-cols-1 md:grid-cols-[200px_1fr_auto] gap-4 items-center border border-[--border] p-5 bg-[--bg-card]">
-                  <div>
-                    <p className="font-bold text-sm">{c.name}</p>
-                    <p className="font-mono text-xs text-[--fg-muted]">
-                      {c.chainId === "8453" ? "Base mainnet" : "Ethereum mainnet"}
-                    </p>
-                  </div>
+                <div key={c.name} className="grid grid-cols-1 md:grid-cols-[160px_64px_1fr_200px] gap-4 items-center border border-[--border] p-4 bg-[--bg-card]">
+                  <p className="font-bold text-sm">{c.name}</p>
+                  <span className="font-mono text-xs border border-green-300 text-green-700 bg-green-50 px-1.5 py-0.5 text-center">{c.tag}</span>
                   <p className="font-mono text-xs text-[--fg-muted] break-all">{c.addr}</p>
-                  <p className="text-xs text-[--fg-muted] max-w-[180px]">{c.note}</p>
+                  <p className="text-xs text-[--fg-muted]">{c.note}</p>
                 </div>
               ))}
+            </div>
+
+            <div className="space-y-2 mt-8">
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
+                Écrits, en attente de déploiement — Base mainnet
+              </p>
+              {[
+                { name: "GovernanceCalendar", addr: PENDING.GovernanceCalendar, note: "Calendrier de gouvernance — trigger permissionless, récurrence", tag: "GOV" },
+                { name: "TreasuryModule",     addr: PENDING.TreasuryModule,     note: "Trésorerie — splits BPS par rôle, pull payment", tag: "TRÉSO" },
+                { name: "CollectionFactory",  addr: PENDING.CollectionFactory,  note: "Déploie NormieCollection — membres uniquement, via AssociationCore", tag: "FACTORY" },
+              ].map((c) => (
+                <div key={c.name} className="grid grid-cols-1 md:grid-cols-[160px_64px_1fr_200px] gap-4 items-center border border-dashed border-orange-300 p-4">
+                  <p className="font-bold text-sm text-[--fg-muted]">{c.name}</p>
+                  <span className="font-mono text-xs border border-orange-300 text-orange-700 px-1.5 py-0.5 text-center">{c.tag}</span>
+                  <p className="font-mono text-xs text-[--fg-muted]">{c.addr}</p>
+                  <p className="text-xs text-[--fg-muted]">{c.note}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2 mt-8">
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">Ethereum mainnet (chainId 1)</p>
+              <div className="grid grid-cols-1 md:grid-cols-[160px_64px_1fr_200px] gap-4 items-center border border-[--border] p-4 bg-[--bg-card]">
+                <p className="font-bold text-sm">Normies ERC-721</p>
+                <span className="font-mono text-xs border border-[--border] text-[--fg-muted] px-1.5 py-0.5 text-center">NFT</span>
+                <p className="font-mono text-xs text-[--fg-muted] break-all">{DEPLOYED.NormiesERC721}</p>
+                <p className="text-xs text-[--fg-muted]">
+                  Propriété vérifiée par le relayer. Transfer(from, to=0x0) = burn → création automatique.
+                </p>
+              </div>
+            </div>
+
+            <div className="border border-[--border] bg-[--bg-card] p-6 mt-8 space-y-3">
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Étapes post-déploiement Sprint 2</p>
+              <ol className="space-y-1.5">
+                {[
+                  "Déployer GovernanceCalendar, TreasuryModule, CollectionFactory",
+                  "Appeler GovernanceCalendar.initializeFoundingSchedule() depuis /admin",
+                  "Appeler FactoryRegistry.registerFactory(keccak256(\"NORMIE_COLLECTION\"), collectionFactoryAddr)",
+                  "Ajouter les 3 adresses NEXT_PUBLIC_* dans .env.local",
+                  "Tester le flow complet depuis /admin → auto-vote simulation",
+                ].map((step, i) => (
+                  <li key={i} className="flex items-start gap-3">
+                    <span className="font-mono text-xs text-[--fg-muted] shrink-0">{String(i + 1).padStart(2, "0")}</span>
+                    <span className="text-sm text-[--fg-muted]">{step}</span>
+                  </li>
+                ))}
+              </ol>
             </div>
           </div>
         </section>
