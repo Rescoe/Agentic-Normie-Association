@@ -1,5 +1,6 @@
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { GovernanceCalendarWidget } from "@/components/GovernanceCalendarWidget";
 
 export const metadata = {
   title: "Roadmap — ANA",
@@ -228,6 +229,9 @@ export default function RoadmapPage() {
               </div>
             </div>
           </div>
+
+          {/* Calendrier de gouvernance */}
+          <GovernanceCalendarWidget />
 
           {/* Phases */}
           <section className="space-y-8">

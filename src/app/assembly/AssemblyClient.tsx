@@ -449,6 +449,140 @@ function RoleVoteCard({
   );
 }
 
+// ─── ElectionResults ─────────────────────────────────────────────────────────
+
+function ElectionResults({
+  allMemberIds,
+  sessionResolved,
+}: {
+  allMemberIds:    number[];
+  sessionResolved: boolean;
+}) {
+  // For every (role, candidate) pair, read voteCount — batched in one call
+  const pairs: { roleHash: `0x${string}`; label: string; candidateId: number }[] = [];
+  for (const r of ORDERED_ROLES) {
+    for (const id of allMemberIds) {
+      pairs.push({ roleHash: r.hash, label: r.label, candidateId: id });
+    }
+  }
+
+  const { data: rawCounts, isLoading } = useReadContracts({
+    contracts: pairs.map(p => ({
+      address:      CA_ADDR,
+      abi:          CONSTITUENT_ASSEMBLY_ABI,
+      functionName: "getVoteCount" as const,
+      args:         [p.roleHash, BigInt(p.candidateId)] as [`0x${string}`, bigint],
+    })),
+    query: { enabled: allMemberIds.length > 0 && contractsDeployed, refetchInterval: 8_000 },
+  });
+
+  // Organize: roleHash → candidateId → voteCount
+  const tally: Record<string, Record<number, number>> = {};
+  pairs.forEach((p, i) => {
+    tally[p.roleHash] ??= {};
+    tally[p.roleHash][p.candidateId] = Number(rawCounts?.[i]?.result ?? 0n);
+  });
+
+  const totalVotes = Object.values(tally).reduce((sum, candidates) =>
+    sum + Object.values(candidates).reduce((s, c) => s + c, 0), 0
+  );
+
+  if (allMemberIds.length === 0) return null;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+            Résultats en temps réel
+          </p>
+          {sessionResolved && (
+            <p className="font-mono text-xs text-green-600 mt-0.5">
+              ✓ Session clôturée — résultats définitifs
+            </p>
+          )}
+        </div>
+        {isLoading && (
+          <div className="w-4 h-4 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
+        )}
+      </div>
+
+      {totalVotes === 0 && !isLoading && (
+        <p className="font-mono text-xs text-[--fg-muted]">Aucun vote enregistré pour l'instant.</p>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {ORDERED_ROLES.map(role => {
+          const roleTally = tally[role.hash] ?? {};
+          const sorted    = [...allMemberIds]
+            .map(id => ({ id, votes: roleTally[id] ?? 0 }))
+            .filter(c => c.votes > 0)
+            .sort((a, b) => b.votes - a.votes || a.id - b.id);
+
+          const leader    = sorted[0];
+          const maxVotes  = leader?.votes ?? 1;
+
+          return (
+            <div key={role.hash} className={`border ${sessionResolved && leader ? "border-green-300" : "border-[--border]"} bg-[--bg]`}>
+              <div className={`px-4 py-2.5 flex items-center justify-between ${sessionResolved && leader ? "bg-green-50/30" : "bg-[--bg-card]"} border-b border-[--border]`}>
+                <div>
+                  <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-wide">
+                    {role.group === "institutional" ? "Institutionnel" : "Créatif"}
+                  </p>
+                  <p className="font-bold text-sm">{role.label}</p>
+                </div>
+                {sessionResolved && leader && (
+                  <span className="font-mono text-xs text-green-700 border border-green-300 bg-green-100 px-2 py-0.5">
+                    Élu
+                  </span>
+                )}
+              </div>
+
+              <div className="px-4 py-3 space-y-2">
+                {sorted.length === 0 ? (
+                  <p className="font-mono text-xs text-[--fg-muted] italic">Pas de votes</p>
+                ) : (
+                  sorted.map((c, rank) => {
+                    const pct = Math.round((c.votes / maxVotes) * 100);
+                    return (
+                      <div key={c.id} className={`space-y-1 ${rank === 0 && sessionResolved ? "opacity-100" : rank === 0 ? "opacity-100" : "opacity-70"}`}>
+                        <div className="flex items-center gap-2">
+                          <div className="relative w-7 h-7 shrink-0 overflow-hidden">
+                            <Image
+                              src={getNormieImageUrl(c.id)}
+                              alt={`#${c.id}`}
+                              fill
+                              className="object-contain"
+                              style={{ imageRendering: "pixelated" }}
+                              unoptimized
+                            />
+                          </div>
+                          <span className="font-mono text-xs font-bold">#{c.id}</span>
+                          {rank === 0 && <span className="font-mono text-xs">← tête</span>}
+                          <span className="font-mono text-xs text-[--fg-muted] ml-auto">
+                            {c.votes} vote{c.votes > 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        {/* Progress bar */}
+                        <div className="h-1.5 bg-[--bg-card] border border-[--border] overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-500 ${rank === 0 ? "bg-[--fg]" : "bg-[--fg]/30"}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── CreativeAssemblySection ──────────────────────────────────────────────────
 
 const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
@@ -888,6 +1022,16 @@ export function AssemblyClient({
             Chaque Normie membre dispose d'une voix par rôle.
             En cas d'égalité, le tokenId le plus bas l'emporte.
           </p>
+        </div>
+      )}
+
+      {/* Election results — visible during and after session */}
+      {allMemberIds.length > 0 && (
+        <div className="border-t border-[--border] pt-8">
+          <ElectionResults
+            allMemberIds={allMemberIds}
+            sessionResolved={liveSession?.resolved ?? false}
+          />
         </div>
       )}
 

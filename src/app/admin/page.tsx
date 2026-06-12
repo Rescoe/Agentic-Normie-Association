@@ -325,6 +325,170 @@ function WorkRegistrySection({
   );
 }
 
+// ─── AutoVoteSection ─────────────────────────────────────────────────────────
+
+function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
+  const [running,   setRunning]   = useState(false);
+  const [result,    setResult]    = useState<Record<string, unknown> | null>(null);
+  const [error,     setError]     = useState<string | null>(null);
+  const [expanded,  setExpanded]  = useState<number | null>(null);
+
+  const run = async (mode: "simulate" | "execute") => {
+    setRunning(true);
+    setResult(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/keeper/auto-vote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json();
+      if (!res.ok) setError(data.error ?? `HTTP ${res.status}`);
+      else         setResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  type VoteDecision = {
+    voterTokenId: number; voterName: string;
+    roleLabel: string;
+    candidateTokenId: number; candidateName: string;
+    reasoning: string;
+  };
+
+  const decisions: VoteDecision[] = (result as { decisions?: VoteDecision[] })?.decisions ?? [];
+
+  // Group by role
+  const byRole: Record<string, VoteDecision[]> = {};
+  for (const d of decisions) {
+    byRole[d.roleLabel] = [...(byRole[d.roleLabel] ?? []), d];
+  }
+
+  // Vote counts per role
+  const roleSummary: Record<string, Record<number, { name: string; count: number }>> = {};
+  for (const [roleLabel, dvs] of Object.entries(byRole)) {
+    roleSummary[roleLabel] = {};
+    for (const d of dvs) {
+      roleSummary[roleLabel][d.candidateTokenId] ??= { name: d.candidateName, count: 0 };
+      roleSummary[roleLabel][d.candidateTokenId].count++;
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={() => run("simulate")}
+          disabled={running}
+          className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+        >
+          {running ? (
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin" />
+              Simulation LLM en cours…
+            </span>
+          ) : "Simuler les votes →"}
+        </button>
+
+        {!sessionActive && (
+          <p className="font-mono text-xs text-[--fg-muted]">
+            (Aucune session active — les votes seront simulés mais non appliqués)
+          </p>
+        )}
+      </div>
+
+      {error && (
+        <div className="border border-red-300 p-4">
+          <p className="font-mono text-xs text-red-600">{error}</p>
+        </div>
+      )}
+
+      {result && !error && (
+        <div className="space-y-4">
+          <div className="border border-green-300 bg-green-50/20 px-5 py-3">
+            <p className="font-mono text-xs text-green-700">
+              ✓ {(result as { decisionCount?: number }).decisionCount ?? decisions.length} décisions générées
+              — {(result as { memberCount?: number }).memberCount ?? 0} membres
+              × {(result as { roleCount?: number }).roleCount ?? 0} rôles
+            </p>
+            <p className="font-mono text-xs text-[--fg-muted] mt-1">
+              {(result as { note?: string }).note}
+            </p>
+          </div>
+
+          {/* Role summaries */}
+          {Object.entries(roleSummary).length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Object.entries(roleSummary).map(([roleLabel, candidates]) => {
+                const sorted = Object.entries(candidates)
+                  .sort((a, b) => b[1].count - a[1].count);
+                const winner = sorted[0];
+                return (
+                  <div key={roleLabel} className="border border-[--border] bg-[--bg]">
+                    <div className="bg-[--bg-card] border-b border-[--border] px-4 py-2.5 flex items-center justify-between">
+                      <p className="font-bold text-sm">{roleLabel}</p>
+                      {winner && (
+                        <span className="font-mono text-xs text-green-700">
+                          #{winner[0]} ({winner[1].count}v)
+                        </span>
+                      )}
+                    </div>
+                    <div className="px-4 py-3 space-y-1.5">
+                      {sorted.map(([tokenId, info]) => (
+                        <div key={tokenId} className="flex items-center gap-3">
+                          <div className="h-1.5 flex-1 bg-[--bg-card] border border-[--border] overflow-hidden">
+                            <div
+                              className="h-full bg-[--fg]/60 transition-all"
+                              style={{ width: `${Math.round(info.count / (sorted[0]?.[1].count || 1) * 100)}%` }}
+                            />
+                          </div>
+                          <span className="font-mono text-xs text-[--fg-muted] w-28 shrink-0 text-right">
+                            #{tokenId} — {info.count} vote{info.count > 1 ? "s" : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Detail toggle */}
+          <details className="border border-[--border]">
+            <summary className="bg-[--bg-card] px-5 py-3 cursor-pointer font-mono text-xs text-[--fg-muted] hover:bg-[--bg]">
+              Détail des {decisions.length} décisions individuelles →
+            </summary>
+            <div className="divide-y divide-[--border] max-h-96 overflow-y-auto">
+              {decisions.map((d, i) => (
+                <div key={i}
+                  className="px-5 py-3 grid grid-cols-[1fr_auto] gap-4 cursor-pointer hover:bg-[--bg-card]"
+                  onClick={() => setExpanded(expanded === i ? null : i)}
+                >
+                  <div>
+                    <p className="font-mono text-xs">
+                      <span className="font-bold">#{d.voterTokenId}</span> → <span className="font-bold">#{d.candidateTokenId}</span>
+                      {" "}<span className="text-[--fg-muted]">({d.roleLabel})</span>
+                    </p>
+                    {expanded === i && (
+                      <p className="font-mono text-xs text-[--fg-muted] mt-1 leading-relaxed">{d.reasoning}</p>
+                    )}
+                  </div>
+                  <span className="font-mono text-xs text-[--fg-muted]">{expanded === i ? "▲" : "▼"}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
@@ -645,6 +809,18 @@ export default function AdminPage() {
             writeContractAsync={writeContractAsync}
             onRefresh={() => router.refresh()}
           />
+
+          {/* ── Auto-vote (test) ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Auto-vote (simulation LLM)</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Simule les votes de tous les Normies membres via leurs personas LLM.
+                Mode <code>simulate</code> : génère les décisions sans soumettre de transaction.
+              </p>
+            </div>
+            <AutoVoteSection sessionActive={session?.active ?? false} />
+          </section>
 
           {/* ── Documentation du flow ── */}
           <section className="space-y-6 border-t border-[--border] pt-10">
