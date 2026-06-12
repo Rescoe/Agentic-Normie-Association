@@ -6,6 +6,7 @@
  * Used by the LLM pipeline to build the system prompt for inter-Normie discussion.
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { buildPersona } from "@/lib/normiesPersona";
 

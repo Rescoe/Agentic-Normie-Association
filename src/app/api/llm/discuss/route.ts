@@ -17,6 +17,7 @@
  * GROQ_API_KEY must be set in environment.
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { personaToPromptBlock, type NormiePersona } from "@/lib/normiesPersona";
 

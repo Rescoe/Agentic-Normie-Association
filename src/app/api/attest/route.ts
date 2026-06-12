@@ -28,6 +28,7 @@
  *   - On-chain nonce tracking prevents replay attacks
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getAddress, isAddress } from "viem";
 import { createAttestation } from "@/server/relayer/attestationRelayer";

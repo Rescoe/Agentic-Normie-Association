@@ -9,6 +9,7 @@
  * Returns: { html: string } — ready to paste into WorkRegistry.publish()
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import type { NormiePersona } from "@/lib/normiesPersona";
 

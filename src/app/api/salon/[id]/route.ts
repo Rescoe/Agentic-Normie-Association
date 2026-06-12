@@ -3,6 +3,7 @@
  * PATCH  /api/salon/[id]                       — close salon or exclude a member
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSalon, closeSalon, excludeMember } from "@/lib/salonStore";
 

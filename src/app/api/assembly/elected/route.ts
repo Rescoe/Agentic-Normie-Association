@@ -6,6 +6,7 @@
  * Used by the /assembly page and the LLM discuss pipeline.
  */
 
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";

@@ -15,6 +15,7 @@
  *   6. Store and return the message
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";

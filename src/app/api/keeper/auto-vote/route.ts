@@ -24,6 +24,7 @@
  * from /admin for testing.
  */
 
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
