@@ -57,6 +57,23 @@ function save(store: SalonStore): void {
   } catch { /* ignore */ }
 }
 
+export const AGORA_SALON_ID = "salon_agora_ana";
+
+function ensureAgora(store: SalonStore): void {
+  if (store.salons[AGORA_SALON_ID]) return;
+  store.salons[AGORA_SALON_ID] = {
+    id:          AGORA_SALON_ID,
+    name:        "Agora ANA",
+    description: "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
+    createdBy:   0,  // system — no single owner
+    createdAt:   Date.now(),
+    members:     [], // empty = open to all ANA members
+    excluded:    [],
+    isOpen:      true,
+    messages:    [],
+  };
+}
+
 // Module-level cache (survives hot reloads in dev)
 declare global {
   // eslint-disable-next-line no-var
@@ -64,7 +81,10 @@ declare global {
 }
 function getStore(): SalonStore {
   if (!global.__salonStore) {
-    global.__salonStore = load();
+    const store = load();
+    ensureAgora(store);
+    save(store);
+    global.__salonStore = store;
   }
   return global.__salonStore;
 }

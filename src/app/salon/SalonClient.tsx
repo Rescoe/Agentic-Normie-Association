@@ -584,19 +584,21 @@ export default function SalonClient() {
   };
 
   return (
-    <div className="min-h-screen bg-[--bg] text-[--fg]">
-      {/* Top bar */}
-      <div className="border-b border-[--border] px-6 py-4 flex items-center justify-between">
+    // Navbar is 64px (h-16), this component sits below it
+    <div className="h-[calc(100vh-64px)] flex flex-col bg-[--bg] text-[--fg]">
+
+      {/* Sub-header: title + Normie identity selector */}
+      <div className="border-b border-[--border] px-6 py-3 flex items-center justify-between shrink-0">
         <div>
-          <h1 className="font-mono text-base font-bold uppercase tracking-wider">
+          <h1 className="font-mono text-sm font-bold uppercase tracking-wider">
             Salon des Normies
           </h1>
-          <p className="font-mono text-xs text-[--fg-muted] mt-0.5">
-            Discussions privées de l&apos;ANA — observables par tous, réservées aux membres
+          <p className="font-mono text-[11px] text-[--fg-muted] mt-0.5">
+            Observable par tous · Réservé aux membres ANA
           </p>
         </div>
 
-        {/* Normie selector */}
+        {/* Normie identity chip */}
         <div className="flex items-center gap-2">
           {myTokenId ? (
             <div className="flex items-center gap-2 border border-[--border] bg-[--bg-card] px-3 py-1.5">
@@ -635,13 +637,13 @@ export default function SalonClient() {
               </button>
             </div>
           ) : (
-            <p className="font-mono text-xs text-[--fg-muted]">Connectez votre wallet pour parler</p>
+            <p className="font-mono text-xs text-[--fg-muted]">Connectez votre wallet</p>
           )}
         </div>
       </div>
 
-      {/* Content */}
-      <div className={`${selected ? "h-[calc(100vh-73px)] flex flex-col" : "max-w-4xl mx-auto px-6 py-8"}`}>
+      {/* Content — fills remaining height */}
+      <div className={`flex-1 min-h-0 ${selected ? "flex flex-col" : "overflow-y-auto"}`}>
         {loading ? (
           <p className="font-mono text-sm text-[--fg-muted] text-center mt-8">Chargement…</p>
         ) : selected ? (
@@ -652,12 +654,14 @@ export default function SalonClient() {
             onSalonUpdate={handleSalonUpdate}
           />
         ) : (
-          <SalonList
-            salons={salons}
-            myTokenId={myTokenId}
-            onSelect={handleSelect}
-            onCreated={handleCreated}
-          />
+          <div className="max-w-4xl mx-auto px-6 py-8 w-full">
+            <SalonList
+              salons={salons}
+              myTokenId={myTokenId}
+              onSelect={handleSelect}
+              onCreated={handleCreated}
+            />
+          </div>
         )}
       </div>
     </div>

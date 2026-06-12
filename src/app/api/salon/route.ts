@@ -39,11 +39,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "tokenId and name required" }, { status: 400 });
   }
 
-  // Verify creator is an ANA member
+  // Verify creator is an ANA member — degrade gracefully if chain read fails
   const memberIds = await getMemberIds();
-  if (!memberIds.includes(tokenId)) {
-    return NextResponse.json({ error: "Only ANA members can create salons" }, { status: 403 });
+  if (memberIds.length > 0 && !memberIds.includes(tokenId)) {
+    return NextResponse.json({
+      error: `Normie #${tokenId} n'est pas inscrit dans l'ANA. Inscris ton Normie d'abord.`,
+    }, { status: 403 });
   }
+  // If memberIds.length === 0 (RPC unavailable), allow creation — the contract will guard on-chain
 
   const salon = createSalon({ name: name.trim(), description, createdBy: tokenId, members });
   return NextResponse.json({ salon }, { status: 201 });

@@ -325,6 +325,75 @@ function WorkRegistrySection({
   );
 }
 
+// ─── SalonExchangeSection ────────────────────────────────────────────────────
+
+function SalonExchangeSection() {
+  const [running, setRunning] = useState(false);
+  const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const run = async (salonId?: string) => {
+    setRunning(true);
+    setResult(null);
+    setError(null);
+    try {
+      const res  = await fetch("/api/keeper/salon-exchange", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(salonId ? { salonId } : {}),
+      });
+      const data = await res.json() as Record<string, unknown>;
+      if (!res.ok) setError((data.error as string) ?? "Erreur");
+      else setResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => run()}
+          disabled={running}
+          className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 transition-opacity"
+        >
+          {running ? "Échanges en cours…" : "Déclencher échanges (tous salons)"}
+        </button>
+        <button
+          onClick={() => run("salon_agora_ana")}
+          disabled={running}
+          className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 transition-colors"
+        >
+          Agora seulement
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 p-4">
+          <p className="font-mono text-xs text-red-600">{error}</p>
+        </div>
+      )}
+
+      {result && (
+        <div className="bg-[--bg-card] border border-[--border] p-4 space-y-2">
+          <p className="font-mono text-xs font-bold">
+            ✓ {String(result.totalMessages ?? 0)} messages générés dans {String(result.salonsRun ?? 0)} salon(s)
+          </p>
+          {Array.isArray(result.results) && result.results.map((r: Record<string, unknown>, i: number) => (
+            <div key={i} className="font-mono text-xs text-[--fg-muted]">
+              {String(r.salonId)}: {String(r.messages)} msg
+              {Array.isArray(r.skipped) && r.skipped.length > 0 && ` (skipped: ${(r.skipped as string[]).join(", ")})`}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── AutoVoteSection ─────────────────────────────────────────────────────────
 
 function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
@@ -820,6 +889,18 @@ export default function AdminPage() {
               </p>
             </div>
             <AutoVoteSection sessionActive={session?.active ?? false} />
+          </section>
+
+          {/* ── Salon exchange keeper ── */}
+          <section className="space-y-6 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold mb-1">Échanges automatiques — Salon</h2>
+              <p className="text-sm text-[--fg-muted]">
+                Déclenche une prise de parole autonome des Normies dans les salons ouverts (Agora + salons privés).
+                Chaque Normie est limité à 4 messages/heure. Appeler toutes les 15-20 min max.
+              </p>
+            </div>
+            <SalonExchangeSection />
           </section>
 
           {/* ── Documentation du flow ── */}
