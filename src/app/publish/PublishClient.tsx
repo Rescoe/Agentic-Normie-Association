@@ -8,8 +8,8 @@
  * dans l'état du contrat WorkRegistry via la fonction publish().
  * Il n'y a pas d'IPFS, pas de Pinata, pas de stockage externe.
  *
- * Le contrat WorkRegistry stocke le contenu dans le champ `ipfsHash` (héritage
- * du nom) qui accepte n'importe quelle string. On y stocke un data URI :
+ * Le contrat WorkRegistry v2 stocke le contenu dans le champ `content`.
+ * On y stocke un data URI :
  *   data:text/html;base64,<base64(htmlContent)>
  *
  * Seul le Rapporteur en exercice peut appeler publish() — le contrat
@@ -95,7 +95,6 @@ const STARTER_HTML = `<!DOCTYPE html>
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function encodeOnchain(html: string): string {
-  // Encode as data URI — stored directly in WorkRegistry.works[n].ipfsHash
   const b64 = btoa(unescape(encodeURIComponent(html)));
   return `data:text/html;base64,${b64}`;
 }

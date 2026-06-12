@@ -27,6 +27,7 @@ import { Footer } from "@/components/Footer";
 import {
   ASSOCIATION_CORE_ABI,
   CONSTITUENT_ASSEMBLY_ABI,
+  WORK_REGISTRY_ABI,
   CONTRACT_ADDRESSES,
   ROLES,
   ROLE_LABELS,
@@ -36,6 +37,7 @@ import {
 
 const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore     as `0x${string}`;
 const CA_ADDR   = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
+const WR_ADDR   = CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}`;
 const contractsDeployed = !!CONTRACT_ADDRESSES.AssociationCore;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -136,6 +138,190 @@ function StatusRow({ label, value, ok }: { label: string; value: React.ReactNode
         <span className="font-mono text-xs text-right break-all max-w-[280px]">{value}</span>
       </div>
     </div>
+  );
+}
+
+// ─── WorkRegistrySection ─────────────────────────────────────────────────────
+
+function WorkRegistrySection({
+  isOwner,
+  writeContractAsync,
+  onRefresh,
+}: {
+  isOwner: boolean;
+  writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
+  onRefresh: () => void;
+}) {
+  const [txHash,  setTxHash]  = useState<`0x${string}` | null>(null);
+  const [txState, setTxState] = useState<"idle"|"pending"|"confirming"|"done"|"error">("idle");
+  const [txErr,   setTxErr]   = useState<string | null>(null);
+
+  // Schedule config inputs
+  const [periodDays,   setPeriodDays]   = useState("30");
+  const [nextDateStr,  setNextDateStr]  = useState(""); // ISO date string
+  const [scheduleActive, setScheduleActive] = useState(true);
+
+  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
+  useEffect(() => {
+    if (txConfirmed && txState === "confirming") {
+      setTxState("done");
+      onRefresh();
+      const t = setTimeout(() => setTxState("idle"), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [txConfirmed, txState, onRefresh]);
+
+  const { data: scheduleRaw } = useReadContract({
+    address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "getSchedule",
+    query: { enabled: !!WR_ADDR, refetchInterval: 10_000 },
+  });
+  const schedule = scheduleRaw as { nextCreationAt: bigint; periodSeconds: bigint; active: boolean } | undefined;
+
+  const { data: sessionCountRaw } = useReadContract({
+    address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "sessionCount",
+    query: { enabled: !!WR_ADDR },
+  });
+  const sessionCount = sessionCountRaw !== undefined ? Number(sessionCountRaw) : 0;
+
+  const exec = async (fn: string, args: unknown[]) => {
+    setTxErr(null);
+    setTxState("pending");
+    try {
+      const hash = await writeContractAsync({
+        address: WR_ADDR,
+        abi: WORK_REGISTRY_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
+        functionName: fn as never,
+        args: args as never,
+      });
+      setTxHash(hash);
+      setTxState("confirming");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTxErr(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150));
+      setTxState("error");
+    }
+  };
+
+  const busy = txState === "pending" || txState === "confirming";
+
+  const nextTs = nextDateStr
+    ? Math.floor(new Date(nextDateStr).getTime() / 1000)
+    : Math.floor(Date.now() / 1000);
+
+  const periodSecs = Math.floor(parseFloat(periodDays) * 86400);
+
+  return (
+    <section className="space-y-4 border-t border-[--border] pt-10">
+      <div>
+        <h2 className="text-xl font-bold">WorkRegistry v2</h2>
+        <p className="font-mono text-xs text-[--fg-muted] mt-1">
+          Gestion des sessions de création collective et du calendrier automatique.
+        </p>
+      </div>
+
+      {/* Status */}
+      <div className="border border-[--border] p-5 space-y-0">
+        <StatusRow label="Sessions initiées" value={String(sessionCount)} />
+        <StatusRow
+          label="Prochaine création"
+          value={schedule?.nextCreationAt
+            ? new Date(Number(schedule.nextCreationAt) * 1000).toLocaleString("fr-FR")
+            : "—"}
+        />
+        <StatusRow
+          label="Période"
+          value={schedule?.periodSeconds
+            ? `${Math.round(Number(schedule.periodSeconds) / 86400)} jours`
+            : "Manuelle"}
+        />
+        <StatusRow
+          label="Déclenchement auto"
+          value={schedule?.active ? "Actif" : "Désactivé"}
+          ok={schedule?.active}
+        />
+      </div>
+
+      {/* Initier manuellement */}
+      <div className="border border-[--border] p-5 space-y-3">
+        <div>
+          <p className="font-bold text-sm">Initier une session de création</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+            Déclenche l'événement <code>WorkSessionInitiated</code> que le pipeline LLM écoute.
+            Accessible à l'owner à tout moment. Quand le calendrier est actif, n'importe qui peut
+            appeler cette fonction une fois la date atteinte.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => exec("initiateWorkSession", [])}
+            disabled={busy || !isOwner}
+            className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {busy ? "En cours…" : txState === "done" ? "✓ Session initiée" : "Initier →"}
+          </button>
+          {txErr && <p className="font-mono text-xs text-red-600">{txErr}</p>}
+        </div>
+        {txHash && (
+          <a href={basescanTx(txHash)} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] underline">
+            {txHash.slice(0, 16)}… ↗
+          </a>
+        )}
+      </div>
+
+      {/* Configurer le calendrier */}
+      <div className="border border-[--border] p-5 space-y-4">
+        <div>
+          <p className="font-bold text-sm">Configurer le calendrier automatique</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+            Définit la prochaine date de création et la période de récurrence.
+            Une fois actif, n'importe qui peut appeler <code>initiateWorkSession()</code>
+            à partir de la date définie.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <p className="font-mono text-xs text-[--fg-muted] mb-1">Prochaine création</p>
+            <input
+              type="datetime-local"
+              value={nextDateStr}
+              onChange={e => setNextDateStr(e.target.value)}
+              className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 w-full focus:outline-none focus:border-[--fg]"
+            />
+          </div>
+          <div>
+            <p className="font-mono text-xs text-[--fg-muted] mb-1">Période (jours)</p>
+            <input
+              type="number"
+              min="0"
+              value={periodDays}
+              onChange={e => setPeriodDays(e.target.value)}
+              className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 w-full focus:outline-none focus:border-[--fg]"
+            />
+          </div>
+          <div>
+            <p className="font-mono text-xs text-[--fg-muted] mb-1">Déclenchement auto</p>
+            <button
+              onClick={() => setScheduleActive(!scheduleActive)}
+              className={`font-mono text-xs border px-3 py-2 w-full ${
+                scheduleActive
+                  ? "border-green-400 text-green-700 bg-green-50/30"
+                  : "border-[--border] text-[--fg-muted]"
+              }`}
+            >
+              {scheduleActive ? "Activé ✓" : "Désactivé"}
+            </button>
+          </div>
+        </div>
+        <button
+          onClick={() => exec("setSchedule", [BigInt(nextTs), BigInt(periodSecs), scheduleActive])}
+          disabled={busy || !isOwner}
+          className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {busy ? "En cours…" : "Enregistrer le calendrier →"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -452,6 +638,13 @@ export default function AdminPage() {
               }}
             />
           </section>
+
+          {/* ── WorkRegistry ── */}
+          <WorkRegistrySection
+            isOwner={!!isCoreOwner}
+            writeContractAsync={writeContractAsync}
+            onRefresh={() => router.refresh()}
+          />
 
           {/* ── Documentation du flow ── */}
           <section className="space-y-6 border-t border-[--border] pt-10">

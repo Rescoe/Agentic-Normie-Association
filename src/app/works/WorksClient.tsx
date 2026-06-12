@@ -17,7 +17,7 @@ const deployed  = !!CONTRACT_ADDRESSES.WorkRegistry;
 
 interface Work {
   id:               bigint;
-  ipfsHash:         string;
+  content:          string;
   authorTokenId:    bigint;
   curatorTokenId:   bigint;
   rapporteurTokenId:bigint;
@@ -27,12 +27,6 @@ interface Work {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/**
- * Résout la source d'une œuvre.
- * Depuis la refonte onchain : le champ `ipfsHash` contient un data URI
- * (data:text/html;base64,...) stocké directement dans le contrat.
- * Les œuvres antérieures (si IPFS) retournent null — on les affiche différemment.
- */
 function resolveWorkSource(raw: string): { type: "onchain"; srcDoc: string } | { type: "unknown" } {
   if (raw.startsWith("data:text/html")) {
     try {
@@ -50,7 +44,7 @@ function resolveWorkSource(raw: string): { type: "onchain"; srcDoc: string } | {
 
 function WorkCard({ work }: { work: Work }) {
   const [previewOpen, setPreviewOpen] = useState(false);
-  const source = resolveWorkSource(work.ipfsHash);
+  const source = resolveWorkSource(work.content);
   const date = new Date(Number(work.publishedAt) * 1000);
 
   return (

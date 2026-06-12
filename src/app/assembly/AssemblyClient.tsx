@@ -1,16 +1,5 @@
 "use client";
 
-/**
- * AssemblyClient — interface complète de l'assemblée constituante.
- *
- * Fonctionnalités :
- *   - SessionControls : ouvrir / clôturer la session (owner du contrat)
- *   - Vérification si ConstituentAssembly est autorisé dans AssociationCore
- *   - RoleVoteCard : vote par rôle avec liste de membres cliquable
- *   - Support multi-tokens : chacun de vos Normies membres peut voter
- *   - Statut hasVoted per-token affiché en temps réel
- */
-
 import { useState, useEffect, useCallback } from "react";
 import {
   useAccount,
@@ -25,10 +14,24 @@ import Image from "next/image";
 import {
   CONSTITUENT_ASSEMBLY_ABI,
   ASSOCIATION_CORE_ABI,
+  WORK_REGISTRY_ABI,
   CONTRACT_ADDRESSES,
   ROLES,
+  ROLE_LABELS,
 } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
+import type { NormiePersona } from "@/lib/normiesPersona";
+
+// ─── Types shared with /api/assembly/elected ─────────────────────────────────
+
+interface ElectedMember {
+  role:          string;
+  roleLabel:     string;
+  tokenId:       number;
+  holderAddress: string;
+  assignedAt:    number;
+  persona:       NormiePersona | null;
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -446,6 +449,288 @@ function RoleVoteCard({
   );
 }
 
+// ─── CreativeAssemblySection ──────────────────────────────────────────────────
+
+const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
+
+function CreativeAssemblySection() {
+  const { address } = useAccount();
+
+  // Load elected members + personas from API
+  const [elected, setElected]   = useState<ElectedMember[]>([]);
+  const [loading, setLoading]   = useState(false);
+  const [loadErr, setLoadErr]   = useState<string | null>(null);
+
+  // LLM discussion state
+  const [discussing, setDiscussing] = useState(false);
+  const [transcript, setTranscript] = useState<string>("");
+  const [llmError,   setLlmError]   = useState<string | null>(null);
+  const [brief,      setBrief]      = useState<string | null>(null);
+
+  // initiateWorkSession tx
+  const [txHash,  setTxHash]  = useState<`0x${string}` | null>(null);
+  const [txState, setTxState] = useState<"idle"|"pending"|"confirming"|"done"|"error">("idle");
+  const [txError, setTxError] = useState<string | null>(null);
+
+  const { writeContractAsync } = useWriteContract();
+  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
+  useEffect(() => {
+    if (txConfirmed && txState === "confirming") setTxState("done");
+  }, [txConfirmed, txState]);
+
+  // Owner check for WorkRegistry
+  const { data: wrOwnerRaw } = useReadContract({
+    address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "owner",
+    query: { enabled: !!WR_ADDR },
+  });
+  const isWROwner = !!(address && wrOwnerRaw &&
+    address.toLowerCase() === (wrOwnerRaw as string).toLowerCase());
+
+  // Load elected on mount
+  useEffect(() => {
+    setLoading(true);
+    fetch("/api/assembly/elected")
+      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+      .then((d: { elected: ElectedMember[] }) => setElected(d.elected))
+      .catch(e => setLoadErr(String(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const activeElected = elected.filter(m => m.tokenId > 0);
+  const hasGroq = true; // determined at runtime — error shown if key missing
+
+  // ── Lancer la discussion ────────────────────────────────────────────────────
+  const launchDiscussion = useCallback(async () => {
+    if (discussing || activeElected.length === 0) return;
+    setDiscussing(true);
+    setTranscript("");
+    setBrief(null);
+    setLlmError(null);
+
+    try {
+      const res = await fetch("/api/llm/discuss", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ elected: activeElected, rounds: 2 }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? res.statusText);
+      }
+
+      // Stream SSE from Groq
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") break;
+          try {
+            const chunk = JSON.parse(raw);
+            const delta = chunk.choices?.[0]?.delta?.content ?? "";
+            if (delta) setTranscript(prev => prev + delta);
+          } catch { /* skip malformed */ }
+        }
+      }
+
+      // Extract brief from transcript
+      setTranscript(prev => {
+        const briefMatch = prev.match(/BRIEF ARTISTIQUE[:\s]+([\s\S]+)/i);
+        if (briefMatch) setBrief(briefMatch[0]);
+        return prev;
+      });
+    } catch (e) {
+      setLlmError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDiscussing(false);
+    }
+  }, [discussing, activeElected]);
+
+  // ── Initier une session de création ────────────────────────────────────────
+  const initiateSession = useCallback(async () => {
+    setTxError(null);
+    setTxState("pending");
+    try {
+      const hash = await writeContractAsync({
+        address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "initiateWorkSession",
+      });
+      setTxHash(hash);
+      setTxState("confirming");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setTxError(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 120));
+      setTxState("error");
+    }
+  }, [writeContractAsync]);
+
+  if (loading) return (
+    <div className="flex items-center gap-3 py-6">
+      <div className="w-4 h-4 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
+      <p className="font-mono text-xs text-[--fg-muted]">Chargement des élus…</p>
+    </div>
+  );
+
+  if (loadErr) return (
+    <div className="border border-red-300 p-5">
+      <p className="font-mono text-xs text-red-600">Erreur : {loadErr}</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-8">
+      {/* Section header */}
+      <div className="border-t-2 border-[--fg] pt-8">
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-2">
+          Phase créative — post-assemblée
+        </p>
+        <h2 className="text-2xl font-bold mb-2">Assemblée Créative</h2>
+        <p className="text-[--fg-muted] text-sm max-w-2xl">
+          Les 6 Normies élus discutent et se mettent d'accord sur la première œuvre collective.
+          La discussion est simulée par LLM à partir de leurs personas on-chain.
+          Le résultat est un brief artistique que le Rapporteur publie directement dans le contrat.
+        </p>
+      </div>
+
+      {/* Elected members grid */}
+      {activeElected.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {activeElected.map(m => (
+            <div key={m.role} className="border border-[--border] bg-[--bg-card] p-3 space-y-2 text-center">
+              <div className="relative w-12 h-12 mx-auto overflow-hidden">
+                <Image
+                  src={getNormieImageUrl(m.tokenId)}
+                  alt={`#${m.tokenId}`}
+                  fill
+                  className="object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                  unoptimized
+                />
+              </div>
+              <div>
+                <p className="font-mono text-xs font-bold">#{m.tokenId}</p>
+                <p className="font-mono text-xs text-[--fg-muted] leading-tight">{m.roleLabel}</p>
+                {m.persona?.archetype && (
+                  <p className="font-mono text-xs text-[--fg-muted]/70 truncate" title={m.persona.archetype}>
+                    {m.persona.archetype}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="border border-[--border] bg-[--bg-card] p-6 text-center">
+          <p className="font-mono text-xs text-[--fg-muted]">
+            Aucun rôle encore attribué — clôturez d'abord l'assemblée constituante.
+          </p>
+        </div>
+      )}
+
+      {/* Actions */}
+      {activeElected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-4">
+          <button
+            onClick={launchDiscussion}
+            disabled={discussing}
+            className="font-mono text-xs bg-[--fg] text-[--bg] px-6 py-3 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+          >
+            {discussing ? (
+              <span className="flex items-center gap-2">
+                <span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin" />
+                Discussion en cours…
+              </span>
+            ) : "Lancer la discussion →"}
+          </button>
+
+          {(isWROwner || txState !== "idle") && (
+            <button
+              onClick={initiateSession}
+              disabled={txState === "pending" || txState === "confirming"}
+              className="font-mono text-xs border border-[--border] px-5 py-3 hover:bg-[--bg-card] disabled:opacity-40"
+            >
+              {txState === "pending"    ? "Signez dans votre wallet…" :
+               txState === "confirming" ? "Confirmation…" :
+               txState === "done"       ? "✓ Session initiée" :
+               "Initier une session on-chain →"}
+            </button>
+          )}
+
+          {(txState === "done") && (
+            <a
+              href="/publish"
+              className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-3 hover:opacity-80"
+            >
+              Publier l'œuvre →
+            </a>
+          )}
+        </div>
+      )}
+
+      {txError && (
+        <p className="font-mono text-xs text-red-600">{txError}</p>
+      )}
+
+      {/* LLM error */}
+      {llmError && (
+        <div className="border border-red-300 bg-red-50/20 p-4">
+          <p className="font-mono text-xs text-red-600">
+            {llmError.includes("GROQ_API_KEY")
+              ? "LLM non configuré — ajoutez GROQ_API_KEY dans .env.local"
+              : llmError}
+          </p>
+        </div>
+      )}
+
+      {/* Discussion transcript */}
+      {transcript && (
+        <div className="border border-[--border] bg-[--bg]">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-[--bg-card] border-b border-[--border]">
+            <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">
+              Transcript — Discussion des Normies élus
+            </p>
+            {discussing && (
+              <span className="flex items-center gap-1.5 font-mono text-xs text-green-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                En direct
+              </span>
+            )}
+          </div>
+          <pre className="p-5 text-xs font-mono leading-relaxed whitespace-pre-wrap text-[--fg] max-h-[500px] overflow-y-auto">
+            {transcript}
+          </pre>
+        </div>
+      )}
+
+      {/* Brief artistique extracted */}
+      {brief && !discussing && (
+        <div className="border-2 border-[--fg] p-6 space-y-3">
+          <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+            Brief artistique — décision de l'assemblée
+          </p>
+          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap">{brief}</pre>
+          <a
+            href="/publish"
+            className="inline-block font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80"
+          >
+            Publier l'œuvre on-chain →
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function AssemblyClient({
@@ -605,6 +890,9 @@ export function AssemblyClient({
           </p>
         </div>
       )}
+
+      {/* Creative assembly — visible once session is resolved */}
+      {liveSession?.resolved && <CreativeAssemblySection />}
     </div>
   );
 }
