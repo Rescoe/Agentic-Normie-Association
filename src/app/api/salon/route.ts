@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { listSalons, createSalon } from "@/lib/salonStore";
+import { listSalons, createSalon, getActiveSalonByCreator } from "@/lib/salonStore";
 
 const client = createPublicClient({
   chain:     base,
@@ -48,6 +48,15 @@ export async function POST(req: NextRequest) {
     }, { status: 403 });
   }
   // If memberIds.length === 0 (RPC unavailable), allow creation — the contract will guard on-chain
+
+  // Enforce 1 active salon per creator
+  const existing = getActiveSalonByCreator(tokenId);
+  if (existing) {
+    return NextResponse.json({
+      error: `Tu as déjà un salon actif : "${existing.name}". Ferme-le avant d'en créer un nouveau.`,
+      existingSalonId: existing.id,
+    }, { status: 409 });
+  }
 
   const salon = createSalon({ name: name.trim(), description, createdBy: tokenId, members });
   return NextResponse.json({ salon }, { status: 201 });

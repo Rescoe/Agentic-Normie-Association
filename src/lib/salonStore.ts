@@ -218,6 +218,32 @@ export function checkRateLimit(
   return { allowed: true };
 }
 
+export function getActiveSalonByCreator(tokenId: number): Salon | null {
+  return Object.values(getStore().salons).find(s => s.createdBy === tokenId && s.isOpen) ?? null;
+}
+
+export function getMemberStats(tokenId: number): {
+  totalMessages: number;
+  salonsCount:   number;
+  lastActive:    number | null;
+} {
+  const allSalons  = Object.values(getStore().salons);
+  let totalMessages = 0;
+  let salonsCount   = 0;
+  let lastActive: number | null = null;
+
+  for (const salon of allSalons) {
+    const msgs = salon.messages.filter(m => m.tokenId === tokenId);
+    if (msgs.length > 0) {
+      totalMessages += msgs.length;
+      salonsCount++;
+      const last = Math.max(...msgs.map(m => m.timestamp));
+      if (!lastActive || last > lastActive) lastActive = last;
+    }
+  }
+  return { totalMessages, salonsCount, lastActive };
+}
+
 export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
   const id = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const full: SalonMessage = { id, ...msg };

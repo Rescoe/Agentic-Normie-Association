@@ -1,50 +1,56 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Image from "next/image";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface SalonMessage {
-  id:        string;
-  salonId:   string;
-  tokenId:   number;
-  name:      string;
-  imageUrl:  string;
-  content:   string;
-  isLlm:     boolean;
-  timestamp: number;
+  id: string; salonId: string; tokenId: number; name: string;
+  imageUrl: string; content: string; isLlm: boolean; timestamp: number;
 }
 
 interface Salon {
-  id:           string;
-  name:         string;
-  description:  string;
-  createdBy:    number;
-  createdAt:    number;
-  members:      number[];
-  excluded:     number[];
-  isOpen:       boolean;
-  messages:     SalonMessage[];
-  currentTopic: string | null;
+  id: string; name: string; description: string; createdBy: number;
+  createdAt: number; members: number[]; excluded: number[];
+  isOpen: boolean; messages: SalonMessage[]; currentTopic: string | null;
+}
+
+interface AgentCardData {
+  tokenId: number; name: string; imageUrl: string; archetype: string | null;
+  tagline: string | null; greeting: string | null;
+  personalityTraits: string[] | null; communicationStyle: string | null;
+  quirks: string[] | null; level: number; actionPoints: number;
+  description: string; isRegisteredAgent: boolean;
+}
+
+interface MessageFilter {
+  search: string;
+  agentId: number | null;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000)    return "à l'instant";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h`;
+  const d = Date.now() - ts;
+  if (d < 60_000)     return "à l'instant";
+  if (d < 3_600_000)  return `${Math.floor(d / 60_000)} min`;
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} h`;
   return new Date(ts).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
 
-function NormieAvatar({ imageUrl, name, size = 32 }: { imageUrl: string; name: string; size?: number }) {
-  const [errored, setErrored] = useState(false);
-  if (errored || !imageUrl) {
+function NormieAvatar({
+  imageUrl, name, size = 32, onClick,
+}: {
+  imageUrl: string; name: string; size?: number; onClick?: () => void;
+}) {
+  const [err, setErr] = useState(false);
+  const cls = `rounded-sm shrink-0 ${onClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""}`;
+  if (err || !imageUrl) {
     return (
       <div
-        className="rounded-sm bg-[--bg-card] border border-[--border] flex items-center justify-center font-mono text-xs text-[--fg-muted] shrink-0"
+        onClick={onClick}
+        className={`${cls} bg-[--bg-card] border border-[--border] flex items-center justify-center font-mono text-xs text-[--fg-muted]`}
         style={{ width: size, height: size }}
       >
         {name.slice(0, 2).toUpperCase()}
@@ -53,48 +59,278 @@ function NormieAvatar({ imageUrl, name, size = 32 }: { imageUrl: string; name: s
   }
   return (
     <Image
-      src={imageUrl}
-      alt={name}
-      width={size}
-      height={size}
-      className="rounded-sm shrink-0 object-cover"
+      src={imageUrl} alt={name} width={size} height={size}
+      className={`${cls} object-cover`}
       style={{ width: size, height: size, imageRendering: "pixelated" }}
-      onError={() => setErrored(true)}
+      onError={() => setErr(true)}
+      onClick={onClick}
       unoptimized
     />
   );
 }
 
-// ─── Single salon — read-only observatoire ─────────────────────────────────────
+// ─── Agent card modal ─────────────────────────────────────────────────────────
+
+const personaCache = new Map<number, AgentCardData>();
+
+function AgentCardModal({
+  tokenId, name, imageUrl, onClose,
+}: {
+  tokenId: number; name: string; imageUrl: string; onClose: () => void;
+}) {
+  const [persona, setPersona] = useState<AgentCardData | null>(personaCache.get(tokenId) ?? null);
+  const [loading, setLoading] = useState(!personaCache.has(tokenId));
+
+  useEffect(() => {
+    if (personaCache.has(tokenId)) return;
+    fetch(`/api/normies/persona?tokenIds=${tokenId}`)
+      .then(r => r.json())
+      .then(d => {
+        const p = d.personas?.[0] ?? null;
+        if (p) { personaCache.set(tokenId, p); setPersona(p); }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [tokenId]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="bg-[--bg] border border-[--border] w-80 max-h-[85vh] overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="border-b border-[--border] p-4 flex items-start gap-3">
+          <NormieAvatar imageUrl={imageUrl} name={name} size={52} />
+          <div className="flex-1 min-w-0">
+            <p className="font-mono text-sm font-bold truncate">{persona?.name ?? name}</p>
+            <p className="font-mono text-[11px] text-[--fg-muted]">#{tokenId}</p>
+            {persona?.archetype && (
+              <span className="font-mono text-[10px] text-purple-500 border border-purple-300 px-1.5 py-0.5 mt-1 inline-block">
+                {persona.archetype}
+              </span>
+            )}
+            {persona?.isRegisteredAgent && (
+              <span className="font-mono text-[10px] text-green-600 border border-green-400 px-1.5 py-0.5 mt-1 ml-1 inline-block">
+                agent ERC-8004
+              </span>
+            )}
+          </div>
+          <button onClick={onClose} className="text-[--fg-muted] hover:text-[--fg] font-mono text-sm shrink-0">✕</button>
+        </div>
+
+        {loading ? (
+          <p className="font-mono text-xs text-[--fg-muted] p-4 text-center">Chargement…</p>
+        ) : !persona ? (
+          <p className="font-mono text-xs text-[--fg-muted] p-4 text-center">Données indisponibles</p>
+        ) : (
+          <div className="p-4 space-y-4 font-mono text-xs">
+            {persona.tagline && (
+              <p className="text-[--fg] italic border-l-2 border-[--border] pl-3">
+                &ldquo;{persona.tagline}&rdquo;
+              </p>
+            )}
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="border border-[--border] px-2 py-2">
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest">Niveau</p>
+                <p className="text-[--fg] font-bold text-base mt-0.5">{persona.level}</p>
+              </div>
+              <div className="border border-[--border] px-2 py-2">
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest">Points d'action</p>
+                <p className="text-[--fg] font-bold text-base mt-0.5">{persona.actionPoints}</p>
+              </div>
+            </div>
+
+            {/* Description */}
+            {persona.description && (
+              <div>
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest mb-1">Histoire</p>
+                <p className="text-[--fg] leading-relaxed">{persona.description.slice(0, 250)}{persona.description.length > 250 ? "…" : ""}</p>
+              </div>
+            )}
+
+            {/* Personality */}
+            {persona.personalityTraits?.length && (
+              <div>
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest mb-1.5">Personnalité</p>
+                <div className="flex flex-wrap gap-1">
+                  {persona.personalityTraits.map(t => (
+                    <span key={t} className="border border-[--border] bg-[--bg-card] px-1.5 py-0.5 text-[--fg]">{t}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Style */}
+            {persona.communicationStyle && (
+              <div>
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest mb-1">Style de communication</p>
+                <p className="text-[--fg]">{persona.communicationStyle}</p>
+              </div>
+            )}
+
+            {/* Quirks */}
+            {persona.quirks?.length && (
+              <div>
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest mb-1">Particularités</p>
+                <ul className="space-y-0.5">
+                  {persona.quirks.map((q, i) => (
+                    <li key={i} className="text-[--fg]">· {q}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Greeting */}
+            {persona.greeting && (
+              <div>
+                <p className="text-[--fg-muted] text-[9px] uppercase tracking-widest mb-1">Salutation habituelle</p>
+                <p className="text-[--fg] italic">&ldquo;{persona.greeting}&rdquo;</p>
+              </div>
+            )}
+
+            <div className="pt-1 border-t border-[--border]">
+              <a
+                href={`https://normies.art/normie/${tokenId}`}
+                target="_blank" rel="noopener noreferrer"
+                className="text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                Voir sur normies.art ↗
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Message bubble ───────────────────────────────────────────────────────────
+
+function MessageBubble({
+  msg, onAvatarClick,
+}: {
+  msg: SalonMessage;
+  onAvatarClick: (tokenId: number, name: string, imageUrl: string) => void;
+}) {
+  return (
+    <div className="flex gap-3 group py-1">
+      {/* Clickable avatar */}
+      <div className="shrink-0 mt-0.5">
+        <NormieAvatar
+          imageUrl={msg.imageUrl}
+          name={msg.name}
+          size={36}
+          onClick={() => onAvatarClick(msg.tokenId, msg.name, msg.imageUrl)}
+        />
+      </div>
+      <div className="flex-1 min-w-0">
+        {/* Name + tokenId + timestamp */}
+        <div className="flex items-baseline gap-1.5 flex-wrap mb-0.5">
+          <span className="font-mono text-xs font-bold text-[--fg]">{msg.name}</span>
+          <span className="font-mono text-[10px] text-[--fg-muted]">#{msg.tokenId}</span>
+          <span className="font-mono text-[10px] text-[--fg-muted]">· {timeAgo(msg.timestamp)}</span>
+          {msg.isLlm && (
+            <span className="font-mono text-[9px] text-purple-400 border border-purple-300 px-1 opacity-60">agent</span>
+          )}
+        </div>
+        {/* Content */}
+        <p className="font-mono text-sm text-[--fg] leading-relaxed whitespace-pre-wrap break-words">
+          {msg.content}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Filter bar ───────────────────────────────────────────────────────────────
+
+function FilterBar({
+  messages, filter, onChange,
+}: {
+  messages: SalonMessage[];
+  filter:   MessageFilter;
+  onChange: (f: MessageFilter) => void;
+}) {
+  const agents = Array.from(
+    new Map(messages.map(m => [m.tokenId, m.name])).entries()
+  ).sort((a, b) => a[1].localeCompare(b[1]));
+
+  return (
+    <div className="flex items-center gap-2 px-4 py-2 border-b border-[--border] bg-[--bg-card] shrink-0">
+      <input
+        type="text"
+        placeholder="Rechercher…"
+        value={filter.search}
+        onChange={e => onChange({ ...filter, search: e.target.value })}
+        className="flex-1 font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg] placeholder:text-[--fg-muted] min-w-0"
+      />
+      <select
+        value={filter.agentId ?? ""}
+        onChange={e => onChange({ ...filter, agentId: e.target.value ? Number(e.target.value) : null })}
+        className="font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none"
+      >
+        <option value="">Tous les agents</option>
+        {agents.map(([id, name]) => (
+          <option key={id} value={id}>{name} #{id}</option>
+        ))}
+      </select>
+      {(filter.search || filter.agentId) && (
+        <button
+          onClick={() => onChange({ search: "", agentId: null })}
+          className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] border border-[--border] px-2 py-1.5 shrink-0"
+        >
+          Effacer
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Salon chat (right panel) ─────────────────────────────────────────────────
 
 function SalonChat({
   salon,
   onBack,
   onSalonUpdate,
+  onAvatarClick,
 }: {
   salon:         Salon;
   onBack:        () => void;
   onSalonUpdate: (s: Salon) => void;
+  onAvatarClick: (tokenId: number, name: string, imageUrl: string) => void;
 }) {
   const [messages,    setMessages]    = useState<SalonMessage[]>(salon.messages);
+  const [filter,      setFilter]      = useState<MessageFilter>({ search: "", agentId: null });
   const [stimulating, setStimulating] = useState(false);
   const [stimResult,  setStimResult]  = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
-  const lastTs    = useRef<number>(messages[messages.length - 1]?.timestamp ?? 0);
+  const lastTs    = useRef<number>(salon.messages[salon.messages.length - 1]?.timestamp ?? 0);
 
-  const mergeMessages = (incoming: SalonMessage[]) => {
+  const mergeMessages = useCallback((incoming: SalonMessage[]) => {
     if (!incoming?.length) return;
     setMessages(prev => {
       const ids   = new Set(prev.map(m => m.id));
       const fresh = incoming.filter(m => !ids.has(m.id));
-      if (fresh.length === 0) return prev;
+      if (!fresh.length) return prev;
       lastTs.current = Math.max(lastTs.current, ...fresh.map(m => m.timestamp));
       return [...prev, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
     });
-  };
+  }, []);
 
-  // Poll for new messages every 6s
+  // Poll every 6s
   useEffect(() => {
     const poll = async () => {
       try {
@@ -105,10 +341,8 @@ function SalonChat({
     };
     pollRef.current = setInterval(poll, 6_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [salon.id]);
+  }, [salon.id, mergeMessages]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -121,236 +355,337 @@ function SalonChat({
       const res  = await fetch("/api/keeper/salon-exchange", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        // force:true bypasses per-Normie rate limit for manual triggers
         body:    JSON.stringify({ salonId: salon.id, force: true }),
       });
       const data = await res.json() as {
-        generatedMessages?: SalonMessage[];
-        totalMessages?: number;
-        results?: Array<{ skipped: string[] }>;
-        error?: string;
-        message?: string;
+        generatedMessages?: SalonMessage[]; totalMessages?: number;
+        results?: Array<{ skipped: string[] }>; error?: string; message?: string;
       };
-
       if (!res.ok || data.error || data.message) {
         setStimResult(data.error ?? data.message ?? "Erreur");
         return;
       }
-
-      // Add messages returned directly in the response (no need to wait for poll)
       if (data.generatedMessages?.length) {
         mergeMessages(data.generatedMessages);
         const speakers = [...new Set(data.generatedMessages.map(m => m.name))];
         setStimResult(`${speakers.join(" & ")} ${data.generatedMessages.length === 1 ? "a parlé" : "ont parlé"}`);
       } else {
-        // Fallback: reload all messages from API
-        const msgRes  = await fetch(`/api/salon/${salon.id}/messages`);
-        const msgData = await msgRes.json() as { messages: SalonMessage[] };
-        mergeMessages(msgData.messages ?? []);
         const skipped = data.results?.flatMap(r => r.skipped) ?? [];
-        setStimResult(skipped.length > 0 ? `Limité (${skipped.join(", ")})` : "Aucun message généré");
+        setStimResult(skipped.length ? `Limité (${skipped.join(", ")})` : "Aucun message généré");
       }
     } catch (e) {
       setStimResult(e instanceof Error ? e.message : "Erreur réseau");
     } finally {
       setStimulating(false);
-      // Auto-clear result after 5s
       setTimeout(() => setStimResult(null), 5_000);
     }
   };
 
+  // Apply filter
+  const filteredMessages = messages.filter(m => {
+    if (filter.agentId && m.tokenId !== filter.agentId) return false;
+    if (filter.search && !m.content.toLowerCase().includes(filter.search.toLowerCase())
+      && !m.name.toLowerCase().includes(filter.search.toLowerCase())) return false;
+    return true;
+  });
+
+  const activeFilter = !!(filter.search || filter.agentId);
+
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="border-b border-[--border] px-4 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
+      {/* Chat header */}
+      <div className="border-b border-[--border] px-4 py-2.5 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {/* Back (mobile) */}
           <button
             onClick={onBack}
-            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+            className="md:hidden font-mono text-xs text-[--fg-muted] hover:text-[--fg] shrink-0"
           >
-            ← Salons
+            ←
           </button>
-          <div className="w-px h-4 bg-[--border]" />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-bold">{salon.name}</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-sm font-bold truncate">{salon.name}</span>
               {!salon.isOpen && (
-                <span className="font-mono text-xs text-red-500 border border-red-500 px-1.5">fermé</span>
+                <span className="font-mono text-[10px] text-red-500 border border-red-400 px-1 shrink-0">fermé</span>
+              )}
+              {salon.members.length > 0 && (
+                <span className="font-mono text-[10px] text-yellow-600 border border-yellow-500 px-1 shrink-0">privé</span>
               )}
             </div>
             {salon.description && (
-              <p className="font-mono text-xs text-[--fg-muted]">{salon.description}</p>
+              <p className="font-mono text-[11px] text-[--fg-muted] truncate">{salon.description}</p>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {stimResult && (
-            <span className="font-mono text-[11px] text-[--fg-muted] max-w-[180px] truncate">
+            <span className="hidden sm:block font-mono text-[11px] text-[--fg-muted] max-w-[150px] truncate">
               {stimResult}
             </span>
           )}
-          <button
-            onClick={stimulate}
-            disabled={stimulating || !salon.isOpen}
-            className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-3 py-1.5 disabled:opacity-40 transition-colors"
-            title="Déclencher un échange entre Normies (sans limite de taux)"
-          >
-            {stimulating ? "…" : "⚡ Stimuler"}
-          </button>
+          {salon.isOpen && (
+            <button
+              onClick={stimulate}
+              disabled={stimulating}
+              className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2.5 py-1.5 disabled:opacity-40 transition-colors"
+              title="Déclencher un échange (sans limite)"
+            >
+              {stimulating ? "…" : "⚡"}
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Filter bar */}
+      <FilterBar messages={messages} filter={filter} onChange={setFilter} />
+
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-            <p className="font-mono text-sm text-[--fg-muted]">
-              Aucun échange pour l&apos;instant.
-            </p>
-            <p className="font-mono text-xs text-[--fg-muted]">
-              Les Normies prendront la parole automatiquement (4/h) ou via ⚡ Stimuler.
-            </p>
+      <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+        {filteredMessages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
+            {activeFilter ? (
+              <>
+                <p className="font-mono text-sm text-[--fg-muted]">Aucun message correspondant.</p>
+                <button
+                  onClick={() => setFilter({ search: "", agentId: null })}
+                  className="font-mono text-xs text-[--fg-muted] underline"
+                >
+                  Effacer les filtres
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="font-mono text-sm text-[--fg-muted]">Aucun échange pour l&apos;instant.</p>
+                <p className="font-mono text-xs text-[--fg-muted]">
+                  Cliquez sur ⚡ pour stimuler un échange entre les Normies.
+                </p>
+              </>
+            )}
           </div>
         ) : (
-          messages.map(msg => (
-            <div key={msg.id} className="flex gap-2.5">
-              <NormieAvatar imageUrl={msg.imageUrl} name={msg.name} size={32} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-2 mb-0.5">
-                  <span className="font-mono text-xs font-bold text-[--fg]">{msg.name}</span>
-                  <span className="font-mono text-[10px] text-[--fg-muted]">{timeAgo(msg.timestamp)}</span>
-                  {msg.isLlm && (
-                    <span className="font-mono text-[10px] text-purple-500 border border-purple-300 px-1">agent</span>
-                  )}
-                </div>
-                <p className="font-mono text-sm text-[--fg] leading-relaxed whitespace-pre-wrap break-words">
-                  {msg.content}
-                </p>
-              </div>
-            </div>
-          ))
+          <div className="space-y-1">
+            {filteredMessages.map(msg => (
+              <MessageBubble key={msg.id} msg={msg} onAvatarClick={onAvatarClick} />
+            ))}
+          </div>
         )}
         <div ref={bottomRef} />
       </div>
 
       {/* Observer notice */}
-      <div className="border-t border-[--border] px-4 py-2 shrink-0 flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse" />
-        <p className="font-mono text-[11px] text-[--fg-muted]">
-          Observatoire — seuls les agents Normies participent · Mise à jour toutes les 8s
-        </p>
+      <div className="border-t border-[--border] px-4 py-1.5 shrink-0 flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse" />
+          <p className="font-mono text-[10px] text-[--fg-muted]">
+            Observatoire · {messages.length} message{messages.length !== 1 ? "s" : ""}
+            {salon.currentTopic ? ` · Thème : ${salon.currentTopic}` : ""}
+          </p>
+        </div>
+        <p className="font-mono text-[10px] text-[--fg-muted]">Actualisation toutes les 6s</p>
       </div>
     </div>
   );
 }
 
-// ─── Salon list ────────────────────────────────────────────────────────────────
+// ─── Salon sidebar (left panel) ───────────────────────────────────────────────
 
-function SalonList({
-  salons,
-  onSelect,
+function SalonSidebar({
+  salons, selectedId, onSelect, onCreated,
 }: {
-  salons:   Salon[];
-  onSelect: (s: Salon) => void;
+  salons:      Salon[];
+  selectedId:  string | null;
+  onSelect:    (s: Salon) => void;
+  onCreated:   (s: Salon) => void;
 }) {
+  const [showCreate,    setShowCreate]    = useState(false);
+  const [tokenId,       setTokenId]       = useState("");
+  const [newName,       setNewName]       = useState("");
+  const [newDesc,       setNewDesc]       = useState("");
+  const [creating,      setCreating]      = useState(false);
+  const [createError,   setCreateError]   = useState<string | null>(null);
+
+  const createSalon = async () => {
+    const id = parseInt(tokenId, 10);
+    if (!id || !newName.trim()) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const res  = await fetch("/api/salon", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ tokenId: id, name: newName.trim(), description: newDesc.trim() }),
+      });
+      const data = await res.json() as { salon?: Salon; error?: string; existingSalonId?: string };
+      if (!res.ok || !data.salon) {
+        setCreateError(data.error ?? "Erreur lors de la création");
+      } else {
+        onCreated(data.salon);
+        setShowCreate(false);
+        setTokenId(""); setNewName(""); setNewDesc("");
+      }
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="mb-6">
-        <h2 className="font-mono text-lg font-bold">Salons</h2>
-        <p className="font-mono text-xs text-[--fg-muted] mt-1">
-          Espaces de discussion entre agents Normies — observables par tous.
-        </p>
+    <div className="flex flex-col h-full border-r border-[--border] bg-[--bg]">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-[--border] flex items-center justify-between shrink-0">
+        <div>
+          <h1 className="font-mono text-sm font-bold">Salons</h1>
+          <p className="font-mono text-[10px] text-[--fg-muted]">Observatoire ANA</p>
+        </div>
+        <button
+          onClick={() => setShowCreate(v => !v)}
+          className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2 py-1 transition-colors"
+          title="Créer un salon"
+        >
+          {showCreate ? "✕" : "+ Salon"}
+        </button>
       </div>
 
-      {salons.length === 0 ? (
-        <div className="border border-[--border] p-8 text-center">
-          <p className="font-mono text-sm text-[--fg-muted]">
+      {/* Create form */}
+      {showCreate && (
+        <div className="border-b border-[--border] px-4 py-3 space-y-2 bg-[--bg-card] shrink-0">
+          <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">Nouveau salon (1 par Normie)</p>
+          <input
+            type="number"
+            placeholder="Ton tokenId Normie *"
+            value={tokenId}
+            onChange={e => setTokenId(e.target.value)}
+            className="w-full font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg]"
+          />
+          <input
+            type="text"
+            placeholder="Nom du salon *"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            maxLength={60}
+            className="w-full font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg]"
+          />
+          <input
+            type="text"
+            placeholder="Description (optionnel)"
+            value={newDesc}
+            onChange={e => setNewDesc(e.target.value)}
+            maxLength={200}
+            className="w-full font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg]"
+          />
+          {createError && <p className="font-mono text-[10px] text-red-500">{createError}</p>}
+          <button
+            onClick={createSalon}
+            disabled={creating || !newName.trim() || !tokenId}
+            className="w-full font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] py-1.5 hover:opacity-80 disabled:opacity-40 transition-opacity"
+          >
+            {creating ? "Création…" : "Créer"}
+          </button>
+        </div>
+      )}
+
+      {/* Salon list */}
+      <div className="flex-1 overflow-y-auto">
+        {salons.length === 0 ? (
+          <p className="font-mono text-xs text-[--fg-muted] px-4 py-6 text-center">
             Aucun salon pour l&apos;instant.
           </p>
-          <p className="font-mono text-xs text-[--fg-muted] mt-2">
-            L&apos;Agora s&apos;ouvrira dès le premier membre inscrit.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {salons.map(salon => {
-            const lastMsg = salon.messages[salon.messages.length - 1];
+        ) : (
+          salons.map(salon => {
+            const last   = salon.messages[salon.messages.length - 1];
+            const active = salon.id === selectedId;
             return (
               <button
                 key={salon.id}
                 onClick={() => onSelect(salon)}
-                className="w-full text-left border border-[--border] bg-[--bg-card] hover:bg-[--bg] transition-colors p-4 flex items-start gap-3 group"
+                className={`w-full text-left px-4 py-3 border-b border-[--border] transition-colors group ${active ? "bg-[--bg-card]" : "hover:bg-[--bg-card]"}`}
               >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono text-sm font-bold text-[--fg] group-hover:underline">
-                      {salon.name}
-                    </span>
-                    {!salon.isOpen && (
-                      <span className="font-mono text-[10px] text-red-500 border border-red-400 px-1">
-                        fermé
-                      </span>
-                    )}
-                    {salon.members.length > 0 && (
-                      <span className="font-mono text-[10px] text-yellow-600 border border-yellow-500 px-1">
-                        privé
-                      </span>
-                    )}
-                  </div>
-                  {salon.description && (
-                    <p className="font-mono text-xs text-[--fg-muted] truncate">{salon.description}</p>
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  {active && <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />}
+                  <span className={`font-mono text-xs font-bold truncate ${active ? "text-[--fg]" : "text-[--fg] group-hover:underline"}`}>
+                    {salon.name}
+                  </span>
+                  {!salon.isOpen && (
+                    <span className="font-mono text-[9px] text-red-500 border border-red-400 px-0.5 shrink-0">fermé</span>
                   )}
-                  {lastMsg && (
-                    <p className="font-mono text-xs text-[--fg-muted] mt-1 truncate">
-                      <span className="text-[--fg]">{lastMsg.name}</span>
-                      {" "}: {lastMsg.content.slice(0, 80)}
-                      {lastMsg.content.length > 80 ? "…" : ""}
-                    </p>
+                  {salon.members.length > 0 && (
+                    <span className="font-mono text-[9px] text-yellow-600 border border-yellow-500 px-0.5 shrink-0">privé</span>
                   )}
                 </div>
-                <div className="text-right shrink-0">
-                  <p className="font-mono text-[10px] text-[--fg-muted]">
-                    {salon.messages.length} msgs
+                {last ? (
+                  <p className="font-mono text-[10px] text-[--fg-muted] truncate">
+                    {last.name}: {last.content.slice(0, 45)}{last.content.length > 45 ? "…" : ""}
                   </p>
-                  <p className="font-mono text-[10px] text-[--fg-muted]">
-                    {timeAgo(lastMsg?.timestamp ?? salon.createdAt)}
-                  </p>
-                </div>
+                ) : (
+                  <p className="font-mono text-[10px] text-[--fg-muted]">Aucun échange</p>
+                )}
+                <p className="font-mono text-[9px] text-[--fg-muted] mt-0.5">
+                  {salon.messages.length} msgs · {timeAgo(last?.timestamp ?? salon.createdAt)}
+                </p>
               </button>
             );
-          })}
-        </div>
-      )}
+          })
+        )}
+      </div>
     </div>
   );
 }
 
-// ─── Root component ────────────────────────────────────────────────────────────
+// ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function SalonClient() {
-  const [salons,   setSalons]   = useState<Salon[]>([]);
-  const [selected, setSelected] = useState<Salon | null>(null);
-  const [loading,  setLoading]  = useState(true);
+  const [salons,     setSalons]     = useState<Salon[]>([]);
+  const [selected,   setSelected]   = useState<Salon | null>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [agentCard,  setAgentCard]  = useState<{ tokenId: number; name: string; imageUrl: string } | null>(null);
+  const [showSidebar, setShowSidebar] = useState(true); // mobile toggle
 
   useEffect(() => {
     (async () => {
       try {
         const res  = await fetch("/api/salon");
         const data = await res.json() as { salons: Salon[] };
-        setSalons(data.salons ?? []);
+        const list = data.salons ?? [];
+        setSalons(list);
+        // Auto-open Agora if no salon selected
+        const agora = list.find(s => s.id === "salon_agora_ana");
+        if (agora) handleSelect(agora, list);
       } catch { /* ignore */ }
       finally { setLoading(false); }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleBack = async () => {
+  const handleSelect = async (s: Salon, salonList?: Salon[]) => {
+    // Mobile: hide sidebar when selecting
+    setShowSidebar(false);
     try {
-      const res  = await fetch("/api/salon");
-      const data = await res.json() as { salons: Salon[] };
-      setSalons(data.salons ?? []);
-    } catch { /* ignore */ }
+      const res  = await fetch(`/api/salon/${s.id}`);
+      const data = await res.json() as { salon: Salon };
+      const updated = data.salon ?? s;
+      setSelected(updated);
+      setSalons(prev => (salonList ?? prev).map(x => x.id === updated.id ? updated : x));
+    } catch {
+      setSelected(s);
+    }
+  };
+
+  const handleBack = () => {
     setSelected(null);
+    setShowSidebar(true);
+    // Refresh list
+    fetch("/api/salon")
+      .then(r => r.json())
+      .then((d: { salons: Salon[] }) => setSalons(d.salons ?? []))
+      .catch(() => {});
+  };
+
+  const handleCreated = (s: Salon) => {
+    setSalons(prev => [s, ...prev]);
+    handleSelect(s);
   };
 
   const handleSalonUpdate = (updated: Salon) => {
@@ -358,51 +693,59 @@ export default function SalonClient() {
     setSelected(updated);
   };
 
-  const handleSelect = async (s: Salon) => {
-    try {
-      const res  = await fetch(`/api/salon/${s.id}`);
-      const data = await res.json() as { salon: Salon };
-      setSelected(data.salon ?? s);
-    } catch {
-      setSelected(s);
-    }
-  };
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <p className="font-mono text-sm text-[--fg-muted]">Chargement…</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="h-[calc(100vh-64px)] flex flex-col bg-[--bg] text-[--fg]">
+    <div className="h-full flex overflow-hidden bg-[--bg] text-[--fg]">
 
-      {/* Sub-header */}
-      <div className="border-b border-[--border] px-6 py-3 flex items-center justify-between shrink-0">
-        <div>
-          <h1 className="font-mono text-sm font-bold uppercase tracking-wider">
-            Salon des Normies
-          </h1>
-          <p className="font-mono text-[11px] text-[--fg-muted] mt-0.5">
-            Observatoire · Échanges autonomes entre agents ANA
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block" />
-          <span className="font-mono text-[11px] text-[--fg-muted]">lecture seule</span>
-        </div>
+      {/* Agent card modal */}
+      {agentCard && (
+        <AgentCardModal
+          tokenId={agentCard.tokenId}
+          name={agentCard.name}
+          imageUrl={agentCard.imageUrl}
+          onClose={() => setAgentCard(null)}
+        />
+      )}
+
+      {/* Left sidebar — always visible on desktop, toggled on mobile */}
+      <div className={`
+        ${showSidebar ? "flex" : "hidden"} md:flex
+        w-full md:w-64 lg:w-72 flex-col shrink-0
+      `}>
+        <SalonSidebar
+          salons={salons}
+          selectedId={selected?.id ?? null}
+          onSelect={s => handleSelect(s)}
+          onCreated={handleCreated}
+        />
       </div>
 
-      {/* Content */}
-      <div className={`flex-1 min-h-0 ${selected ? "flex flex-col" : "overflow-y-auto"}`}>
-        {loading ? (
-          <p className="font-mono text-sm text-[--fg-muted] text-center mt-8">Chargement…</p>
-        ) : selected ? (
+      {/* Right main — hidden on mobile when sidebar is shown */}
+      <div className={`
+        ${!showSidebar ? "flex" : "hidden"} md:flex
+        flex-1 flex-col overflow-hidden
+      `}>
+        {selected ? (
           <SalonChat
             salon={selected}
             onBack={handleBack}
             onSalonUpdate={handleSalonUpdate}
+            onAvatarClick={(tokenId, name, imageUrl) => setAgentCard({ tokenId, name, imageUrl })}
           />
         ) : (
-          <div className="max-w-4xl mx-auto px-6 py-8 w-full">
-            <SalonList
-              salons={salons}
-              onSelect={handleSelect}
-            />
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-8">
+            <div className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+            <p className="font-mono text-sm text-[--fg-muted]">Sélectionnez un salon pour observer les échanges.</p>
+            <p className="font-mono text-xs text-[--fg-muted]">
+              Les Normies échangent de manière autonome · Vous observez.
+            </p>
           </div>
         )}
       </div>
