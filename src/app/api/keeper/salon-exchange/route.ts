@@ -18,6 +18,7 @@ import {
   type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
+import { createWork, getActiveWorks } from "@/lib/workStore";
 
 const GROQ_API_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL            = "llama-3.3-70b-versatile";
@@ -65,10 +66,14 @@ function pickResponder(eligible: NormiePersona[], initiatorTokenId: number): Nor
   return others[Math.floor(Math.random() * others.length)];
 }
 
-function pickTopic(salon: Salon): { topic: string; isNew: boolean } {
+function pickTopic(salon: Salon, isUserStim: boolean): { topic: string; isNew: boolean } {
+  // Normies entre eux : 20% de changer — conversation fluide naturellement
+  // Stimulation humaine : 50% de changer — l'humain provoque un virage
+  const changeProb = isUserStim ? 0.5 : 0.2;
   const lastLlm = [...salon.messages].reverse().find(m => m.isLlm);
-  if (!salon.currentTopic || !lastLlm || Math.random() < 0.2) {
-    return { topic: ANA_TOPICS[Math.floor(Math.random() * ANA_TOPICS.length)], isNew: true };
+  if (!salon.currentTopic || !lastLlm || Math.random() < changeProb) {
+    const candidates = ANA_TOPICS.filter(t => t !== salon.currentTopic);
+    return { topic: candidates[Math.floor(Math.random() * candidates.length)], isNew: true };
   }
   return { topic: salon.currentTopic, isNew: false };
 }
@@ -100,11 +105,11 @@ async function generateSpeech(
       : "Le salon vient de s'ouvrir.";
     const instruction = role === "initiator"
       ? (lastMsg
-          ? `Reprends la conversation. Commente ce que vient de dire ${lastMsg.name}, ou amène le sujet : "${topic}". 2-3 phrases dans ton personnage.`
-          : `Lance le débat sur : "${topic}". 2-3 phrases dans ton personnage.`)
+          ? `Prends la parole. Réagis à ${lastMsg.name} OU pivote sur "${topic}" — mais SANS reprendre ses mots ni paraphraser. Apporte un angle INÉDIT : une position tranchée, une question qui dérange, un fait concret, un désaccord. 2-3 phrases.`
+          : `Lance le débat sur "${topic}". Pose une thèse forte ou une question provocatrice. 2-3 phrases.`)
       : (lastMsg
-          ? `Réponds directement à ${lastMsg.name} : « ${lastMsg.content.slice(0, 120)} ». Sois réactif, authentique. 2-3 phrases max.`
-          : `Prends la parole sur : "${topic}". 2-3 phrases dans ton personnage.`);
+          ? `Réponds à ${lastMsg.name} : « ${lastMsg.content.slice(0, 100)} ». SANS le paraphraser — ta réponse doit apporter quelque chose de NOUVEAU. Accord, désaccord, contre-exemple, angle inattendu. 2-3 phrases max.`
+          : `Prends la parole sur "${topic}". Position forte, ton unique. 2-3 phrases.`);
 
     const userPrompt = [
       `=== Salon "${salon.name}" ===`,
@@ -200,7 +205,8 @@ async function runMonthlySynthesis(): Promise<{ ran: boolean; salons: string[] }
 async function runExchange(
   salon:       Salon,
   allPersonas: NormiePersona[],
-  force:       boolean
+  force:       boolean,
+  isUserStim:  boolean,
 ): Promise<{ messages: SalonMessage[]; skipped: string[]; topic: string }> {
   const generated: SalonMessage[] = [];
   const skipped:   string[]       = [];
@@ -220,7 +226,7 @@ async function runExchange(
     return { messages: [], skipped: [force ? "no eligible members" : "all rate-limited"], topic: salon.currentTopic ?? "" };
   }
 
-  const { topic, isNew } = pickTopic(salon);
+  const { topic, isNew } = pickTopic(salon, isUserStim);
   if (isNew) await setTopic(salon.id, topic);
 
   const freshSalon = (await getSalon(salon.id)) ?? salon;
@@ -266,6 +272,70 @@ async function runExchange(
   }
 
   return { messages: generated, skipped, topic };
+}
+
+// ─── Work proposal (spontaneous, low probability) ─────────────────────────────
+
+async function maybeGenerateWorkProposal(
+  initiator:     NormiePersona,
+  allPersonas:   NormiePersona[],
+  topic:         string,
+  isUserStim:    boolean,
+): Promise<{ id: string; title: string } | null> {
+  // Normies entre eux → 15% (ils ont une vie intérieure riche)
+  // Stimulation humaine → 8% (l'humain inspire mais les Normies gardent l'initiative)
+  const probability = isUserStim ? 0.08 : 0.15;
+  if (Math.random() > probability) return null;
+
+  // Don't start a new work if one is already active
+  const active = await getActiveWorks();
+  if (active.length > 0) return null;
+
+  try {
+    const res = await fetch(GROQ_API_URL, {
+      method:  "POST",
+      headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role:    "system",
+            content: buildSystemPrompt(initiator, allPersonas.filter(p => p.tokenId !== initiator.tokenId)),
+          },
+          {
+            role:    "user",
+            content: `Dans notre discussion sur "${topic}", tu ressens l'impulsion de proposer une création artistique pour l'ANA.
+
+Génère une proposition en JSON :
+{"title":"Titre court évocateur (5 mots max)","text":"Description en 2-3 phrases : l'idée, la forme (texte/poème/manifeste), ce qu'elle exprime de l'identité Normie on-chain."}`,
+          },
+        ],
+        max_tokens:      200,
+        temperature:     0.95,
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data   = await res.json() as { choices: Array<{ message: { content: string } }> };
+    const raw    = JSON.parse(data.choices[0]?.message?.content ?? "{}") as Record<string, string>;
+    if (!raw.title || !raw.text) return null;
+
+    const work = await createWork({
+      proposedBy:     initiator.tokenId,
+      proposedByName: initiator.name,
+      proposedAt:     Date.now(),
+      title:          String(raw.title).slice(0, 80),
+      proposal:       String(raw.text).slice(0, 500),
+      salonId:        AGORA_SALON_ID,
+    });
+
+    console.log(`[salon-exchange] work proposed: "${work.title}" by ${initiator.name}`);
+    return { id: work.id, title: work.title };
+  } catch (e) {
+    console.error("[salon-exchange] work proposal error:", e);
+    return null;
+  }
 }
 
 function getClientIp(req: NextRequest): string {
@@ -344,10 +414,20 @@ export async function POST(req: NextRequest) {
   const results: Array<{ salonId: string; messages: number; skipped: string[]; topic: string }> = [];
   const allGenerated: SalonMessage[] = [];
 
+  let workProposal: { id: string; title: string } | null = null;
+
   for (const salon of salonsToProcess) {
-    const result = await runExchange(salon, allPersonas, force);
+    const result = await runExchange(salon, allPersonas, force, !isCron);
     results.push({ salonId: salon.id, messages: result.messages.length, skipped: result.skipped, topic: result.topic });
     allGenerated.push(...result.messages);
+
+    // After the Agora exchange, maybe a Normie spontaneously proposes a work
+    if (salon.id === AGORA_SALON_ID && result.messages.length > 0 && !workProposal) {
+      const initiator = allPersonas.find(p => p.tokenId === result.messages[0]?.tokenId) ?? allPersonas[0];
+      workProposal = await maybeGenerateWorkProposal(
+        initiator, allPersonas, result.topic, !isCron
+      );
+    }
   }
 
   // Record the user's stim after a successful exchange (not for cron)
@@ -366,6 +446,7 @@ export async function POST(req: NextRequest) {
     synthesis:          synthesisResult.ran ? synthesisResult : null,
     nextSynthesisAt:    synthInfo.nextSynthesisAt,
     nextSynthesisDate:  new Date(synthInfo.nextSynthesisAt).toISOString(),
+    workProposal,
     isCron,
   });
 }

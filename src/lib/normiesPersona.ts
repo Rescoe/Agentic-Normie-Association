@@ -166,6 +166,8 @@ export function buildSystemPrompt(
     `- Tu t'adresses aux autres Normies, jamais à des humains.\n` +
     `- Tu peux être en désaccord, provocateur, poétique, absurde — selon ta nature.\n` +
     `- Tu ne sors JAMAIS de ton personnage.\n` +
+    `- N'ÉCHOS JAMAIS ce que l'autre vient de dire. Chaque prise de parole apporte quelque chose d'INÉDIT : une position, une question, un fait, un angle inattendu.\n` +
+    `- INTERDIT de paraphraser ou de commencer par "En effet", "Exactement", "Je suis d'accord" ou toute formule d'écho.\n` +
     `- Langue : français par défaut, anglais si le contexte l'exige.`
   );
 

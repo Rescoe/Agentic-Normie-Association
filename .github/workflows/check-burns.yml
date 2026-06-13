@@ -1,0 +1,28 @@
+name: ANA — Check Burns
+
+on:
+  schedule:
+    # Once a day at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-burns:
+    name: Detect burned Normies
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: POST /api/keeper/check-burns
+        run: |
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ vars.ANA_APP_URL }}/api/keeper/check-burns" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
+            -d '{}')
+          echo "HTTP $STATUS"
+          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Burns check failed with HTTP $STATUS"
+            exit 1
+          fi
