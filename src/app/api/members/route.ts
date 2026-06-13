@@ -38,9 +38,9 @@ export async function GET() {
   }
 
   const personas = await Promise.allSettled(memberIds.map(id => buildPersona(id)));
-  const members = personas.map((result, i) => {
+  const members = await Promise.all(personas.map(async (result, i) => {
     const tokenId = memberIds[i];
-    const stats   = getMemberStats(tokenId);
+    const stats   = await getMemberStats(tokenId);
     if (result.status === "rejected") {
       return { tokenId, name: `Normie #${tokenId}`, imageUrl: `https://api.normies.art/normies/image/${tokenId}`, stats };
     }
@@ -61,7 +61,7 @@ export async function GET() {
       isRegisteredAgent:  p.isRegisteredAgent,
       stats,
     };
-  });
+  }));
 
   return NextResponse.json({ members, count: members.length });
 }

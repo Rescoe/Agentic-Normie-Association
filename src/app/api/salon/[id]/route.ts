@@ -1,8 +1,3 @@
-/**
- * GET    /api/salon/[id]                       — get salon + messages
- * PATCH  /api/salon/[id]                       — close salon or exclude a member
- */
-
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSalon, closeSalon, excludeMember } from "@/lib/salonStore";
@@ -11,7 +6,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const salon = getSalon(params.id);
+  const salon = await getSalon(params.id);
   if (!salon) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
   return NextResponse.json({ salon });
 }
@@ -28,7 +23,7 @@ export async function PATCH(
 
   if (action === "close") {
     if (!byTokenId) return NextResponse.json({ error: "byTokenId required" }, { status: 400 });
-    const result = closeSalon(params.id, byTokenId);
+    const result = await closeSalon(params.id, byTokenId);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 403 });
     return NextResponse.json({ ok: true });
   }
@@ -37,7 +32,7 @@ export async function PATCH(
     if (!byTokenId || !targetTokenId) {
       return NextResponse.json({ error: "byTokenId and targetTokenId required" }, { status: 400 });
     }
-    const result = excludeMember(params.id, targetTokenId, byTokenId);
+    const result = await excludeMember(params.id, targetTokenId, byTokenId);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 403 });
     return NextResponse.json({ ok: true });
   }

@@ -1,8 +1,3 @@
-/**
- * GET  /api/salon       — list all salons
- * POST /api/salon       — create a salon
- */
-
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
@@ -27,7 +22,7 @@ async function getMemberIds(): Promise<number[]> {
 }
 
 export async function GET() {
-  return NextResponse.json({ salons: listSalons() });
+  return NextResponse.json({ salons: await listSalons() });
 }
 
 export async function POST(req: NextRequest) {
@@ -40,17 +35,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "tokenId and name required" }, { status: 400 });
   }
 
-  // Verify creator is an ANA member — degrade gracefully if chain read fails
   const memberIds = await getMemberIds();
   if (memberIds.length > 0 && !memberIds.includes(tokenId)) {
     return NextResponse.json({
-      error: `Normie #${tokenId} n'est pas inscrit dans l'ANA. Inscris ton Normie d'abord.`,
+      error: `Normie #${tokenId} n'est pas inscrit dans l'ANA.`,
     }, { status: 403 });
   }
-  // If memberIds.length === 0 (RPC unavailable), allow creation — the contract will guard on-chain
 
-  // Enforce 1 active salon per creator
-  const existing = getActiveSalonByCreator(tokenId);
+  const existing = await getActiveSalonByCreator(tokenId);
   if (existing) {
     return NextResponse.json({
       error: `Tu as déjà un salon actif : "${existing.name}". Ferme-le avant d'en créer un nouveau.`,
@@ -58,6 +50,6 @@ export async function POST(req: NextRequest) {
     }, { status: 409 });
   }
 
-  const salon = createSalon({ name: name.trim(), description, createdBy: tokenId, members });
+  const salon = await createSalon({ name: name.trim(), description, createdBy: tokenId, members });
   return NextResponse.json({ salon }, { status: 201 });
 }

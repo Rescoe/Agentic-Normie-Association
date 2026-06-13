@@ -1,23 +1,15 @@
 /**
- * Salon store — dual persistence: global singleton + JSON file.
+ * Salon store — shared persistence across all Vercel serverless instances.
  *
- * The file lives at <project>/data/salon.json (outside .next, committed to .gitignore).
- * The global guarantees in-process sharing across route handlers.
- * The file guarantees survival across server restarts.
+ * Storage strategy (auto-detected from env):
+ *   BLOB_READ_WRITE_TOKEN present → Vercel Blob (production on Vercel)
+ *   else                          → local JSON file (dev, single process)
+ *
+ * All functions are async. Global acts as in-process read cache.
  */
 
 import fs   from "fs";
 import path from "path";
-
-// ─── File path ────────────────────────────────────────────────────────────────
-
-// process.cwd() = project root when Next.js runs. The `data/` dir is created
-// at runtime if missing.
-const DATA_DIR  = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "salon.json");
-
-// On Vercel use /tmp (ephemeral, but at least within one function execution)
-const FILE_PATH = process.env.VERCEL ? "/tmp/salon.json" : DATA_FILE;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,108 +42,143 @@ interface SalonStore {
   names:  Record<string, string>; // tokenId.toString() → realName
 }
 
-// ─── Global singleton (in-process) ───────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+export const AGORA_SALON_ID  = "salon_agora_ana";
+const BLOB_PATH               = "salon/store.json";
+const DATA_FILE               = path.join(process.cwd(), "data", "salon.json");
+const MAX_MESSAGES_PER_HOUR  = 4;
+const MAX_MESSAGES_PER_SALON = 500;
+
+const USE_BLOB = !!process.env.BLOB_READ_WRITE_TOKEN;
+
+console.log(`[salonStore] mode: ${USE_BLOB ? "Vercel Blob" : `local file (${DATA_FILE})`}`);
+
+// ─── Global in-process cache ──────────────────────────────────────────────────
 
 declare global {
   // eslint-disable-next-line no-var
   var __anaSalonStore: SalonStore | undefined;
 }
 
-export const AGORA_SALON_ID = "salon_agora_ana";
+// ─── Vercel Blob I/O ─────────────────────────────────────────────────────────
 
-const MAX_MESSAGES_PER_HOUR  = 4;
-const MAX_MESSAGES_PER_SALON = 500;
-
-function makeAgora(): Salon {
-  return {
-    id:          AGORA_SALON_ID,
-    name:        "Agora ANA",
-    description: "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
-    createdBy:   0,
-    createdAt:   Date.now(),
-    members:     [],
-    excluded:    [],
-    isOpen:      true,
-    messages:    [],
-    currentTopic: null,
-  };
+async function blobLoad(): Promise<SalonStore | null> {
+  try {
+    const { list } = await import("@vercel/blob");
+    const { blobs } = await list({ prefix: BLOB_PATH });
+    if (blobs.length === 0) return null;
+    const res = await fetch(blobs[0].url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const parsed = await res.json() as SalonStore;
+    if (!parsed.names) parsed.names = {};
+    console.log(`[salonStore] blob loaded — ${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
+    return parsed;
+  } catch (e) {
+    console.error("[salonStore] blob load error:", e);
+    return null;
+  }
 }
 
-// ─── File I/O ─────────────────────────────────────────────────────────────────
-
-function loadFromDisk(): SalonStore {
+async function blobSave(store: SalonStore): Promise<void> {
   try {
-    if (fs.existsSync(FILE_PATH)) {
-      const raw    = fs.readFileSync(FILE_PATH, "utf-8");
-      const parsed = JSON.parse(raw) as SalonStore;
+    const { put } = await import("@vercel/blob");
+    await put(BLOB_PATH, JSON.stringify(store), {
+      access:           "public",
+      addRandomSuffix:  false,
+      contentType:      "application/json",
+    });
+    console.log(`[salonStore] blob saved — ${store.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
+  } catch (e) {
+    console.error("[salonStore] blob save error:", e);
+  }
+}
+
+// ─── Local file I/O (dev fallback) ───────────────────────────────────────────
+
+function fileLoad(): SalonStore {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as SalonStore;
       if (!parsed.names) parsed.names = {};
-      const total = Object.values(parsed.salons)
-        .reduce((n, s) => n + s.messages.length, 0);
-      console.log(`[salonStore] loaded ${FILE_PATH} — ${total} messages`);
+      console.log(`[salonStore] file loaded — ${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
       return parsed;
     }
-  } catch (e) {
-    console.error("[salonStore] load error:", e);
-  }
+  } catch (e) { console.error("[salonStore] file load error:", e); }
   return { salons: {}, names: {} };
 }
 
-function saveToDisk(store: SalonStore): void {
+function fileSave(store: SalonStore): void {
   try {
-    // Ensure directory exists
-    if (!process.env.VERCEL) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    const json = JSON.stringify(store, null, 2);
-    // Atomic write: write to temp file then rename
-    const tmp = FILE_PATH + ".tmp";
-    fs.writeFileSync(tmp, json, "utf-8");
-    fs.renameSync(tmp, FILE_PATH);
-    const agora = store.salons[AGORA_SALON_ID];
-    console.log(`[salonStore] saved → ${FILE_PATH} (${agora?.messages.length ?? 0} agora msgs)`);
-  } catch (e) {
-    console.error("[salonStore] save FAILED:", FILE_PATH, e);
-  }
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    const tmp = DATA_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+    fs.renameSync(tmp, DATA_FILE);
+    console.log(`[salonStore] file saved — ${store.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
+  } catch (e) { console.error("[salonStore] file save FAILED:", DATA_FILE, e); }
 }
 
-// ─── Store access ─────────────────────────────────────────────────────────────
+// ─── Core ─────────────────────────────────────────────────────────────────────
 
-function getStore(): SalonStore {
+function makeAgora(): Salon {
+  return {
+    id: AGORA_SALON_ID, name: "Agora ANA",
+    description: "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
+    createdBy: 0, createdAt: Date.now(),
+    members: [], excluded: [], isOpen: true, messages: [], currentTopic: null,
+  };
+}
+
+function ensureAgora(s: SalonStore): void {
+  if (!s.salons[AGORA_SALON_ID]) s.salons[AGORA_SALON_ID] = makeAgora();
+}
+
+async function getStore(): Promise<SalonStore> {
   if (!global.__anaSalonStore) {
-    const s = loadFromDisk();
-    if (!s.salons[AGORA_SALON_ID]) {
-      s.salons[AGORA_SALON_ID] = makeAgora();
-    }
+    const s = USE_BLOB
+      ? ((await blobLoad()) ?? { salons: {}, names: {} })
+      : fileLoad();
+    ensureAgora(s);
     global.__anaSalonStore = s;
     console.log(
-      `[salonStore] initialized global — ${Object.keys(s.salons).length} salons, ` +
-      `${s.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs, file: ${FILE_PATH}`
+      `[salonStore] init (${USE_BLOB ? "blob" : "file"}) — ` +
+      `${s.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`
     );
-    // Validate we can write
-    saveToDisk(s);
   }
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   return global.__anaSalonStore!;
 }
 
-function mutate(fn: (s: SalonStore) => void): void {
-  const store = getStore();
-  fn(store);          // mutates in-place — global is updated immediately
-  saveToDisk(store);  // persist backup
+async function mutate(fn: (s: SalonStore) => void): Promise<void> {
+  // For Blob: always read fresh before writing (prevents overwriting concurrent writes)
+  // For file: use global (single process, no concurrency)
+  let store: SalonStore;
+  if (USE_BLOB) {
+    store = (await blobLoad()) ?? { salons: {}, names: {} };
+    ensureAgora(store);
+  } else {
+    store = global.__anaSalonStore ?? fileLoad();
+    ensureAgora(store);
+  }
+
+  fn(store);
+
+  if (USE_BLOB) {
+    await blobSave(store);
+  } else {
+    fileSave(store);
+  }
+
+  global.__anaSalonStore = store;
 }
 
 // ─── Debug ────────────────────────────────────────────────────────────────────
 
-export function getDebugInfo() {
-  const store  = getStore();
-  const agora  = store.salons[AGORA_SALON_ID];
-  let fileSize = 0;
-  try { fileSize = fs.statSync(FILE_PATH).size; } catch { /* ignore */ }
-
+export async function getDebugInfo() {
+  const store = await getStore();
+  const agora = store.salons[AGORA_SALON_ID];
   return {
-    FILE_PATH,
-    fileExists:    fileSize > 0,
-    fileSizeBytes: fileSize,
+    mode:          USE_BLOB ? "vercel-blob" : "local-file",
     globalLoaded:  !!global.__anaSalonStore,
     salonCount:    Object.keys(store.salons).length,
     nameCount:     Object.keys(store.names).length,
@@ -162,38 +189,35 @@ export function getDebugInfo() {
 
 // ─── Name registry ────────────────────────────────────────────────────────────
 
-export function registerName(tokenId: number, name: string): void {
+export async function registerName(tokenId: number, name: string): Promise<void> {
   if (!name || name === `Normie #${tokenId}`) return;
-  mutate(s => { s.names[String(tokenId)] = name; });
+  await mutate(s => { s.names[String(tokenId)] = name; });
 }
 
-export function getName(tokenId: number): string | null {
-  const n = getStore().names[String(tokenId)];
+export async function getName(tokenId: number): Promise<string | null> {
+  const n = (await getStore()).names[String(tokenId)];
   return n && n !== `Normie #${tokenId}` ? n : null;
 }
 
 // ─── Salon CRUD ───────────────────────────────────────────────────────────────
 
-export function listSalons(): Salon[] {
-  return Object.values(getStore().salons).sort((a, b) => b.createdAt - a.createdAt);
+export async function listSalons(): Promise<Salon[]> {
+  return Object.values((await getStore()).salons).sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function getSalon(id: string): Salon | null {
-  return getStore().salons[id] ?? null;
+export async function getSalon(id: string): Promise<Salon | null> {
+  return (await getStore()).salons[id] ?? null;
 }
 
-export function getActiveSalonByCreator(tokenId: number): Salon | null {
-  return Object.values(getStore().salons).find(s => s.createdBy === tokenId && s.isOpen) ?? null;
+export async function getActiveSalonByCreator(tokenId: number): Promise<Salon | null> {
+  return Object.values((await getStore()).salons).find(s => s.createdBy === tokenId && s.isOpen) ?? null;
 }
 
-export function getMemberStats(tokenId: number): {
-  totalMessages: number;
-  salonsCount:   number;
-  lastActive:    number | null;
-} {
-  let totalMessages = 0, salonsCount = 0;
-  let lastActive: number | null = null;
-  for (const salon of Object.values(getStore().salons)) {
+export async function getMemberStats(tokenId: number): Promise<{
+  totalMessages: number; salonsCount: number; lastActive: number | null;
+}> {
+  let totalMessages = 0, salonsCount = 0, lastActive: number | null = null;
+  for (const salon of Object.values((await getStore()).salons)) {
     const msgs = salon.messages.filter(m => m.tokenId === tokenId);
     if (msgs.length > 0) {
       totalMessages += msgs.length;
@@ -205,43 +229,34 @@ export function getMemberStats(tokenId: number): {
   return { totalMessages, salonsCount, lastActive };
 }
 
-export function createSalon(params: {
+export async function createSalon(params: {
   name: string; description: string; createdBy: number; members?: number[];
-}): Salon {
+}): Promise<Salon> {
   const id = `salon_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const salon: Salon = {
-    id,
-    name:         params.name.slice(0, 60),
-    description:  params.description.slice(0, 200),
-    createdBy:    params.createdBy,
-    createdAt:    Date.now(),
-    members:      params.members ?? [],
-    excluded:     [],
-    isOpen:       true,
-    messages:     [],
-    currentTopic: null,
+    id, name: params.name.slice(0, 60), description: params.description.slice(0, 200),
+    createdBy: params.createdBy, createdAt: Date.now(),
+    members: params.members ?? [], excluded: [], isOpen: true, messages: [], currentTopic: null,
   };
-  mutate(s => { s.salons[id] = salon; });
+  await mutate(s => { s.salons[id] = salon; });
   return salon;
 }
 
-export function closeSalon(id: string, byTokenId: number): { ok: boolean; error?: string } {
-  const salon = getSalon(id);
+export async function closeSalon(id: string, byTokenId: number): Promise<{ ok: boolean; error?: string }> {
+  const salon = await getSalon(id);
   if (!salon) return { ok: false, error: "Salon not found" };
-  if (salon.createdBy !== 0 && salon.createdBy !== byTokenId) {
-    return { ok: false, error: "Only creator can close salon" };
-  }
-  mutate(s => { s.salons[id].isOpen = false; });
+  if (salon.createdBy !== 0 && salon.createdBy !== byTokenId) return { ok: false, error: "Only creator can close salon" };
+  await mutate(s => { s.salons[id].isOpen = false; });
   return { ok: true };
 }
 
-export function excludeMember(
+export async function excludeMember(
   salonId: string, targetId: number, byTokenId: number
-): { ok: boolean; error?: string } {
-  const salon = getSalon(salonId);
+): Promise<{ ok: boolean; error?: string }> {
+  const salon = await getSalon(salonId);
   if (!salon) return { ok: false, error: "Salon not found" };
   if (salon.createdBy !== byTokenId) return { ok: false, error: "Only creator can exclude members" };
-  mutate(s => {
+  await mutate(s => {
     const sal = s.salons[salonId];
     if (!sal.excluded.includes(targetId)) sal.excluded.push(targetId);
     sal.members = sal.members.filter(m => m !== targetId);
@@ -249,25 +264,23 @@ export function excludeMember(
   return { ok: true };
 }
 
-export function setTopic(salonId: string, topic: string | null): void {
-  mutate(s => {
-    if (s.salons[salonId]) s.salons[salonId].currentTopic = topic;
-  });
+export async function setTopic(salonId: string, topic: string | null): Promise<void> {
+  await mutate(s => { if (s.salons[salonId]) s.salons[salonId].currentTopic = topic; });
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
-export function getMessages(salonId: string, since?: number): SalonMessage[] {
-  const salon = getSalon(salonId);
+export async function getMessages(salonId: string, since?: number): Promise<SalonMessage[]> {
+  const salon = await getSalon(salonId);
   if (!salon) return [];
   if (!since) return salon.messages;
   return salon.messages.filter(m => m.timestamp > since);
 }
 
-export function checkRateLimit(
+export async function checkRateLimit(
   salonId: string, tokenId: number
-): { allowed: boolean; retryAfterMs?: number } {
-  const salon = getSalon(salonId);
+): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+  const salon = await getSalon(salonId);
   if (!salon) return { allowed: false };
   const oneHourAgo  = Date.now() - 3_600_000;
   const recentCount = salon.messages.filter(
@@ -277,25 +290,22 @@ export function checkRateLimit(
     const oldest = salon.messages
       .filter(m => m.tokenId === tokenId && m.timestamp > oneHourAgo && m.isLlm)
       .sort((a, b) => a.timestamp - b.timestamp)[0];
-    const retryAfterMs = oldest ? (oldest.timestamp + 3_600_000) - Date.now() : 3_600_000;
-    return { allowed: false, retryAfterMs: Math.max(0, retryAfterMs) };
+    return { allowed: false, retryAfterMs: Math.max(0, (oldest?.timestamp ?? Date.now()) + 3_600_000 - Date.now()) };
   }
   return { allowed: true };
 }
 
-export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
-  const registeredName = getName(msg.tokenId);
-  const resolvedName = registeredName ?? (
+export async function addMessage(msg: Omit<SalonMessage, "id">): Promise<SalonMessage> {
+  const registeredName = await getName(msg.tokenId);
+  const resolvedName   = registeredName ?? (
     msg.name && msg.name !== `Normie #${msg.tokenId}` ? msg.name : `Normie #${msg.tokenId}`
   );
   const id   = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const full: SalonMessage = { id, ...msg, name: resolvedName };
 
-  mutate(s => {
+  await mutate(s => {
     const sal = s.salons[msg.salonId];
     if (!sal) {
-      console.error(`[salonStore] addMessage: salon "${msg.salonId}" not found. Keys:`, Object.keys(s.salons));
-      // Auto-create agora if missing (safety net)
       if (msg.salonId === AGORA_SALON_ID) {
         s.salons[AGORA_SALON_ID] = makeAgora();
         s.salons[AGORA_SALON_ID].messages.push(full);
@@ -303,13 +313,10 @@ export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
       return;
     }
     sal.messages.push(full);
-    if (sal.messages.length > MAX_MESSAGES_PER_SALON) {
-      sal.messages = sal.messages.slice(-MAX_MESSAGES_PER_SALON);
-    }
+    if (sal.messages.length > MAX_MESSAGES_PER_SALON) sal.messages = sal.messages.slice(-MAX_MESSAGES_PER_SALON);
   });
 
-  const count = getStore().salons[msg.salonId]?.messages.length ?? 0;
-  console.log(`[salonStore] +msg from ${resolvedName} → ${count} total in ${msg.salonId}`);
-
+  const count = (await getStore()).salons[msg.salonId]?.messages.length ?? 0;
+  console.log(`[salonStore] +msg ${resolvedName} → ${count} total in ${msg.salonId}`);
   return full;
 }
