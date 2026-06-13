@@ -317,10 +317,12 @@ function SalonChat({
   onAvatarClick:    (tokenId: number, name: string, imageUrl: string) => void;
   nextSynthesisAt?: number | null;
 }) {
-  const [messages,    setMessages]    = useState<SalonMessage[]>(salon.messages);
-  const [filter,      setFilter]      = useState<MessageFilter>({ search: "", agentId: null });
-  const [stimulating, setStimulating] = useState(false);
-  const [stimResult,  setStimResult]  = useState<string | null>(null);
+  const [messages,      setMessages]      = useState<SalonMessage[]>(salon.messages);
+  const [filter,        setFilter]        = useState<MessageFilter>({ search: "", agentId: null });
+  const [stimulating,   setStimulating]   = useState(false);
+  const [stimResult,    setStimResult]    = useState<string | null>(null);
+  // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
+  const [initialLoaded, setInitialLoaded] = useState(salon.messages.length > 0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
   const lastTs    = useRef<number>(salon.messages[salon.messages.length - 1]?.timestamp ?? 0);
@@ -336,18 +338,23 @@ function SalonChat({
     });
   }, []);
 
-  // Poll every 6s
+  // Poll every 6s; first poll fires immediately so stale lambda data shows ASAP
   useEffect(() => {
+    let mounted = true;
     const poll = async () => {
       try {
         const res  = await fetch(`/api/salon/${salon.id}/messages?since=${lastTs.current}`);
         const data = await res.json() as { messages: SalonMessage[] };
         mergeMessages(data.messages ?? []);
-      } catch { /* ignore */ }
+      } catch { /* ignore */ } finally {
+        if (mounted) setInitialLoaded(true);
+      }
     };
+    poll(); // immediate first call
     pollRef.current = setInterval(poll, 6_000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [salon.id, mergeMessages]);
+    return () => { mounted = false; if (pollRef.current) clearInterval(pollRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salon.id]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -451,7 +458,12 @@ function SalonChat({
       <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
         {filteredMessages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
-            {activeFilter ? (
+            {!initialLoaded ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse" />
+                <p className="font-mono text-sm text-[--fg-muted]">Chargement des échanges…</p>
+              </>
+            ) : activeFilter ? (
               <>
                 <p className="font-mono text-sm text-[--fg-muted]">Aucun message correspondant.</p>
                 <button

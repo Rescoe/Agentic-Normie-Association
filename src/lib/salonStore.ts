@@ -72,9 +72,16 @@ console.log(`[salonStore] mode: ${USE_BLOB ? "Vercel Blob" : `local file (${DATA
 
 // ─── Global in-process cache ──────────────────────────────────────────────────
 
+// Cache the store for at most this many ms before forcing a blob reload.
+// Keeps different Lambda instances in sync without polling on every request.
+// Budget: ~1 Advanced Op per instance per 60s ≈ <300 ops/month for normal usage.
+const CACHE_TTL_MS = 60_000;
+
 declare global {
   // eslint-disable-next-line no-var
   var __anaSalonStore: SalonStore | undefined;
+  // eslint-disable-next-line no-var
+  var __anaSalonStoreLoadedAt: number | undefined;
 }
 
 // ─── Vercel Blob I/O ─────────────────────────────────────────────────────────
@@ -172,14 +179,23 @@ function ensureAgora(s: SalonStore): void {
 }
 
 async function getStore(): Promise<SalonStore> {
-  if (!global.__anaSalonStore) {
+  const now     = Date.now();
+  const isStale = USE_BLOB
+    && global.__anaSalonStore
+    && global.__anaSalonStoreLoadedAt !== undefined
+    && now - global.__anaSalonStoreLoadedAt > CACHE_TTL_MS;
+
+  if (!global.__anaSalonStore || isStale) {
+    // On stale reload, fall back to existing global if blob load fails (don't lose data)
+    const fallback = global.__anaSalonStore ?? { salons: {}, names: {} };
     const s = USE_BLOB
-      ? ((await blobLoad()) ?? { salons: {}, names: {} })
+      ? ((await blobLoad()) ?? fallback)
       : fileLoad();
     ensureAgora(s);
-    global.__anaSalonStore = s;
+    global.__anaSalonStore    = s;
+    global.__anaSalonStoreLoadedAt = now;
     console.log(
-      `[salonStore] init (${USE_BLOB ? "blob" : "file"}) — ` +
+      `[salonStore] ${isStale ? "refresh" : "init"} (${USE_BLOB ? "blob" : "file"}) — ` +
       `${s.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`
     );
   }
@@ -192,6 +208,9 @@ async function mutate(fn: (s: SalonStore) => void): Promise<void> {
   fn(store);
   if (USE_BLOB) {
     await blobSave(store);
+    // Reset TTL so the next getStore() call on THIS instance uses the fresh global
+    // (not needed for correctness but keeps loadedAt accurate after a write)
+    global.__anaSalonStoreLoadedAt = Date.now();
   } else {
     fileSave(store);
   }
