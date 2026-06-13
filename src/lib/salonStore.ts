@@ -155,26 +155,16 @@ async function getStore(): Promise<SalonStore> {
 }
 
 async function mutate(fn: (s: SalonStore) => void): Promise<void> {
-  // For Blob: always read fresh before writing (prevents overwriting concurrent writes)
-  // For file: use global (single process, no concurrency)
-  let store: SalonStore;
-  if (USE_BLOB) {
-    store = (await blobLoad()) ?? { salons: {}, names: {} };
-    ensureAgora(store);
-  } else {
-    store = global.__anaSalonStore ?? fileLoad();
-    ensureAgora(store);
-  }
-
-  fn(store);
-
+  // Use global cache if available (avoids a blob GET on every mutation).
+  // On cold start (global empty), load from blob first.
+  // Stimulations are manual/infrequent so race conditions between instances are negligible for MVP.
+  const store = await getStore();
+  fn(store); // modifies in-place — global updated immediately
   if (USE_BLOB) {
     await blobSave(store);
   } else {
     fileSave(store);
   }
-
-  global.__anaSalonStore = store;
 }
 
 // ─── Debug ────────────────────────────────────────────────────────────────────
