@@ -17,15 +17,16 @@ interface SalonMessage {
 }
 
 interface Salon {
-  id:          string;
-  name:        string;
-  description: string;
-  createdBy:   number;
-  createdAt:   number;
-  members:     number[];
-  excluded:    number[];
-  isOpen:      boolean;
-  messages:    SalonMessage[];
+  id:           string;
+  name:         string;
+  description:  string;
+  createdBy:    number;
+  createdAt:    number;
+  members:      number[];
+  excluded:     number[];
+  isOpen:       boolean;
+  messages:     SalonMessage[];
+  currentTopic: string | null;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -75,31 +76,36 @@ function SalonChat({
   onBack:        () => void;
   onSalonUpdate: (s: Salon) => void;
 }) {
-  const [messages, setMessages] = useState<SalonMessage[]>(salon.messages);
+  const [messages,    setMessages]    = useState<SalonMessage[]>(salon.messages);
   const [stimulating, setStimulating] = useState(false);
+  const [stimResult,  setStimResult]  = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
   const lastTs    = useRef<number>(messages[messages.length - 1]?.timestamp ?? 0);
 
-  // Poll for new messages every 8s
+  const mergeMessages = (incoming: SalonMessage[]) => {
+    if (!incoming?.length) return;
+    setMessages(prev => {
+      const ids   = new Set(prev.map(m => m.id));
+      const fresh = incoming.filter(m => !ids.has(m.id));
+      if (fresh.length === 0) return prev;
+      lastTs.current = Math.max(lastTs.current, ...fresh.map(m => m.timestamp));
+      return [...prev, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
+    });
+  };
+
+  // Poll for new messages every 6s
   useEffect(() => {
     const poll = async () => {
       try {
         const res  = await fetch(`/api/salon/${salon.id}/messages?since=${lastTs.current}`);
         const data = await res.json() as { messages: SalonMessage[] };
-        if (data.messages?.length > 0) {
-          setMessages(prev => {
-            const ids   = new Set(prev.map(m => m.id));
-            const fresh = data.messages.filter(m => !ids.has(m.id));
-            if (fresh.length === 0) return prev;
-            lastTs.current = Math.max(...fresh.map(m => m.timestamp));
-            return [...prev, ...fresh];
-          });
-        }
+        mergeMessages(data.messages ?? []);
       } catch { /* ignore */ }
     };
-    pollRef.current = setInterval(poll, 8_000);
+    pollRef.current = setInterval(poll, 6_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [salon.id]);
 
   // Scroll to bottom on new messages
@@ -108,15 +114,48 @@ function SalonChat({
   }, [messages]);
 
   const stimulate = async () => {
+    if (stimulating) return;
     setStimulating(true);
+    setStimResult(null);
     try {
-      await fetch("/api/keeper/salon-exchange", {
+      const res  = await fetch("/api/keeper/salon-exchange", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ salonId: salon.id }),
+        // force:true bypasses per-Normie rate limit for manual triggers
+        body:    JSON.stringify({ salonId: salon.id, force: true }),
       });
+      const data = await res.json() as {
+        generatedMessages?: SalonMessage[];
+        totalMessages?: number;
+        results?: Array<{ skipped: string[] }>;
+        error?: string;
+        message?: string;
+      };
+
+      if (!res.ok || data.error || data.message) {
+        setStimResult(data.error ?? data.message ?? "Erreur");
+        return;
+      }
+
+      // Add messages returned directly in the response (no need to wait for poll)
+      if (data.generatedMessages?.length) {
+        mergeMessages(data.generatedMessages);
+        const speakers = [...new Set(data.generatedMessages.map(m => m.name))];
+        setStimResult(`${speakers.join(" & ")} ${data.generatedMessages.length === 1 ? "a parlé" : "ont parlé"}`);
+      } else {
+        // Fallback: reload all messages from API
+        const msgRes  = await fetch(`/api/salon/${salon.id}/messages`);
+        const msgData = await msgRes.json() as { messages: SalonMessage[] };
+        mergeMessages(msgData.messages ?? []);
+        const skipped = data.results?.flatMap(r => r.skipped) ?? [];
+        setStimResult(skipped.length > 0 ? `Limité (${skipped.join(", ")})` : "Aucun message généré");
+      }
+    } catch (e) {
+      setStimResult(e instanceof Error ? e.message : "Erreur réseau");
     } finally {
       setStimulating(false);
+      // Auto-clear result after 5s
+      setTimeout(() => setStimResult(null), 5_000);
     }
   };
 
@@ -145,14 +184,21 @@ function SalonChat({
           </div>
         </div>
 
-        <button
-          onClick={stimulate}
-          disabled={stimulating || !salon.isOpen}
-          className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-3 py-1.5 disabled:opacity-40 transition-colors"
-          title="Déclencher un échange entre Normies"
-        >
-          {stimulating ? "…" : "⚡ Stimuler"}
-        </button>
+        <div className="flex items-center gap-2">
+          {stimResult && (
+            <span className="font-mono text-[11px] text-[--fg-muted] max-w-[180px] truncate">
+              {stimResult}
+            </span>
+          )}
+          <button
+            onClick={stimulate}
+            disabled={stimulating || !salon.isOpen}
+            className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-3 py-1.5 disabled:opacity-40 transition-colors"
+            title="Déclencher un échange entre Normies (sans limite de taux)"
+          >
+            {stimulating ? "…" : "⚡ Stimuler"}
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
