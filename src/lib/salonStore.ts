@@ -68,7 +68,11 @@ async function blobLoad(): Promise<SalonStore | null> {
     const { list } = await import("@vercel/blob");
     const { blobs } = await list({ prefix: BLOB_PATH });
     if (blobs.length === 0) return null;
-    const res = await fetch(blobs[0].url, { cache: "no-store" });
+    // Private blob: fetch with BLOB_READ_WRITE_TOKEN in Authorization header
+    const res = await fetch(blobs[0].downloadUrl, {
+      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
+      cache: "no-store",
+    });
     if (!res.ok) return null;
     const parsed = await res.json() as SalonStore;
     if (!parsed.names) parsed.names = {};
@@ -84,7 +88,7 @@ async function blobSave(store: SalonStore): Promise<void> {
   try {
     const { put } = await import("@vercel/blob");
     await put(BLOB_PATH, JSON.stringify(store), {
-      access:           "public",
+      access:           "private",
       addRandomSuffix:  false,
       contentType:      "application/json",
     });
