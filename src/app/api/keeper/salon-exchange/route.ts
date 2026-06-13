@@ -21,6 +21,7 @@ import {
   addMessage,
   checkRateLimit,
   setTopic,
+  registerName,
   AGORA_SALON_ID,
   type Salon,
   type SalonMessage,
@@ -286,6 +287,13 @@ export async function POST(req: NextRequest) {
 
   if (allPersonas.length === 0) {
     return NextResponse.json({ error: "Normies API unavailable — could not build any persona" }, { status: 503 });
+  }
+
+  // Register real names in the persistent store — used for future message display even if API is down
+  for (const p of allPersonas) {
+    if (p.name && p.name !== `Normie #${p.tokenId}`) {
+      registerName(p.tokenId, p.name);
+    }
   }
 
   // Determine which salons to process

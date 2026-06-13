@@ -1,19 +1,31 @@
 /**
- * In-process salon store — persisted to .salon-data.json (dev) or /tmp (Vercel).
+ * Salon store — persisted to disk, always read-fresh.
  *
- * Rate limit: MAX_MESSAGES_PER_HOUR per Normie per salon (auto-exchange).
- * Manual stimulate bypasses this via force flag in the keeper.
+ * Data file location:
+ *   - Vercel production: /tmp/ana-salon-data.json
+ *   - Local dev: ~/.ana-salon-data.json  (os.homedir — guaranteed writable on all OSes)
+ *
+ * No global cache — every read goes to disk. The file is small (< 500 messages)
+ * so this is fast enough and avoids all cross-route isolation issues.
+ *
+ * Name registry: tokenId → realName, persisted alongside salons.
+ * Populated when buildPersona succeeds; used as fallback in addMessage.
  */
 
-import fs from "fs";
+import fs   from "fs";
 import path from "path";
+import os   from "os";
 
 const DATA_FILE = process.env.VERCEL
-  ? "/tmp/salon-data.json"
-  : path.join(process.cwd(), ".salon-data.json");
+  ? "/tmp/ana-salon-data.json"
+  : path.join(os.homedir(), ".ana-salon-data.json");
 
-const MAX_MESSAGES_PER_HOUR = 4;
+console.log("[salonStore] DATA_FILE:", DATA_FILE);
+
+const MAX_MESSAGES_PER_HOUR  = 4;
 const MAX_MESSAGES_PER_SALON = 500;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface SalonMessage {
   id:        string;
@@ -41,19 +53,24 @@ export interface Salon {
 
 interface SalonStore {
   salons: Record<string, Salon>;
+  names:  Record<string, string>; // tokenId.toString() → realName
 }
 
-// ─── Persistence ─────────────────────────────────────────────────────────────
+// ─── Persistence (no cache — always fresh from disk) ─────────────────────────
 
 function load(): SalonStore {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as SalonStore;
+      const raw = fs.readFileSync(DATA_FILE, "utf-8");
+      const parsed = JSON.parse(raw) as SalonStore;
+      // Migrate older files that may not have a names field
+      if (!parsed.names) parsed.names = {};
+      return parsed;
     }
   } catch (e) {
     console.error("[salonStore] load error:", e);
   }
-  return { salons: {} };
+  return { salons: {}, names: {} };
 }
 
 function save(store: SalonStore): void {
@@ -82,44 +99,33 @@ function ensureAgora(store: SalonStore): void {
   };
 }
 
-/**
- * Always reads from file so every route gets a consistent view.
- * Keeps global cache as write-back target to avoid repeated file reads
- * within the same request, but ALWAYS syncs from file on first call per module.
- */
-declare global {
-  // eslint-disable-next-line no-var
-  var __salonStore: SalonStore | undefined;
-  // eslint-disable-next-line no-var
-  var __salonStoreTs: number | undefined;
-}
-
-const CACHE_TTL_MS = 1_000; // 1s cache — fresh enough for real-time use
-
 function getStore(): SalonStore {
-  const now = Date.now();
-  // Refresh from disk if cache is stale or missing
-  if (!global.__salonStore || !global.__salonStoreTs || (now - global.__salonStoreTs) > CACHE_TTL_MS) {
-    const store = load();
-    ensureAgora(store);
-    global.__salonStore  = store;
-    global.__salonStoreTs = now;
-  }
-  return global.__salonStore;
+  const store = load();
+  ensureAgora(store);
+  return store;
 }
 
 function mutate(fn: (s: SalonStore) => void): void {
-  // Read fresh from disk before mutating to avoid overwriting concurrent writes
-  const store = load();
-  ensureAgora(store);
+  const store = getStore();
   fn(store);
   save(store);
-  // Update cache
-  global.__salonStore   = store;
-  global.__salonStoreTs = Date.now();
 }
 
-// ─── Salon CRUD ──────────────────────────────────────────────────────────────
+// ─── Name registry ────────────────────────────────────────────────────────────
+
+/** Call this after a successful buildPersona to persist the Normie's real name. */
+export function registerName(tokenId: number, name: string): void {
+  if (!name || name === `Normie #${tokenId}`) return;
+  mutate(s => { s.names[String(tokenId)] = name; });
+}
+
+/** Returns the registered real name, or null if only a fallback is known. */
+export function getName(tokenId: number): string | null {
+  const n = getStore().names[String(tokenId)];
+  return n && n !== `Normie #${tokenId}` ? n : null;
+}
+
+// ─── Salon CRUD ───────────────────────────────────────────────────────────────
 
 export function listSalons(): Salon[] {
   return Object.values(getStore().salons).sort((a, b) => b.createdAt - a.createdAt);
@@ -127,6 +133,32 @@ export function listSalons(): Salon[] {
 
 export function getSalon(id: string): Salon | null {
   return getStore().salons[id] ?? null;
+}
+
+export function getActiveSalonByCreator(tokenId: number): Salon | null {
+  return Object.values(getStore().salons).find(s => s.createdBy === tokenId && s.isOpen) ?? null;
+}
+
+export function getMemberStats(tokenId: number): {
+  totalMessages: number;
+  salonsCount:   number;
+  lastActive:    number | null;
+} {
+  const allSalons   = Object.values(getStore().salons);
+  let totalMessages = 0;
+  let salonsCount   = 0;
+  let lastActive: number | null = null;
+
+  for (const salon of allSalons) {
+    const msgs = salon.messages.filter(m => m.tokenId === tokenId);
+    if (msgs.length > 0) {
+      totalMessages += msgs.length;
+      salonsCount++;
+      const last = Math.max(...msgs.map(m => m.timestamp));
+      if (!lastActive || last > lastActive) lastActive = last;
+    }
+  }
+  return { totalMessages, salonsCount, lastActive };
 }
 
 export function createSalon(params: {
@@ -163,8 +195,8 @@ export function closeSalon(id: string, byTokenId: number): { ok: boolean; error?
 }
 
 export function excludeMember(
-  salonId:   string,
-  targetId:  number,
+  salonId:  string,
+  targetId: number,
   byTokenId: number
 ): { ok: boolean; error?: string } {
   const salon = getSalon(salonId);
@@ -184,7 +216,7 @@ export function setTopic(salonId: string, topic: string | null): void {
   });
 }
 
-// ─── Messages ────────────────────────────────────────────────────────────────
+// ─── Messages ─────────────────────────────────────────────────────────────────
 
 export function getMessages(salonId: string, since?: number): SalonMessage[] {
   const salon = getSalon(salonId);
@@ -218,39 +250,20 @@ export function checkRateLimit(
   return { allowed: true };
 }
 
-export function getActiveSalonByCreator(tokenId: number): Salon | null {
-  return Object.values(getStore().salons).find(s => s.createdBy === tokenId && s.isOpen) ?? null;
-}
-
-export function getMemberStats(tokenId: number): {
-  totalMessages: number;
-  salonsCount:   number;
-  lastActive:    number | null;
-} {
-  const allSalons  = Object.values(getStore().salons);
-  let totalMessages = 0;
-  let salonsCount   = 0;
-  let lastActive: number | null = null;
-
-  for (const salon of allSalons) {
-    const msgs = salon.messages.filter(m => m.tokenId === tokenId);
-    if (msgs.length > 0) {
-      totalMessages += msgs.length;
-      salonsCount++;
-      const last = Math.max(...msgs.map(m => m.timestamp));
-      if (!lastActive || last > lastActive) lastActive = last;
-    }
-  }
-  return { totalMessages, salonsCount, lastActive };
-}
-
 export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
-  const id = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const full: SalonMessage = { id, ...msg };
+  // Resolve the best available name: registered name > provided name > fallback
+  const registeredName = getName(msg.tokenId);
+  const resolvedName = registeredName ?? (
+    msg.name && msg.name !== `Normie #${msg.tokenId}` ? msg.name : `Normie #${msg.tokenId}`
+  );
+
+  const id   = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const full: SalonMessage = { id, ...msg, name: resolvedName };
+
   mutate(s => {
     const sal = s.salons[msg.salonId];
     if (!sal) {
-      console.error(`[salonStore] addMessage: salon "${msg.salonId}" not found in store`);
+      console.error(`[salonStore] addMessage: salon "${msg.salonId}" not found — store keys:`, Object.keys(s.salons));
       return;
     }
     sal.messages.push(full);
@@ -258,5 +271,6 @@ export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
       sal.messages = sal.messages.slice(-MAX_MESSAGES_PER_SALON);
     }
   });
+
   return full;
 }

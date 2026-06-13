@@ -224,9 +224,12 @@ function MessageBubble({
   msg: SalonMessage;
   onAvatarClick: (tokenId: number, name: string, imageUrl: string) => void;
 }) {
+  // If name is just the fallback "Normie #X", show only the tokenId to avoid "Normie #42 #42"
+  const isFallback  = !msg.name || msg.name === `Normie #${msg.tokenId}`;
+  const displayName = isFallback ? null : msg.name;
+
   return (
     <div className="flex gap-3 group py-1">
-      {/* Clickable avatar */}
       <div className="shrink-0 mt-0.5">
         <NormieAvatar
           imageUrl={msg.imageUrl}
@@ -236,16 +239,17 @@ function MessageBubble({
         />
       </div>
       <div className="flex-1 min-w-0">
-        {/* Name + tokenId + timestamp */}
         <div className="flex items-baseline gap-1.5 flex-wrap mb-0.5">
-          <span className="font-mono text-xs font-bold text-[--fg]">{msg.name}</span>
+          {displayName
+            ? <span className="font-mono text-xs font-bold text-[--fg]">{displayName}</span>
+            : <span className="font-mono text-xs font-bold text-[--fg-muted]">Normie</span>
+          }
           <span className="font-mono text-[10px] text-[--fg-muted]">#{msg.tokenId}</span>
           <span className="font-mono text-[10px] text-[--fg-muted]">· {timeAgo(msg.timestamp)}</span>
           {msg.isLlm && (
             <span className="font-mono text-[9px] text-purple-400 border border-purple-300 px-1 opacity-60">agent</span>
           )}
         </div>
-        {/* Content */}
         <p className="font-mono text-sm text-[--fg] leading-relaxed whitespace-pre-wrap break-words">
           {msg.content}
         </p>
