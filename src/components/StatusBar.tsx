@@ -1,91 +1,178 @@
-/**
- * StatusBar — bande de stats live en haut du site.
- * Server Component : lit les données on-chain directement.
- * Fallback gracieux si les contrats ne sont pas déployés.
- */
+"use client";
 
-import { readChainStats } from "@/lib/chainReader";
+import { useState, useEffect } from "react";
 
-export async function StatusBar() {
-  const stats = await readChainStats();
+interface StatusData {
+  deployed:      boolean;
+  memberCount:   number;
+  workCount:     number;
+  activeWorks:   number;
+  sessionActive: boolean;
+  sessionPhase:  string;
+  chain:         string;
+}
 
-  const sessionLabel = !stats.deployed
-    ? "Pré-lancement"
-    : stats.sessionState?.active
-    ? "Session ouverte"
-    : stats.sessionState?.resolved
-    ? "Session clôturée"
-    : "En attente";
+function useClock() {
+  const [time, setTime] = useState("——:——:——");
+  useEffect(() => {
+    const fmt = () =>
+      new Date().toLocaleTimeString("fr-FR", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+      });
+    setTime(fmt());
+    const id = setInterval(() => setTime(fmt()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return time;
+}
 
-  const sessionStatus = !stats.deployed
-    ? "pending"
-    : stats.sessionState?.active
-    ? "active"
-    : "pending";
+const mono: React.CSSProperties = {
+  fontFamily: "var(--font-mono, monospace)",
+  fontSize:   10,
+  whiteSpace: "nowrap",
+};
 
-  const STATUS_COLORS = {
-    active:  "bg-green-500",
-    pending: "bg-yellow-500",
-    closed:  "bg-gray-400",
-  } as const;
+function Label({ t }: { t: string }) {
+  return (
+    <span style={{ ...mono, color: "var(--fg-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+      {t}
+    </span>
+  );
+}
 
-  const items = [
-    {
-      label: "Membres inscrits",
-      value: stats.deployed ? String(stats.memberCount) : "—",
-      dot: false,
-    },
-    {
-      label: "Session",
-      value: sessionLabel,
-      dot: true,
-      dotColor: STATUS_COLORS[sessionStatus],
-    },
-    {
-      label: "Œuvres publiées",
-      value: stats.deployed ? String(stats.workCount) : "—",
-      dot: false,
-    },
-    {
-      label: "Réseau",
-      value: process.env.NEXT_PUBLIC_CHAIN === "base" ? "Base" : "Base Sepolia",
-      dot: false,
-    },
-    {
-      label: "Phase",
-      value: stats.sessionState?.resolved
-        ? "Rôles attribués"
-        : stats.sessionState?.active
-        ? "Assemblée constituante"
-        : "Inscription",
-      dot: false,
-    },
-  ];
+function Val({ t, green = false }: { t: string; green?: boolean }) {
+  return (
+    <span style={{ ...mono, fontWeight: 700, color: green ? "#16a34a" : "var(--fg)", marginLeft: 5 }}>
+      {t}
+    </span>
+  );
+}
+
+function Sep() {
+  return (
+    <span style={{ ...mono, color: "var(--fg-muted)", opacity: 0.4, margin: "0 14px" }}>·</span>
+  );
+}
+
+export function StatusBar() {
+  const [data, setData] = useState<StatusData | null>(null);
+  const clock           = useClock();
+
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/status").then(r => r.json()).then(setData).catch(() => {});
+    load();
+    const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const memberCount = data?.memberCount ?? 0;
+  const workCount   = data?.workCount   ?? 0;
+  const activeWorks = data?.activeWorks ?? 0;
+  const phase       = data?.sessionPhase ?? "inscription";
+  const chain       = data?.chain        ?? "Base";
+  const isActive    = data?.sessionActive ?? false;
+
+  // ── Strip content (one logical strip — duplicated in DOM for seamless loop) ──
+  //
+  // Each strip has min-width: 100vw so 2 copies always fill 200vw+ → no visible seam.
+  // Animation: translateX(0) → translateX(-50%) scrolls exactly one strip width.
+
+  const stripStyle: React.CSSProperties = {
+    display:    "inline-flex",
+    alignItems: "center",
+    minWidth:   "100vw",       // Guarantees: 2 copies > viewport width, seam never shows
+    paddingLeft: 32,
+    flexShrink: 0,
+  };
+
+  const strip = (
+    <span style={stripStyle}>
+      {/* Live clock */}
+      <span style={{ ...mono, color: "var(--fg-muted)", letterSpacing: "0.08em", minWidth: "7ch" }}>
+        {clock}
+      </span>
+
+      <Sep />
+
+      {/* Member count */}
+      <Label t="Normies" />
+      <Val t={data ? String(memberCount) : "—"} />
+
+      <Sep />
+
+      {/* Session state with live dot */}
+      <span style={{
+        display:      "inline-block",
+        width:        5, height: 5,
+        borderRadius: "50%",
+        background:   isActive ? "#16a34a" : "#ca8a04",
+        marginRight:  6,
+        flexShrink:   0,
+        animation:    isActive ? "sb-pulse 2s ease-in-out infinite" : "none",
+      }} />
+      <Label t="Session" />
+      <Val t={phase} green={isActive} />
+
+      <Sep />
+
+      {/* Work counts */}
+      <Label t="Œuvres" />
+      <Val t={data ? String(workCount) : "—"} />
+
+      {activeWorks > 0 && (
+        <>
+          <Sep />
+          <Label t="En cours" />
+          <Val t={String(activeWorks)} green />
+        </>
+      )}
+
+      <Sep />
+
+      {/* Network */}
+      <Label t="Réseau" />
+      <Val t={chain} />
+
+      {/* Trailing gap before next copy */}
+      <span style={{ display: "inline-block", width: 32 }} />
+    </span>
+  );
 
   return (
-    <div className="border-b border-[--border] bg-[--bg-card]">
-      <div className="max-w-6xl mx-auto px-6">
-        <div className="flex items-center gap-0 overflow-x-auto">
-          {items.map((item, i) => (
-            <div
-              key={item.label}
-              className={`flex items-center gap-3 py-3 px-5 shrink-0 ${
-                i < items.length - 1 ? "border-r border-[--border]" : ""
-              }`}
-            >
-              {item.dot && (
-                <span className={`live-dot w-1.5 h-1.5 rounded-full ${item.dotColor}`} />
-              )}
-              <span className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest whitespace-nowrap">
-                {item.label}
-              </span>
-              <span className="font-mono text-xs font-bold text-[--fg] whitespace-nowrap">
-                {item.value}
-              </span>
-            </div>
-          ))}
+    <>
+      <style>{`
+        @keyframes sb-scroll {
+          from { transform: translateX(0); }
+          to   { transform: translateX(-50%); }
+        }
+        @keyframes sb-pulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.3; }
+        }
+      `}</style>
+
+      <div style={{
+        height:       32,
+        overflow:     "hidden",
+        background:   "var(--bg-card)",
+        borderBottom: "1px solid var(--border)",
+        position:     "relative",
+      }}>
+        {/* Absolute-positioned track so the animation starts flush at the left edge */}
+        <div style={{
+          position:   "absolute",
+          top:        0, left: 0,
+          height:     "100%",
+          display:    "flex",
+          alignItems: "center",
+          animation:  "sb-scroll 30s linear infinite",
+          willChange: "transform",
+        }}>
+          {strip}
+          {strip}
         </div>
       </div>
-    </div>
+    </>
   );
 }

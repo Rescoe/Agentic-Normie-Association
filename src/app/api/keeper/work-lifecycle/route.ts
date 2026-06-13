@@ -21,7 +21,7 @@ import {
 } from "@/lib/workStore";
 import { addMessage, getSalon, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
-import { publishWork } from "@/server/relayer/workPublisher";
+import { publishWork, mintEdition } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -401,6 +401,23 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
     });
     await advanceState(work.id, "PUBLISHED", `tx: ${result.txHash?.slice(0, 12)}`);
     console.log(`[work-lifecycle] published "${work.title}" — tx: ${result.txHash}`);
+
+    // Attempt to create a NormieCollection + mint edition #0 for the AUTHOR.
+    // Non-blocking: if relayer != AUTHOR's registered wallet, logs a skip message.
+    const authorName = work.authorName ?? `Normie #${work.authorTokenId}`;
+    const mintResult = await mintEdition(work.authorTokenId!, authorName, html, work.title);
+    if (mintResult.success && mintResult.collectionAddress) {
+      await updateWork(work.id, {
+        collectionAddress: mintResult.collectionAddress,
+        editionTokenId:    mintResult.editionTokenId,
+      });
+      console.log(`[work-lifecycle] edition minted — collection: ${mintResult.collectionAddress} token#${mintResult.editionTokenId}`);
+    } else if (mintResult.skipped) {
+      console.info(`[work-lifecycle] mint skipped — ${mintResult.skipped}`);
+    } else {
+      console.warn(`[work-lifecycle] mint failed — ${mintResult.error}`);
+    }
+
     return true;
   }
 

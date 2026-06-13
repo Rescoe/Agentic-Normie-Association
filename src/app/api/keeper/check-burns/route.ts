@@ -40,7 +40,7 @@ const baseClient = createPublicClient({
 });
 
 async function getNormiesSupply(): Promise<number | null> {
-  const addr = process.env.NORMIES_NFT_MAINNET_ADDRESS as `0x${string}` | undefined;
+  const addr = (process.env.NORMIES_CONTRACT_ADDRESS ?? process.env.NORMIES_NFT_MAINNET_ADDRESS) as `0x${string}` | undefined;
   if (!addr) {
     console.warn("[check-burns] NORMIES_NFT_MAINNET_ADDRESS not set — skipping supply check");
     return null;

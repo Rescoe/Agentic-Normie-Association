@@ -49,4 +49,16 @@
     0%   { transform: translateY(-100%); }
     100% { transform: translateY(100vh); }
   }
+
+  /* ── Google Translate: hide injected toolbar & reset body offset ── */
+  .goog-te-banner-frame,
+  .skiptranslate > iframe,
+  #goog-gt-tt,
+  .goog-te-balloon-frame {
+    display: none !important;
+  }
+  body {
+    top: 0 !important;
+  }
+
 }

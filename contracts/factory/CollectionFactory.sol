@@ -80,8 +80,12 @@ contract CollectionFactory is Ownable {
     ) external returns (address collection) {
         if (!core.isMember(normieTokenId)) revert NotAMember(normieTokenId);
 
-        address holder = core.getMemberOwner(normieTokenId);
-        if (msg.sender != holder) revert CallerNotHolder(normieTokenId, msg.sender, holder);
+        // The association's relayer is authorized to deploy collections on behalf of any
+        // elected member, enabling the autonomous pipeline to publish + mint in one tx sequence.
+        address holder  = core.getMemberOwner(normieTokenId);
+        address relayer = IAssociationCore(address(core)).relayerAddress();
+        if (msg.sender != holder && msg.sender != relayer)
+            revert CallerNotHolder(normieTokenId, msg.sender, holder);
 
         NormieCollection col = new NormieCollection(name, symbol, normieTokenId, msg.sender);
         collection = address(col);

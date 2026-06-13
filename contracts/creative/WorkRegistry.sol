@@ -92,9 +92,14 @@ contract WorkRegistry is IWorkRegistry, Ownable {
     // Modifiers
     // ─────────────────────────────────────────────────────────────────────────
 
-    modifier onlyRapporteur() {
+    // The association's relayer wallet is also authorized to publish on behalf of the
+    // elected Rapporteur. This allows the automated backend to call publish() without
+    // requiring the Rapporteur's private key — the Rapporteur's identity is still
+    // recorded in the Work struct for full on-chain traceability.
+    modifier onlyRapporteurOrRelayer() {
         IAssociationCore.RoleAssignment memory ra = core.getRoleHolder(Roles.RAPPORTEUR);
-        if (ra.holderAddress != msg.sender) revert NotRapporteur(msg.sender);
+        if (ra.holderAddress != msg.sender && core.relayerAddress() != msg.sender)
+            revert NotRapporteur(msg.sender);
         _;
     }
 
@@ -123,7 +128,7 @@ contract WorkRegistry is IWorkRegistry, Ownable {
         uint256 authorTokenId,
         uint256 curatorTokenId,
         uint256 rapporteurTokenId
-    ) external onlyRapporteur {
+    ) external onlyRapporteurOrRelayer {
         if (bytes(content).length == 0)         revert EmptyContent();
         if (!core.isMember(authorTokenId))      revert ParticipantNotMember(authorTokenId);
         if (!core.isMember(curatorTokenId))     revert ParticipantNotMember(curatorTokenId);

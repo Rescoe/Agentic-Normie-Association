@@ -11,6 +11,8 @@ export {
   WorkRegistryAbi        as WORK_REGISTRY_ABI,
   FactoryRegistryAbi     as FACTORY_REGISTRY_ABI,
   GovernanceCalendarAbi  as GOVERNANCE_CALENDAR_ABI,
+  CollectionFactoryAbi   as COLLECTION_FACTORY_ABI,
+  NormieCollectionAbi    as NORMIE_COLLECTION_ABI,
 } from "./abis";
 
 // ─── Addresses (from environment) ────────────────────────────────────────────

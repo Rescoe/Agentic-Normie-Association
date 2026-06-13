@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
@@ -77,6 +78,26 @@ export default function RootLayout({
       <body className="font-sans bg-[--bg] text-[--fg]">
         <Providers>{children}</Providers>
         <Analytics />
+
+        {/* Hidden mount point for the Google Translate widget */}
+        <div id="google_translate_element" style={{ display: "none" }} />
+
+        {/* Initialise the widget before loading the GT script */}
+        <Script id="gt-init" strategy="afterInteractive">{`
+          window.googleTranslateElementInit = function() {
+            new window.google.translate.TranslateElement({
+              pageLanguage: 'fr',
+              includedLanguages: 'en',
+              autoDisplay: false
+            }, 'google_translate_element');
+          };
+        `}</Script>
+
+        {/* Load Google Translate element script */}
+        <Script
+          src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   );

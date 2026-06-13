@@ -83,9 +83,11 @@ export interface ANAWork {
   revisionCount?:  number;
 
   // On-chain
-  txHash?:        string;
-  onChainWorkId?: number;
-  publishedAt?:   number;
+  txHash?:           string;
+  onChainWorkId?:    number;
+  publishedAt?:      number;
+  collectionAddress?: string;  // NormieCollection deployed for this work (set after mint)
+  editionTokenId?:    number;  // token #0 minted in that collection
 
   // Meta
   salonId?:        string;

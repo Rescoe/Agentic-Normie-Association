@@ -13,6 +13,7 @@
     "typechain": "hardhat typechain",
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
     "deploy:base": "hardhat run scripts/deploy.ts --network base",
+    "redeploy:patch": "hardhat run scripts/redeploy-patched.ts --network base",
     "clean": "hardhat clean && rm -rf .next"
   },
   "dependencies": {
