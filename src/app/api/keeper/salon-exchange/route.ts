@@ -2,6 +2,8 @@
  * POST /api/keeper/salon-exchange
  * Triggers one conversation round. Body: { salonId?: string, force?: boolean }
  * Returns generatedMessages[] for immediate client display.
+ *
+ * Monthly synthesis runs automatically when due (every 30 days).
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
@@ -10,7 +12,9 @@ import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
   listSalons, getSalon, addMessage, checkRateLimit, setTopic, registerName,
-  AGORA_SALON_ID, type Salon, type SalonMessage,
+  isSynthesisDue, storeSynthesis, markSynthesisDone, getSynthesisInfo,
+  AGORA_SALON_ID, SYNTHESIS_MIN_MSGS, SYNTHESIS_KEEP_LAST,
+  type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 
@@ -68,6 +72,16 @@ function pickTopic(salon: Salon): { topic: string; isNew: boolean } {
   return { topic: salon.currentTopic, isNew: false };
 }
 
+function buildSummaryContext(summaries: SalonSummary[]): string {
+  if (!summaries || summaries.length === 0) return "";
+  const recent = summaries.slice(-3);
+  return "Synthèses des échanges passés :\n" + recent.map(s => {
+    const from = new Date(s.period.from).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+    const to   = new Date(s.period.to).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+    return `[${from} – ${to}] ${s.content}`;
+  }).join("\n---\n") + "\n\n";
+}
+
 async function generateSpeech(
   persona:      NormiePersona,
   otherMembers: NormiePersona[],
@@ -79,8 +93,9 @@ async function generateSpeech(
 ): Promise<string | null> {
   try {
     const sysPrompt    = buildSystemPrompt(persona, otherMembers);
+    const summaryBlock = buildSummaryContext(salon.summaries);
     const contextBlock = recentMsgs.length > 0
-      ? "Échanges récents :\n" + recentMsgs.map(m => `${m.name} : ${m.content}`).join("\n")
+      ? summaryBlock + "Échanges récents :\n" + recentMsgs.map(m => `${m.name} : ${m.content}`).join("\n")
       : "Le salon vient de s'ouvrir.";
     const instruction = role === "initiator"
       ? (lastMsg
@@ -112,6 +127,74 @@ async function generateSpeech(
     return null;
   }
 }
+
+// ─── Monthly synthesis ────────────────────────────────────────────────────────
+
+async function generateSummaryText(salon: Salon): Promise<string | null> {
+  const msgsToSummarize = salon.messages.slice(0, -SYNTHESIS_KEEP_LAST);
+  if (msgsToSummarize.length === 0) return null;
+
+  const from = new Date(msgsToSummarize[0].timestamp).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+  const to   = new Date(msgsToSummarize.at(-1)!.timestamp).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+  const transcript = msgsToSummarize.map(m => `${m.name} : ${m.content}`).join("\n");
+
+  try {
+    const res = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: "system",
+            content: "Tu es l'archiviste de l'ANA (Agentic Normie Association). Tu condenses les échanges entre agents Normies en synthèses factuelles et vivantes pour la mémoire collective de l'association.",
+          },
+          {
+            role: "user",
+            content: `Condense ces échanges de l'Agora ANA du ${from} au ${to} en un paragraphe de 120-160 mots.\nCapture : les sujets débattus, les positions de chaque Normie, les tensions ou consensus notables.\nStyle : journalistique neutre, 3e personne, présent de narration.\n\n${transcript.slice(0, 6000)}`,
+          },
+        ],
+        max_tokens: 300, temperature: 0.5,
+      }),
+    });
+    if (!res.ok) { console.error(`[synthesis] Groq ${res.status}`); return null; }
+    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+    return data.choices[0]?.message?.content?.trim() ?? null;
+  } catch (e) {
+    console.error("[synthesis] error:", e);
+    return null;
+  }
+}
+
+async function runMonthlySynthesis(): Promise<{ ran: boolean; salons: string[] }> {
+  const due = await isSynthesisDue();
+  if (!due) return { ran: false, salons: [] };
+
+  console.log("[synthesis] monthly synthesis due — running");
+  const salons       = await listSalons();
+  const synthesized: string[] = [];
+
+  for (const salon of salons) {
+    if (salon.messages.length < SYNTHESIS_MIN_MSGS) continue;
+
+    const msgsToSummarize = salon.messages.slice(0, -SYNTHESIS_KEEP_LAST);
+    if (msgsToSummarize.length === 0) continue;
+
+    const content = await generateSummaryText(salon);
+    if (!content) continue;
+
+    const periodFrom = msgsToSummarize[0].timestamp;
+    const periodTo   = msgsToSummarize.at(-1)!.timestamp;
+    await storeSynthesis(salon.id, content, periodFrom, periodTo, msgsToSummarize.length);
+    synthesized.push(salon.id);
+    console.log(`[synthesis] ${salon.id} — summarized ${msgsToSummarize.length} msgs`);
+  }
+
+  await markSynthesisDone();
+  return { ran: true, salons: synthesized };
+}
+
+// ─── Exchange ─────────────────────────────────────────────────────────────────
 
 async function runExchange(
   salon:       Salon,
@@ -162,7 +245,9 @@ async function runExchange(
 
     // ── Responder ──
     const responder = pickResponder(eligible, initiator.tokenId);
-    if (responder) {
+    if (!responder) {
+      console.log(`[salon-exchange] no responder available for ${salon.id} (only 1 eligible member)`);
+    } else {
       const otherForResp = allPersonas.filter(p => p.tokenId !== responder.tokenId);
       const freshRecent  = [...recentMsgs, initMsg];
       const respContent  = await generateSpeech(responder, otherForResp, freshSalon, freshRecent, "responder", topic, initMsg);
@@ -192,6 +277,9 @@ export async function POST(req: NextRequest) {
 
   const force = body.force ?? false;
 
+  // ── Monthly synthesis check (runs before exchange, at most once per 30 days) ──
+  const synthesisResult = await runMonthlySynthesis();
+
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) {
     return NextResponse.json({ message: "No ANA members found" });
@@ -206,12 +294,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Normies API unavailable" }, { status: 503 });
   }
 
-  // Register real names
-  await Promise.all(
-    allPersonas
-      .filter(p => p.name && p.name !== `Normie #${p.tokenId}`)
-      .map(p => registerName(p.tokenId, p.name))
-  );
+  // Register real names (sequential to avoid concurrent blob writes)
+  for (const p of allPersonas) {
+    if (p.name && p.name !== `Normie #${p.tokenId}`) {
+      await registerName(p.tokenId, p.name);
+    }
+  }
 
   const salonsToProcess: Salon[] = body.salonId
     ? [(await getSalon(body.salonId))].filter((s): s is Salon => s !== null && s.isOpen)
@@ -235,11 +323,16 @@ export async function POST(req: NextRequest) {
     allGenerated.push(...result.messages);
   }
 
+  const synthInfo = await getSynthesisInfo();
+
   return NextResponse.json({
-    memberCount: memberIds.length,
-    salonsRun:   results.length,
-    totalMessages: allGenerated.length,
+    memberCount:        memberIds.length,
+    salonsRun:          results.length,
+    totalMessages:      allGenerated.length,
     results,
-    generatedMessages: allGenerated,
+    generatedMessages:  allGenerated,
+    synthesis:          synthesisResult.ran ? synthesisResult : null,
+    nextSynthesisAt:    synthInfo.nextSynthesisAt,
+    nextSynthesisDate:  new Date(synthInfo.nextSynthesisAt).toISOString(),
   });
 }

@@ -13,6 +13,14 @@ import path from "path";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export interface SalonSummary {
+  id:           string;
+  createdAt:    number;
+  period:       { from: number; to: number };
+  content:      string;
+  messageCount: number;
+}
+
 export interface SalonMessage {
   id:        string;
   salonId:   string;
@@ -34,21 +42,29 @@ export interface Salon {
   excluded:     number[];
   isOpen:       boolean;
   messages:     SalonMessage[];
+  summaries:    SalonSummary[];
   currentTopic: string | null;
 }
 
 interface SalonStore {
-  salons: Record<string, Salon>;
-  names:  Record<string, string>; // tokenId.toString() → realName
+  salons:           Record<string, Salon>;
+  names:            Record<string, string>; // tokenId.toString() → realName
+  lastSynthesisAt?: number;                 // timestamp of last synthesis run
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const AGORA_SALON_ID  = "salon_agora_ana";
-const BLOB_PATH               = "salon/store.json";
-const DATA_FILE               = path.join(process.cwd(), "data", "salon.json");
-const MAX_MESSAGES_PER_HOUR  = 4;
-const MAX_MESSAGES_PER_SALON = 500;
+export const AGORA_SALON_ID       = "salon_agora_ana";
+const BLOB_PATH                   = "salon/store.json";
+const DATA_FILE                   = path.join(process.cwd(), "data", "salon.json");
+const MAX_MESSAGES_PER_HOUR       = 4;
+const MAX_MESSAGES_PER_SALON      = 500;
+// Keep last N messages after synthesis (recent context for Normies)
+export const SYNTHESIS_KEEP_LAST  = 10;
+// Minimum messages in a salon before synthesis is worthwhile
+export const SYNTHESIS_MIN_MSGS   = 40;
+// 30 days between syntheses
+export const SYNTHESIS_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const USE_BLOB = !!process.env.BLOB_READ_WRITE_TOKEN;
 
@@ -67,15 +83,28 @@ async function blobLoad(): Promise<SalonStore | null> {
   try {
     const { list } = await import("@vercel/blob");
     const { blobs } = await list({ prefix: BLOB_PATH });
-    if (blobs.length === 0) return null;
-    // Private blob: fetch with BLOB_READ_WRITE_TOKEN in Authorization header
-    const res = await fetch(blobs[0].downloadUrl, {
+    if (blobs.length === 0) {
+      console.log("[salonStore] blob list empty — starting fresh");
+      return null;
+    }
+    // Use blob.url (canonical URL) with Bearer auth.
+    // blob.downloadUrl can be undefined for private blobs — never use it.
+    const blobUrl = blobs[0].url;
+    const res = await fetch(blobUrl, {
       headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
       cache: "no-store",
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`[salonStore] blob fetch ${res.status} from ${blobUrl.slice(0, 60)}`);
+      return null;
+    }
     const parsed = await res.json() as SalonStore;
-    if (!parsed.names) parsed.names = {};
+    if (!parsed.names)  parsed.names  = {};
+    if (!parsed.salons) parsed.salons = {};
+    // Migrate: add summaries array to salons that predate this field
+    for (const salon of Object.values(parsed.salons)) {
+      if (!salon.summaries) salon.summaries = [];
+    }
     console.log(`[salonStore] blob loaded — ${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
     return parsed;
   } catch (e) {
@@ -105,7 +134,11 @@ function fileLoad(): SalonStore {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as SalonStore;
-      if (!parsed.names) parsed.names = {};
+      if (!parsed.names)  parsed.names  = {};
+      if (!parsed.salons) parsed.salons = {};
+      for (const salon of Object.values(parsed.salons)) {
+        if (!salon.summaries) salon.summaries = [];
+      }
       console.log(`[salonStore] file loaded — ${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
       return parsed;
     }
@@ -130,7 +163,7 @@ function makeAgora(): Salon {
     id: AGORA_SALON_ID, name: "Agora ANA",
     description: "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
     createdBy: 0, createdAt: Date.now(),
-    members: [], excluded: [], isOpen: true, messages: [], currentTopic: null,
+    members: [], excluded: [], isOpen: true, messages: [], summaries: [], currentTopic: null,
   };
 }
 
@@ -155,11 +188,8 @@ async function getStore(): Promise<SalonStore> {
 }
 
 async function mutate(fn: (s: SalonStore) => void): Promise<void> {
-  // Use global cache if available (avoids a blob GET on every mutation).
-  // On cold start (global empty), load from blob first.
-  // Stimulations are manual/infrequent so race conditions between instances are negligible for MVP.
   const store = await getStore();
-  fn(store); // modifies in-place — global updated immediately
+  fn(store);
   if (USE_BLOB) {
     await blobSave(store);
   } else {
@@ -173,13 +203,83 @@ export async function getDebugInfo() {
   const store = await getStore();
   const agora = store.salons[AGORA_SALON_ID];
   return {
-    mode:          USE_BLOB ? "vercel-blob" : "local-file",
-    globalLoaded:  !!global.__anaSalonStore,
-    salonCount:    Object.keys(store.salons).length,
-    nameCount:     Object.keys(store.names).length,
-    agoraMsgCount: agora?.messages.length ?? 0,
-    lastAgoraMsg:  agora?.messages.at(-1) ?? null,
+    mode:              USE_BLOB ? "vercel-blob" : "local-file",
+    globalLoaded:      !!global.__anaSalonStore,
+    salonCount:        Object.keys(store.salons).length,
+    nameCount:         Object.keys(store.names).length,
+    agoraMsgCount:     agora?.messages.length ?? 0,
+    agoraSummaryCount: agora?.summaries.length ?? 0,
+    lastSynthesisAt:   store.lastSynthesisAt ?? null,
+    nextSynthesisAt:   getNextSynthesisAt(store.lastSynthesisAt),
+    lastAgoraMsg:      agora?.messages.at(-1) ?? null,
   };
+}
+
+// ─── Synthesis ────────────────────────────────────────────────────────────────
+
+export function getNextSynthesisAt(lastSynthesisAt?: number | null): number {
+  if (!lastSynthesisAt) {
+    // Never synthesized: schedule from now + 30 days
+    return Date.now() + SYNTHESIS_INTERVAL_MS;
+  }
+  return lastSynthesisAt + SYNTHESIS_INTERVAL_MS;
+}
+
+export async function isSynthesisDue(): Promise<boolean> {
+  const store = await getStore();
+  return Date.now() >= getNextSynthesisAt(store.lastSynthesisAt);
+}
+
+export async function getSynthesisInfo(): Promise<{
+  lastSynthesisAt: number | null;
+  nextSynthesisAt: number;
+  isDue: boolean;
+}> {
+  const store = await getStore();
+  const next = getNextSynthesisAt(store.lastSynthesisAt);
+  return {
+    lastSynthesisAt: store.lastSynthesisAt ?? null,
+    nextSynthesisAt: next,
+    isDue: Date.now() >= next,
+  };
+}
+
+export async function storeSynthesis(
+  salonId: string,
+  content: string,
+  periodFrom: number,
+  periodTo: number,
+  messageCount: number,
+): Promise<void> {
+  const summary: SalonSummary = {
+    id:           `summary_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+    createdAt:    Date.now(),
+    period:       { from: periodFrom, to: periodTo },
+    content,
+    messageCount,
+  };
+  await mutate(s => {
+    const salon = s.salons[salonId];
+    if (!salon) return;
+    if (!salon.summaries) salon.summaries = [];
+
+    // Trim messages: keep only the most recent ones (Normies still have recent context)
+    const toSummarize = salon.messages.filter(m => m.timestamp <= periodTo);
+    salon.messages    = salon.messages.filter(m => m.timestamp >  periodTo);
+
+    // Safety: keep last SYNTHESIS_KEEP_LAST even if all are within period
+    if (salon.messages.length === 0 && toSummarize.length > 0) {
+      salon.messages = toSummarize.slice(-SYNTHESIS_KEEP_LAST);
+    }
+
+    salon.summaries.push(summary);
+    // Keep at most 12 summaries (≈ 1 year of monthly archives)
+    if (salon.summaries.length > 12) salon.summaries = salon.summaries.slice(-12);
+  });
+}
+
+export async function markSynthesisDone(): Promise<void> {
+  await mutate(s => { s.lastSynthesisAt = Date.now(); });
 }
 
 // ─── Name registry ────────────────────────────────────────────────────────────
@@ -231,7 +331,8 @@ export async function createSalon(params: {
   const salon: Salon = {
     id, name: params.name.slice(0, 60), description: params.description.slice(0, 200),
     createdBy: params.createdBy, createdAt: Date.now(),
-    members: params.members ?? [], excluded: [], isOpen: true, messages: [], currentTopic: null,
+    members: params.members ?? [], excluded: [], isOpen: true,
+    messages: [], summaries: [], currentTopic: null,
   };
   await mutate(s => { s.salons[id] = salon; });
   return salon;

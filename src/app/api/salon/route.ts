@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { listSalons, createSalon, getActiveSalonByCreator } from "@/lib/salonStore";
+import { listSalons, createSalon, getActiveSalonByCreator, getSynthesisInfo } from "@/lib/salonStore";
 
 const client = createPublicClient({
   chain:     base,
@@ -22,7 +22,12 @@ async function getMemberIds(): Promise<number[]> {
 }
 
 export async function GET() {
-  return NextResponse.json({ salons: await listSalons() });
+  const [salons, synthInfo] = await Promise.all([listSalons(), getSynthesisInfo()]);
+  return NextResponse.json({
+    salons,
+    nextSynthesisAt:   synthInfo.nextSynthesisAt,
+    nextSynthesisDate: new Date(synthInfo.nextSynthesisAt).toISOString(),
+  });
 }
 
 export async function POST(req: NextRequest) {

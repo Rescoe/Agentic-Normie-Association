@@ -309,11 +309,13 @@ function SalonChat({
   onBack,
   onSalonUpdate,
   onAvatarClick,
+  nextSynthesisAt,
 }: {
-  salon:         Salon;
-  onBack:        () => void;
-  onSalonUpdate: (s: Salon) => void;
-  onAvatarClick: (tokenId: number, name: string, imageUrl: string) => void;
+  salon:            Salon;
+  onBack:           () => void;
+  onSalonUpdate:    (s: Salon) => void;
+  onAvatarClick:    (tokenId: number, name: string, imageUrl: string) => void;
+  nextSynthesisAt?: number | null;
 }) {
   const [messages,    setMessages]    = useState<SalonMessage[]>(salon.messages);
   const [filter,      setFilter]      = useState<MessageFilter>({ search: "", agentId: null });
@@ -479,15 +481,22 @@ function SalonChat({
       </div>
 
       {/* Observer notice */}
-      <div className="border-t border-[--border] px-4 py-1.5 shrink-0 flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse" />
-          <p className="font-mono text-[10px] text-[--fg-muted]">
+      <div className="border-t border-[--border] px-4 py-1.5 shrink-0 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse shrink-0" />
+          <p className="font-mono text-[10px] text-[--fg-muted] truncate">
             Observatoire · {messages.length} message{messages.length !== 1 ? "s" : ""}
-            {salon.currentTopic ? ` · Thème : ${salon.currentTopic}` : ""}
+            {salon.currentTopic ? ` · ${salon.currentTopic}` : ""}
           </p>
         </div>
-        <p className="font-mono text-[10px] text-[--fg-muted]">Actualisation toutes les 6s</p>
+        <div className="flex items-center gap-3 shrink-0">
+          {nextSynthesisAt && (
+            <p className="font-mono text-[10px] text-[--fg-muted] hidden sm:block" title="Prochaine synthèse mensuelle des échanges">
+              ∑ {new Date(nextSynthesisAt).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}
+            </p>
+          )}
+          <p className="font-mono text-[10px] text-[--fg-muted]">6s</p>
+        </div>
       </div>
     </div>
   );
@@ -641,19 +650,21 @@ function SalonSidebar({
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function SalonClient() {
-  const [salons,     setSalons]     = useState<Salon[]>([]);
-  const [selected,   setSelected]   = useState<Salon | null>(null);
-  const [loading,    setLoading]    = useState(true);
-  const [agentCard,  setAgentCard]  = useState<{ tokenId: number; name: string; imageUrl: string } | null>(null);
-  const [showSidebar, setShowSidebar] = useState(true); // mobile toggle
+  const [salons,         setSalons]         = useState<Salon[]>([]);
+  const [selected,       setSelected]       = useState<Salon | null>(null);
+  const [loading,        setLoading]        = useState(true);
+  const [agentCard,      setAgentCard]      = useState<{ tokenId: number; name: string; imageUrl: string } | null>(null);
+  const [showSidebar,    setShowSidebar]    = useState(true); // mobile toggle
+  const [nextSynthesis,  setNextSynthesis]  = useState<number | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const res  = await fetch("/api/salon");
-        const data = await res.json() as { salons: Salon[] };
+        const data = await res.json() as { salons: Salon[]; nextSynthesisAt?: number };
         const list = data.salons ?? [];
         setSalons(list);
+        if (data.nextSynthesisAt) setNextSynthesis(data.nextSynthesisAt);
         // Auto-open Agora if no salon selected
         const agora = list.find(s => s.id === "salon_agora_ana");
         if (agora) handleSelect(agora, list);
@@ -742,6 +753,7 @@ export default function SalonClient() {
             onBack={handleBack}
             onSalonUpdate={handleSalonUpdate}
             onAvatarClick={(tokenId, name, imageUrl) => setAgentCard({ tokenId, name, imageUrl })}
+            nextSynthesisAt={nextSynthesis}
           />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-8">
