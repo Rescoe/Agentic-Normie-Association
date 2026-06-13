@@ -14,6 +14,7 @@
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
     "deploy:base": "hardhat run scripts/deploy.ts --network base",
     "redeploy:patch": "hardhat run scripts/redeploy-patched.ts --network base",
+    "deploy:staging": "hardhat run scripts/deploy-staging.ts --network baseSepolia",
     "clean": "hardhat clean && rm -rf .next"
   },
   "dependencies": {

@@ -99,16 +99,21 @@ export async function createAttestation(
   }
 
   // Step 1: Verify ownership on mainnet
-  const actualOwner = await getNormieOwnerOnMainnet(tokenId);
-  if (!actualOwner) {
-    throw new Error(
-      `Cannot verify ownership of Normie #${tokenId} on Ethereum mainnet`
-    );
-  }
-  if (actualOwner.toLowerCase() !== claimedOwner.toLowerCase()) {
-    throw new Error(
-      `Normie #${tokenId} is not owned by ${claimedOwner} (owner: ${actualOwner})`
-    );
+  // On staging (STAGING_SKIP_NFT_CHECK=true) skip on-chain verification
+  // so we can test the full register flow without a real Normies NFT.
+  const skipNftCheck = process.env.STAGING_SKIP_NFT_CHECK === "true";
+  if (!skipNftCheck) {
+    const actualOwner = await getNormieOwnerOnMainnet(tokenId);
+    if (!actualOwner) {
+      throw new Error(
+        `Cannot verify ownership of Normie #${tokenId} on Ethereum mainnet`
+      );
+    }
+    if (actualOwner.toLowerCase() !== claimedOwner.toLowerCase()) {
+      throw new Error(
+        `Normie #${tokenId} is not owned by ${claimedOwner} (owner: ${actualOwner})`
+      );
+    }
   }
 
   // Step 2: Build attestation
