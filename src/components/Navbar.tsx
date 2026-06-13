@@ -363,16 +363,15 @@ export function Navbar() {
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
 
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2 group shrink-0">
+          <Link href="/" className="flex items-center gap-3 group shrink-0">
             <Image
-              src="/ANA.png" alt="ANA" width={28} height={28}
-              className="w-6 h-6 md:w-7 md:h-7 object-contain group-hover:opacity-70 transition-opacity"
+              src="/ANA.png" alt="ANA" width={32} height={32}
+              className="w-8 h-8 object-contain group-hover:opacity-70 transition-opacity"
               style={{ imageRendering: "pixelated" }}
             />
-            {/* Wordmark: hidden on mobile to free space for the lang toggle */}
             <Image
               src="/logo_img.png" alt="Agentic Normie Association" width={140} height={32}
-              className="hidden sm:block h-6 w-auto object-contain group-hover:opacity-70 transition-opacity"
+              className="h-6 w-auto object-contain group-hover:opacity-70 transition-opacity"
               style={{ imageRendering: "pixelated" }}
             />
           </Link>
@@ -396,25 +395,20 @@ export function Navbar() {
             <WalletButton />
           </nav>
 
-          {/* Mobile: lang toggle centered */}
-          <div className="md:hidden flex-1 flex justify-center">
-            <LanguageToggle compact />
-          </div>
-
           {/* Mobile: wallet + burger */}
-          <div className="md:hidden flex items-center gap-1.5">
+          <div className="md:hidden flex items-center gap-3">
             <WalletButton />
             <button
               onClick={() => setMobileOpen(o => !o)}
               aria-label={mobileOpen ? "Fermer le menu" : "Ouvrir le menu"}
-              className="p-1.5 text-[--fg] border border-[--border] bg-[--bg-card] hover:bg-[--bg] transition-colors"
+              className="p-2 text-[--fg] border border-[--border] bg-[--bg-card] hover:bg-[--bg] transition-colors"
             >
               {mobileOpen ? (
-                <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                   <path d="M2 2l14 14M16 2L2 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" />
                 </svg>
               ) : (
-                <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                   <path d="M2 4h14M2 9h14M2 14h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" />
                 </svg>
               )}
