@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
 
@@ -75,6 +76,7 @@ export default function RootLayout({
     <html lang="fr" className={`${spaceMono.variable} ${jakarta.variable}`}>
       <body className="font-sans bg-[--bg] text-[--fg]">
         <Providers>{children}</Providers>
+        <Analytics />
       </body>
     </html>
   );
