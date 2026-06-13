@@ -50,6 +50,7 @@ interface SalonStore {
   salons:           Record<string, Salon>;
   names:            Record<string, string>; // tokenId.toString() → realName
   lastSynthesisAt?: number;                 // timestamp of last synthesis run
+  stimulations?:    Record<string, number>; // ip → last user-triggered stim timestamp
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -299,6 +300,33 @@ export async function storeSynthesis(
 
 export async function markSynthesisDone(): Promise<void> {
   await mutate(s => { s.lastSynthesisAt = Date.now(); });
+}
+
+// ─── User stim rate limit (1 per IP per 24h, stored in blob) ─────────────────
+
+const STIM_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export async function checkStimLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+  if (!ip || ip === "unknown") return { allowed: true };
+  const store  = await getStore();
+  const lastAt = store.stimulations?.[ip];
+  if (!lastAt) return { allowed: true };
+  const elapsed = Date.now() - lastAt;
+  if (elapsed >= STIM_WINDOW_MS) return { allowed: true };
+  return { allowed: false, retryAfterMs: STIM_WINDOW_MS - elapsed };
+}
+
+export async function recordStim(ip: string): Promise<void> {
+  if (!ip || ip === "unknown") return;
+  const cutoff = Date.now() - 2 * STIM_WINDOW_MS;
+  await mutate(s => {
+    if (!s.stimulations) s.stimulations = {};
+    s.stimulations[ip] = Date.now();
+    // Prune entries older than 48h to keep blob lean
+    for (const [k, v] of Object.entries(s.stimulations)) {
+      if (v < cutoff) delete s.stimulations![k];
+    }
+  });
 }
 
 // ─── Name registry ────────────────────────────────────────────────────────────

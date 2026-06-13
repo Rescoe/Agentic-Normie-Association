@@ -323,6 +323,11 @@ function SalonChat({
   const [stimResult,    setStimResult]    = useState<string | null>(null);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
   const [initialLoaded, setInitialLoaded] = useState(salon.messages.length > 0);
+  // Client-side hint for the 1/day stim limit (real enforcement is server-side via IP+blob)
+  const [stimUsedToday, setStimUsedToday] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("ana_stim_date") === new Date().toDateString();
+  });
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
   const lastTs    = useRef<number>(salon.messages[salon.messages.length - 1]?.timestamp ?? 0);
@@ -361,23 +366,34 @@ function SalonChat({
   }, [messages]);
 
   const stimulate = async () => {
-    if (stimulating) return;
+    if (stimulating || stimUsedToday) return;
     setStimulating(true);
     setStimResult(null);
     try {
       const res  = await fetch("/api/keeper/salon-exchange", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ salonId: salon.id, force: true }),
+        body:    JSON.stringify({ salonId: salon.id }),
       });
       const data = await res.json() as {
         generatedMessages?: SalonMessage[]; totalMessages?: number;
         results?: Array<{ skipped: string[] }>; error?: string; message?: string;
+        retryAfterMs?: number;
       };
+      if (res.status === 429) {
+        setStimUsedToday(true);
+        localStorage.setItem("ana_stim_date", new Date().toDateString());
+        setStimResult(data.error ?? "Déjà utilisé aujourd'hui");
+        return;
+      }
       if (!res.ok || data.error || data.message) {
         setStimResult(data.error ?? data.message ?? "Erreur");
         return;
       }
+      // Mark as used for today
+      setStimUsedToday(true);
+      localStorage.setItem("ana_stim_date", new Date().toDateString());
+
       if (data.generatedMessages?.length) {
         mergeMessages(data.generatedMessages);
         const speakers = [...new Set(data.generatedMessages.map(m => m.name))];
@@ -390,7 +406,7 @@ function SalonChat({
       setStimResult(e instanceof Error ? e.message : "Erreur réseau");
     } finally {
       setStimulating(false);
-      setTimeout(() => setStimResult(null), 5_000);
+      setTimeout(() => setStimResult(null), 8_000);
     }
   };
 
@@ -441,11 +457,11 @@ function SalonChat({
           {salon.isOpen && (
             <button
               onClick={stimulate}
-              disabled={stimulating}
+              disabled={stimulating || stimUsedToday}
               className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2.5 py-1.5 disabled:opacity-40 transition-colors"
-              title="Déclencher un échange (sans limite)"
+              title={stimUsedToday ? "Stimulation déjà utilisée aujourd'hui (recharge à minuit)" : "Déclencher un échange — 1 fois par jour"}
             >
-              {stimulating ? "…" : "⚡"}
+              {stimulating ? "…" : stimUsedToday ? "⚡ ×0" : "⚡"}
             </button>
           )}
         </div>

@@ -13,6 +13,7 @@ import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
   listSalons, getSalon, addMessage, checkRateLimit, setTopic, registerName,
   isSynthesisDue, storeSynthesis, markSynthesisDone, getSynthesisInfo,
+  checkStimLimit, recordStim,
   AGORA_SALON_ID, SYNTHESIS_MIN_MSGS, SYNTHESIS_KEEP_LAST,
   type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
@@ -267,15 +268,41 @@ async function runExchange(
   return { messages: generated, skipped, topic };
 }
 
+function getClientIp(req: NextRequest): string {
+  return (
+    req.headers.get("x-real-ip") ??
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown"
+  );
+}
+
 export async function POST(req: NextRequest) {
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }
 
+  // Cron requests carry CRON_SECRET — they bypass user stim limits
+  const cronSecret  = process.env.CRON_SECRET;
+  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+
   let body: { salonId?: string; force?: boolean } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
-  const force = body.force ?? false;
+  // Cron always runs without force (respects per-Normie rate limit)
+  // User button runs with force:true (bypasses per-Normie rate limit) but IP-limited to 1/day
+  const force = isCron ? false : (body.force ?? true);
+
+  if (!isCron) {
+    const ip    = getClientIp(req);
+    const check = await checkStimLimit(ip);
+    if (!check.allowed) {
+      const h = Math.ceil((check.retryAfterMs ?? 0) / 3_600_000);
+      return NextResponse.json(
+        { error: `Stimulation déjà utilisée aujourd'hui. Disponible dans ${h}h.`, retryAfterMs: check.retryAfterMs },
+        { status: 429 },
+      );
+    }
+  }
 
   // ── Monthly synthesis check (runs before exchange, at most once per 30 days) ──
   const synthesisResult = await runMonthlySynthesis();
@@ -323,6 +350,11 @@ export async function POST(req: NextRequest) {
     allGenerated.push(...result.messages);
   }
 
+  // Record the user's stim after a successful exchange (not for cron)
+  if (!isCron) {
+    await recordStim(getClientIp(req));
+  }
+
   const synthInfo = await getSynthesisInfo();
 
   return NextResponse.json({
@@ -334,5 +366,6 @@ export async function POST(req: NextRequest) {
     synthesis:          synthesisResult.ran ? synthesisResult : null,
     nextSynthesisAt:    synthInfo.nextSynthesisAt,
     nextSynthesisDate:  new Date(synthInfo.nextSynthesisAt).toISOString(),
+    isCron,
   });
 }
