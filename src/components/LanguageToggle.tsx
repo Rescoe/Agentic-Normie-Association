@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useRef } from "react";
 
+// ─── Default language is EN (translated). User can switch to FR (original). ───
+// Storage key: absent or "en" → auto-translate to EN.
+//              "fr"           → stay in French (original).
+
 const LANG_KEY = "ana-lang";
 
-// Finds the Google Translate combo box and triggers a language change.
-// Retries for up to ~5s in case the GT widget hasn't loaded yet.
 function triggerGT(lang: string, attempts = 20) {
   const sel = document.querySelector<HTMLSelectElement>(".goog-te-combo");
   if (sel) {
@@ -18,16 +20,26 @@ function triggerGT(lang: string, attempts = 20) {
   }
 }
 
-export function LanguageToggle() {
-  const [isEN, setIsEN]   = useState(false);
+interface Props {
+  /** Tighter padding for the mobile header slot */
+  compact?: boolean;
+}
+
+export function LanguageToggle({ compact = false }: Props) {
+  // true  = page is in French (user chose original)
+  // false = page is translated to English (default)
+  const [isFR, setIsFR]   = useState(false);
   const applied           = useRef(false);
 
   useEffect(() => {
     try {
       const pref = localStorage.getItem(LANG_KEY);
-      if (pref === "en") {
-        setIsEN(true);
-        // Re-apply translation after GT widget loads (delayed)
+      if (pref === "fr") {
+        // User explicitly chose French — show original, display EN button
+        setIsFR(true);
+      } else {
+        // Default (no pref or "en") → auto-translate to English
+        setIsFR(false);
         if (!applied.current) {
           applied.current = true;
           setTimeout(() => triggerGT("en"), 1200);
@@ -36,18 +48,11 @@ export function LanguageToggle() {
     } catch {}
   }, []);
 
-  const switchToEN = () => {
-    try { localStorage.setItem(LANG_KEY, "en"); } catch {}
-    setIsEN(true);
-    triggerGT("en");
-  };
-
   const switchToFR = () => {
-    try { localStorage.removeItem(LANG_KEY); } catch {}
-    setIsEN(false);
-    // Reset GT widget to original language
+    try { localStorage.setItem(LANG_KEY, "fr"); } catch {}
+    setIsFR(true);
+    // Reset Google Translate to original language
     triggerGT("");
-    // GT sometimes needs a moment to reset properly
     setTimeout(() => {
       const combo = document.querySelector<HTMLSelectElement>(".goog-te-combo");
       if (combo && combo.value !== "") {
@@ -57,25 +62,32 @@ export function LanguageToggle() {
     }, 300);
   };
 
-  if (isEN) {
+  const switchToEN = () => {
+    try { localStorage.removeItem(LANG_KEY); } catch {}
+    setIsFR(false);
+    triggerGT("en");
+  };
+
+  const cls = [
+    "font-mono border transition-colors leading-none tracking-wide",
+    compact
+      ? "text-[10px] px-1.5 py-1 border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg]"
+      : "text-[11px] px-2 py-1.5 border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg]",
+  ].join(" ");
+
+  if (isFR) {
+    // Currently in French → offer to switch to English
     return (
-      <button
-        onClick={switchToFR}
-        title="Revenir à la version française"
-        className="font-mono text-[11px] border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2 py-1.5 transition-colors leading-none tracking-wide"
-      >
-        FR
+      <button onClick={switchToEN} title="Switch to English" className={cls}>
+        EN
       </button>
     );
   }
 
+  // Currently in English (translated) → offer to revert to French
   return (
-    <button
-      onClick={switchToEN}
-      title="Switch to English"
-      className="font-mono text-[11px] border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2 py-1.5 transition-colors leading-none tracking-wide"
-    >
-      EN
+    <button onClick={switchToFR} title="Voir en français" className={cls}>
+      FR
     </button>
   );
 }
