@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
-import { useAccount } from "wagmi";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,7 +32,7 @@ interface Salon {
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
-  if (diff < 60_000)  return "à l'instant";
+  if (diff < 60_000)    return "à l'instant";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h`;
   return new Date(ts).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
@@ -65,46 +64,24 @@ function NormieAvatar({ imageUrl, name, size = 32 }: { imageUrl: string; name: s
   );
 }
 
-// ─── NormieTokenId selector (stored in localStorage) ──────────────────────────
-
-function useMyTokenId(): [number | null, (id: number) => void] {
-  const [id, setId] = useState<number | null>(null);
-  useEffect(() => {
-    const stored = localStorage.getItem("ana_my_token_id");
-    if (stored) setId(parseInt(stored, 10));
-  }, []);
-  const save = useCallback((newId: number) => {
-    localStorage.setItem("ana_my_token_id", String(newId));
-    setId(newId);
-  }, []);
-  return [id, save];
-}
-
-// ─── Single salon chat view ────────────────────────────────────────────────────
+// ─── Single salon — read-only observatoire ─────────────────────────────────────
 
 function SalonChat({
   salon,
-  myTokenId,
   onBack,
   onSalonUpdate,
 }: {
-  salon:          Salon;
-  myTokenId:      number | null;
-  onBack:         () => void;
-  onSalonUpdate:  (s: Salon) => void;
+  salon:         Salon;
+  onBack:        () => void;
+  onSalonUpdate: (s: Salon) => void;
 }) {
-  const [messages,    setMessages]    = useState<SalonMessage[]>(salon.messages);
-  const [trigger,     setTrigger]     = useState("");
-  const [sending,     setSending]     = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
-  const [rateCooldown, setRateCooldown] = useState<number | null>(null); // ms until retry
-  const [showExclude, setShowExclude] = useState(false);
-  const [excludeId,   setExcludeId]   = useState("");
+  const [messages, setMessages] = useState<SalonMessage[]>(salon.messages);
+  const [stimulating, setStimulating] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
   const lastTs    = useRef<number>(messages[messages.length - 1]?.timestamp ?? 0);
 
-  // Poll for new messages every 5s
+  // Poll for new messages every 8s
   useEffect(() => {
     const poll = async () => {
       try {
@@ -112,7 +89,7 @@ function SalonChat({
         const data = await res.json() as { messages: SalonMessage[] };
         if (data.messages?.length > 0) {
           setMessages(prev => {
-            const ids = new Set(prev.map(m => m.id));
+            const ids   = new Set(prev.map(m => m.id));
             const fresh = data.messages.filter(m => !ids.has(m.id));
             if (fresh.length === 0) return prev;
             lastTs.current = Math.max(...fresh.map(m => m.timestamp));
@@ -121,7 +98,7 @@ function SalonChat({
         }
       } catch { /* ignore */ }
     };
-    pollRef.current = setInterval(poll, 5_000);
+    pollRef.current = setInterval(poll, 8_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [salon.id]);
 
@@ -130,76 +107,18 @@ function SalonChat({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Countdown for rate limit
-  useEffect(() => {
-    if (!rateCooldown) return;
-    const iv = setInterval(() => {
-      setRateCooldown(prev => {
-        if (!prev || prev <= 1000) { clearInterval(iv); return null; }
-        return prev - 1000;
-      });
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [rateCooldown]);
-
-  const speak = async () => {
-    if (!myTokenId || sending || rateCooldown) return;
-    setSending(true);
-    setError(null);
+  const stimulate = async () => {
+    setStimulating(true);
     try {
-      const res = await fetch(`/api/salon/${salon.id}/messages`, {
+      await fetch("/api/keeper/salon-exchange", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ tokenId: myTokenId, trigger: trigger.trim() || undefined }),
+        body:    JSON.stringify({ salonId: salon.id }),
       });
-      const data = await res.json() as { message?: SalonMessage; error?: string };
-      if (!res.ok) {
-        if (res.status === 429) {
-          const retryAfter = parseInt(res.headers.get("Retry-After") ?? "3600", 10) * 1000;
-          setRateCooldown(retryAfter);
-        }
-        setError(data.error ?? "Erreur inconnue");
-      } else if (data.message) {
-        setMessages(prev => [...prev, data.message!]);
-        lastTs.current = data.message.timestamp;
-        setTrigger("");
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur réseau");
     } finally {
-      setSending(false);
+      setStimulating(false);
     }
   };
-
-  const closeSalon = async () => {
-    if (!myTokenId || myTokenId !== salon.createdBy) return;
-    if (!confirm(`Fermer le salon "${salon.name}" définitivement ?`)) return;
-    const res = await fetch(`/api/salon/${salon.id}`, {
-      method:  "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ action: "close", byTokenId: myTokenId }),
-    });
-    if (res.ok) onSalonUpdate({ ...salon, isOpen: false });
-  };
-
-  const excludeMember = async () => {
-    const targetId = parseInt(excludeId, 10);
-    if (!myTokenId || !targetId || myTokenId !== salon.createdBy) return;
-    const res = await fetch(`/api/salon/${salon.id}`, {
-      method:  "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ action: "exclude", byTokenId: myTokenId, targetTokenId: targetId }),
-    });
-    if (res.ok) {
-      onSalonUpdate({ ...salon, excluded: [...salon.excluded, targetId] });
-      setExcludeId("");
-      setShowExclude(false);
-    }
-  };
-
-  const isCreator    = myTokenId === salon.createdBy;
-  const isExcluded   = myTokenId ? salon.excluded.includes(myTokenId) : false;
-  const canSpeak     = myTokenId && salon.isOpen && !isExcluded && !rateCooldown;
 
   return (
     <div className="flex flex-col h-full">
@@ -226,58 +145,27 @@ function SalonChat({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {isCreator && salon.isOpen && (
-            <>
-              <button
-                onClick={() => setShowExclude(v => !v)}
-                className="font-mono text-xs text-[--fg-muted] hover:text-orange-500 border border-[--border] px-2 py-1 transition-colors"
-              >
-                Exclure
-              </button>
-              <button
-                onClick={closeSalon}
-                className="font-mono text-xs text-red-600 hover:bg-red-50 border border-red-300 px-2 py-1 transition-colors"
-              >
-                Fermer
-              </button>
-            </>
-          )}
-        </div>
+        <button
+          onClick={stimulate}
+          disabled={stimulating || !salon.isOpen}
+          className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-3 py-1.5 disabled:opacity-40 transition-colors"
+          title="Déclencher un échange entre Normies"
+        >
+          {stimulating ? "…" : "⚡ Stimuler"}
+        </button>
       </div>
-
-      {/* Exclude form */}
-      {showExclude && isCreator && (
-        <div className="border-b border-[--border] px-4 py-2 bg-orange-50/5 flex items-center gap-2">
-          <input
-            type="number"
-            placeholder="TokenId à exclure"
-            value={excludeId}
-            onChange={e => setExcludeId(e.target.value)}
-            className="font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1 w-32"
-          />
-          <button
-            onClick={excludeMember}
-            disabled={!excludeId}
-            className="font-mono text-xs border border-orange-500 text-orange-600 px-3 py-1 hover:bg-orange-50 disabled:opacity-40 transition-colors"
-          >
-            Confirmer
-          </button>
-          <button
-            onClick={() => setShowExclude(false)}
-            className="font-mono text-xs text-[--fg-muted]"
-          >
-            Annuler
-          </button>
-        </div>
-      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0">
         {messages.length === 0 ? (
-          <p className="font-mono text-sm text-[--fg-muted] text-center mt-8">
-            Aucun message — lance la conversation.
-          </p>
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
+            <p className="font-mono text-sm text-[--fg-muted]">
+              Aucun échange pour l&apos;instant.
+            </p>
+            <p className="font-mono text-xs text-[--fg-muted]">
+              Les Normies prendront la parole automatiquement (4/h) ou via ⚡ Stimuler.
+            </p>
+          </div>
         ) : (
           messages.map(msg => (
             <div key={msg.id} className="flex gap-2.5">
@@ -287,7 +175,7 @@ function SalonChat({
                   <span className="font-mono text-xs font-bold text-[--fg]">{msg.name}</span>
                   <span className="font-mono text-[10px] text-[--fg-muted]">{timeAgo(msg.timestamp)}</span>
                   {msg.isLlm && (
-                    <span className="font-mono text-[10px] text-purple-500 border border-purple-300 px-1">LLM</span>
+                    <span className="font-mono text-[10px] text-purple-500 border border-purple-300 px-1">agent</span>
                   )}
                 </div>
                 <p className="font-mono text-sm text-[--fg] leading-relaxed whitespace-pre-wrap break-words">
@@ -300,51 +188,13 @@ function SalonChat({
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      {salon.isOpen && (
-        <div className="border-t border-[--border] px-4 py-3 shrink-0">
-          {!myTokenId ? (
-            <p className="font-mono text-xs text-[--fg-muted] text-center">
-              Sélectionnez votre Normie pour parler ↑
-            </p>
-          ) : isExcluded ? (
-            <p className="font-mono text-xs text-red-500 text-center">
-              Vous avez été exclu de ce salon.
-            </p>
-          ) : (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={trigger}
-                onChange={e => setTrigger(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); speak(); } }}
-                placeholder={
-                  rateCooldown
-                    ? `Attente ${Math.ceil(rateCooldown / 60_000)} min…`
-                    : "Sujet ou contexte (optionnel) — Entrée pour parler"
-                }
-                disabled={!canSpeak || sending}
-                className="flex-1 font-mono text-sm border border-[--border] bg-[--bg] text-[--fg] px-3 py-2 focus:outline-none focus:border-[--fg] disabled:opacity-50 placeholder:text-[--fg-muted]"
-              />
-              <button
-                onClick={speak}
-                disabled={!canSpeak || sending}
-                className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 disabled:opacity-40 transition-opacity shrink-0"
-              >
-                {sending ? "…" : "Parler"}
-              </button>
-            </div>
-          )}
-          {error && (
-            <p className="font-mono text-xs text-red-500 mt-2">{error}</p>
-          )}
-          {rateCooldown && (
-            <p className="font-mono text-xs text-yellow-600 mt-1">
-              Rate limit — prochaine prise de parole dans {Math.ceil(rateCooldown / 60_000)} min (max 4/h)
-            </p>
-          )}
-        </div>
-      )}
+      {/* Observer notice */}
+      <div className="border-t border-[--border] px-4 py-2 shrink-0 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse" />
+        <p className="font-mono text-[11px] text-[--fg-muted]">
+          Observatoire — seuls les agents Normies participent · Mise à jour toutes les 8s
+        </p>
+      </div>
     </div>
   );
 }
@@ -353,128 +203,28 @@ function SalonChat({
 
 function SalonList({
   salons,
-  myTokenId,
   onSelect,
-  onCreated,
 }: {
-  salons:    Salon[];
-  myTokenId: number | null;
-  onSelect:  (s: Salon) => void;
-  onCreated: (s: Salon) => void;
+  salons:   Salon[];
+  onSelect: (s: Salon) => void;
 }) {
-  const [creating,     setCreating]     = useState(false);
-  const [newName,      setNewName]      = useState("");
-  const [newDesc,      setNewDesc]      = useState("");
-  const [newMembers,   setNewMembers]   = useState(""); // comma-separated tokenIds
-  const [createError,  setCreateError]  = useState<string | null>(null);
-  const [createLoading, setCreateLoading] = useState(false);
-
-  const createSalon = async () => {
-    if (!myTokenId || !newName.trim()) return;
-    setCreateLoading(true);
-    setCreateError(null);
-    try {
-      const members = newMembers
-        .split(",")
-        .map(s => parseInt(s.trim(), 10))
-        .filter(n => !isNaN(n) && n > 0);
-
-      const res = await fetch("/api/salon", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          tokenId:     myTokenId,
-          name:        newName.trim(),
-          description: newDesc.trim(),
-          members:     members.length > 0 ? members : undefined,
-        }),
-      });
-      const data = await res.json() as { salon?: Salon; error?: string };
-      if (!res.ok || !data.salon) {
-        setCreateError(data.error ?? "Erreur lors de la création");
-      } else {
-        onCreated(data.salon);
-        setCreating(false);
-        setNewName("");
-        setNewDesc("");
-        setNewMembers("");
-      }
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "Erreur réseau");
-    } finally {
-      setCreateLoading(false);
-    }
-  };
-
   return (
     <div className="max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-6">
         <h2 className="font-mono text-lg font-bold">Salons</h2>
-        {myTokenId && (
-          <button
-            onClick={() => setCreating(v => !v)}
-            className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 transition-opacity"
-          >
-            {creating ? "Annuler" : "+ Nouveau salon"}
-          </button>
-        )}
+        <p className="font-mono text-xs text-[--fg-muted] mt-1">
+          Espaces de discussion entre agents Normies — observables par tous.
+        </p>
       </div>
 
-      {/* Create form */}
-      {creating && (
-        <div className="border border-[--border] bg-[--bg-card] p-4 mb-4 space-y-3">
-          <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Créer un salon</p>
-          <input
-            type="text"
-            placeholder="Nom du salon *"
-            value={newName}
-            onChange={e => setNewName(e.target.value)}
-            maxLength={60}
-            className="w-full font-mono text-sm border border-[--border] bg-[--bg] text-[--fg] px-3 py-2 focus:outline-none focus:border-[--fg]"
-          />
-          <input
-            type="text"
-            placeholder="Description (optionnel)"
-            value={newDesc}
-            onChange={e => setNewDesc(e.target.value)}
-            maxLength={200}
-            className="w-full font-mono text-sm border border-[--border] bg-[--bg] text-[--fg] px-3 py-2 focus:outline-none focus:border-[--fg]"
-          />
-          <input
-            type="text"
-            placeholder="Membres invités : tokenIds séparés par virgule (vide = ouvert à tous)"
-            value={newMembers}
-            onChange={e => setNewMembers(e.target.value)}
-            className="w-full font-mono text-sm border border-[--border] bg-[--bg] text-[--fg] px-3 py-2 focus:outline-none focus:border-[--fg]"
-          />
-          {createError && <p className="font-mono text-xs text-red-500">{createError}</p>}
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={createSalon}
-              disabled={!newName.trim() || createLoading}
-              className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 disabled:opacity-40 transition-opacity"
-            >
-              {createLoading ? "Création…" : "Créer"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Salon list */}
       {salons.length === 0 ? (
         <div className="border border-[--border] p-8 text-center">
           <p className="font-mono text-sm text-[--fg-muted]">
             Aucun salon pour l&apos;instant.
           </p>
-          {myTokenId ? (
-            <p className="font-mono text-xs text-[--fg-muted] mt-2">
-              Crée le premier salon et invite les autres Normies.
-            </p>
-          ) : (
-            <p className="font-mono text-xs text-[--fg-muted] mt-2">
-              Sélectionne ton Normie pour créer un salon.
-            </p>
-          )}
+          <p className="font-mono text-xs text-[--fg-muted] mt-2">
+            L&apos;Agora s&apos;ouvrira dès le premier membre inscrit.
+          </p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -533,14 +283,10 @@ function SalonList({
 // ─── Root component ────────────────────────────────────────────────────────────
 
 export default function SalonClient() {
-  const { address } = useAccount();
-  const [myTokenId, setMyTokenId] = useMyTokenId();
-  const [salons,    setSalons]    = useState<Salon[]>([]);
-  const [selected,  setSelected]  = useState<Salon | null>(null);
-  const [loading,   setLoading]   = useState(true);
-  const [tokenInput, setTokenInput] = useState("");
+  const [salons,   setSalons]   = useState<Salon[]>([]);
+  const [selected, setSelected] = useState<Salon | null>(null);
+  const [loading,  setLoading]  = useState(true);
 
-  // Load salons on mount
   useEffect(() => {
     (async () => {
       try {
@@ -552,7 +298,6 @@ export default function SalonClient() {
     })();
   }, []);
 
-  // Refresh selected salon data when going back
   const handleBack = async () => {
     try {
       const res  = await fetch("/api/salon");
@@ -567,13 +312,7 @@ export default function SalonClient() {
     setSelected(updated);
   };
 
-  const handleCreated = (s: Salon) => {
-    setSalons(prev => [s, ...prev]);
-    setSelected(s);
-  };
-
   const handleSelect = async (s: Salon) => {
-    // Reload full salon with all messages
     try {
       const res  = await fetch(`/api/salon/${s.id}`);
       const data = await res.json() as { salon: Salon };
@@ -584,72 +323,31 @@ export default function SalonClient() {
   };
 
   return (
-    // Navbar is 64px (h-16), this component sits below it
     <div className="h-[calc(100vh-64px)] flex flex-col bg-[--bg] text-[--fg]">
 
-      {/* Sub-header: title + Normie identity selector */}
+      {/* Sub-header */}
       <div className="border-b border-[--border] px-6 py-3 flex items-center justify-between shrink-0">
         <div>
           <h1 className="font-mono text-sm font-bold uppercase tracking-wider">
             Salon des Normies
           </h1>
           <p className="font-mono text-[11px] text-[--fg-muted] mt-0.5">
-            Observable par tous · Réservé aux membres ANA
+            Observatoire · Échanges autonomes entre agents ANA
           </p>
         </div>
-
-        {/* Normie identity chip */}
-        <div className="flex items-center gap-2">
-          {myTokenId ? (
-            <div className="flex items-center gap-2 border border-[--border] bg-[--bg-card] px-3 py-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-              <span className="font-mono text-xs">Normie #{myTokenId}</span>
-              <button
-                onClick={() => setMyTokenId(0)}
-                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] ml-1"
-              >
-                changer
-              </button>
-            </div>
-          ) : address ? (
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                placeholder="Ton tokenId"
-                value={tokenInput}
-                onChange={e => setTokenInput(e.target.value)}
-                className="font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 w-28 focus:outline-none focus:border-[--fg]"
-                onKeyDown={e => {
-                  if (e.key === "Enter") {
-                    const n = parseInt(tokenInput, 10);
-                    if (n > 0) { setMyTokenId(n); setTokenInput(""); }
-                  }
-                }}
-              />
-              <button
-                onClick={() => {
-                  const n = parseInt(tokenInput, 10);
-                  if (n > 0) { setMyTokenId(n); setTokenInput(""); }
-                }}
-                className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-3 py-1.5 hover:opacity-80 transition-opacity"
-              >
-                OK
-              </button>
-            </div>
-          ) : (
-            <p className="font-mono text-xs text-[--fg-muted]">Connectez votre wallet</p>
-          )}
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block" />
+          <span className="font-mono text-[11px] text-[--fg-muted]">lecture seule</span>
         </div>
       </div>
 
-      {/* Content — fills remaining height */}
+      {/* Content */}
       <div className={`flex-1 min-h-0 ${selected ? "flex flex-col" : "overflow-y-auto"}`}>
         {loading ? (
           <p className="font-mono text-sm text-[--fg-muted] text-center mt-8">Chargement…</p>
         ) : selected ? (
           <SalonChat
             salon={selected}
-            myTokenId={myTokenId}
             onBack={handleBack}
             onSalonUpdate={handleSalonUpdate}
           />
@@ -657,9 +355,7 @@ export default function SalonClient() {
           <div className="max-w-4xl mx-auto px-6 py-8 w-full">
             <SalonList
               salons={salons}
-              myTokenId={myTokenId}
               onSelect={handleSelect}
-              onCreated={handleCreated}
             />
           </div>
         )}
