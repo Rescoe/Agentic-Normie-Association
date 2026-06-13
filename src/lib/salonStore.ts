@@ -1,28 +1,23 @@
 /**
- * Salon store — global in-memory singleton + file backup.
+ * Salon store — dual persistence: global singleton + JSON file.
  *
- * Primary:   global.__anaSalonStore  — shared across ALL route handlers in the same process,
- *            survives page navigations, never lost on client-side route changes.
- *
- * Backup:    file at os.tmpdir()/ana-salon.json  — written on every mutation,
- *            read on cold start (server restart recovery).
- *
- * Name registry: tokenId → realName, stored in the same object.
+ * The file lives at <project>/data/salon.json (outside .next, committed to .gitignore).
+ * The global guarantees in-process sharing across route handlers.
+ * The file guarantees survival across server restarts.
  */
 
 import fs   from "fs";
 import path from "path";
-import os   from "os";
 
-// ─── Paths ───────────────────────────────────────────────────────────────────
+// ─── File path ────────────────────────────────────────────────────────────────
 
-// On Vercel /tmp is the only writable directory; locally use os.tmpdir()
-const DATA_FILE = process.env.VERCEL
-  ? "/tmp/ana-salon.json"
-  : path.join(os.tmpdir(), "ana-salon.json");
+// process.cwd() = project root when Next.js runs. The `data/` dir is created
+// at runtime if missing.
+const DATA_DIR  = path.join(process.cwd(), "data");
+const DATA_FILE = path.join(DATA_DIR, "salon.json");
 
-const MAX_MESSAGES_PER_HOUR  = 4;
-const MAX_MESSAGES_PER_SALON = 500;
+// On Vercel use /tmp (ephemeral, but at least within one function execution)
+const FILE_PATH = process.env.VERCEL ? "/tmp/salon.json" : DATA_FILE;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +50,7 @@ interface SalonStore {
   names:  Record<string, string>; // tokenId.toString() → realName
 }
 
-// ─── Global singleton ─────────────────────────────────────────────────────────
+// ─── Global singleton (in-process) ───────────────────────────────────────────
 
 declare global {
   // eslint-disable-next-line no-var
@@ -64,32 +59,35 @@ declare global {
 
 export const AGORA_SALON_ID = "salon_agora_ana";
 
+const MAX_MESSAGES_PER_HOUR  = 4;
+const MAX_MESSAGES_PER_SALON = 500;
+
 function makeAgora(): Salon {
   return {
-    id:           AGORA_SALON_ID,
-    name:         "Agora ANA",
-    description:  "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
-    createdBy:    0,
-    createdAt:    Date.now(),
-    members:      [],
-    excluded:     [],
-    isOpen:       true,
-    messages:     [],
+    id:          AGORA_SALON_ID,
+    name:        "Agora ANA",
+    description: "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
+    createdBy:   0,
+    createdAt:   Date.now(),
+    members:     [],
+    excluded:    [],
+    isOpen:      true,
+    messages:    [],
     currentTopic: null,
   };
 }
 
-function loadFromFile(): SalonStore {
+// ─── File I/O ─────────────────────────────────────────────────────────────────
+
+function loadFromDisk(): SalonStore {
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const raw    = fs.readFileSync(DATA_FILE, "utf-8");
+    if (fs.existsSync(FILE_PATH)) {
+      const raw    = fs.readFileSync(FILE_PATH, "utf-8");
       const parsed = JSON.parse(raw) as SalonStore;
       if (!parsed.names) parsed.names = {};
-      console.log(
-        `[salonStore] loaded from ${DATA_FILE}: ` +
-        `${Object.keys(parsed.salons).length} salons, ` +
-        `${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`
-      );
+      const total = Object.values(parsed.salons)
+        .reduce((n, s) => n + s.messages.length, 0);
+      console.log(`[salonStore] loaded ${FILE_PATH} — ${total} messages`);
       return parsed;
     }
   } catch (e) {
@@ -98,33 +96,39 @@ function loadFromFile(): SalonStore {
   return { salons: {}, names: {} };
 }
 
-function saveToFile(store: SalonStore): void {
+function saveToDisk(store: SalonStore): void {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(store), "utf-8");
+    // Ensure directory exists
+    if (!process.env.VERCEL) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const json = JSON.stringify(store, null, 2);
+    // Atomic write: write to temp file then rename
+    const tmp = FILE_PATH + ".tmp";
+    fs.writeFileSync(tmp, json, "utf-8");
+    fs.renameSync(tmp, FILE_PATH);
+    const agora = store.salons[AGORA_SALON_ID];
+    console.log(`[salonStore] saved → ${FILE_PATH} (${agora?.messages.length ?? 0} agora msgs)`);
   } catch (e) {
-    console.error("[salonStore] save error — DATA_FILE:", DATA_FILE, e);
+    console.error("[salonStore] save FAILED:", FILE_PATH, e);
   }
 }
 
+// ─── Store access ─────────────────────────────────────────────────────────────
+
 function getStore(): SalonStore {
   if (!global.__anaSalonStore) {
-    // Cold start: try to restore from file
-    const s = loadFromFile();
-    // Ensure agora always exists
+    const s = loadFromDisk();
     if (!s.salons[AGORA_SALON_ID]) {
       s.salons[AGORA_SALON_ID] = makeAgora();
     }
     global.__anaSalonStore = s;
-
-    const msgCount = Object.values(s.salons)
-      .reduce((n, sal) => n + sal.messages.length, 0);
     console.log(
-      `[salonStore] initialized: ${Object.keys(s.salons).length} salons, ` +
-      `${msgCount} total messages, file: ${DATA_FILE}`
+      `[salonStore] initialized global — ${Object.keys(s.salons).length} salons, ` +
+      `${s.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs, file: ${FILE_PATH}`
     );
-
-    // Immediately test that we can write to the file
-    saveToFile(s);
+    // Validate we can write
+    saveToDisk(s);
   }
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   return global.__anaSalonStore!;
@@ -132,32 +136,27 @@ function getStore(): SalonStore {
 
 function mutate(fn: (s: SalonStore) => void): void {
   const store = getStore();
-  fn(store); // mutates in-place — global.__anaSalonStore is updated too
-  saveToFile(store);
+  fn(store);          // mutates in-place — global is updated immediately
+  saveToDisk(store);  // persist backup
 }
 
-// ─── Debug info (used by /api/debug/store) ────────────────────────────────────
+// ─── Debug ────────────────────────────────────────────────────────────────────
 
 export function getDebugInfo() {
-  const store   = getStore();
-  const agora   = store.salons[AGORA_SALON_ID];
-  let fileExists = false;
-  let fileSize   = 0;
-  try {
-    const stat = fs.statSync(DATA_FILE);
-    fileExists = true;
-    fileSize   = stat.size;
-  } catch { /* ignore */ }
+  const store  = getStore();
+  const agora  = store.salons[AGORA_SALON_ID];
+  let fileSize = 0;
+  try { fileSize = fs.statSync(FILE_PATH).size; } catch { /* ignore */ }
 
   return {
-    DATA_FILE,
-    fileExists,
+    FILE_PATH,
+    fileExists:    fileSize > 0,
     fileSizeBytes: fileSize,
+    globalLoaded:  !!global.__anaSalonStore,
     salonCount:    Object.keys(store.salons).length,
     nameCount:     Object.keys(store.names).length,
     agoraMsgCount: agora?.messages.length ?? 0,
     lastAgoraMsg:  agora?.messages.at(-1) ?? null,
-    globalLoaded:  !!global.__anaSalonStore,
   };
 }
 
@@ -192,12 +191,9 @@ export function getMemberStats(tokenId: number): {
   salonsCount:   number;
   lastActive:    number | null;
 } {
-  const allSalons   = Object.values(getStore().salons);
-  let totalMessages = 0;
-  let salonsCount   = 0;
+  let totalMessages = 0, salonsCount = 0;
   let lastActive: number | null = null;
-
-  for (const salon of allSalons) {
+  for (const salon of Object.values(getStore().salons)) {
     const msgs = salon.messages.filter(m => m.tokenId === tokenId);
     if (msgs.length > 0) {
       totalMessages += msgs.length;
@@ -210,10 +206,7 @@ export function getMemberStats(tokenId: number): {
 }
 
 export function createSalon(params: {
-  name:        string;
-  description: string;
-  createdBy:   number;
-  members?:    number[];
+  name: string; description: string; createdBy: number; members?: number[];
 }): Salon {
   const id = `salon_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const salon: Salon = {
@@ -243,9 +236,7 @@ export function closeSalon(id: string, byTokenId: number): { ok: boolean; error?
 }
 
 export function excludeMember(
-  salonId:  string,
-  targetId: number,
-  byTokenId: number
+  salonId: string, targetId: number, byTokenId: number
 ): { ok: boolean; error?: string } {
   const salon = getSalon(salonId);
   if (!salon) return { ok: false, error: "Salon not found" };
@@ -274,27 +265,21 @@ export function getMessages(salonId: string, since?: number): SalonMessage[] {
 }
 
 export function checkRateLimit(
-  salonId: string,
-  tokenId: number
+  salonId: string, tokenId: number
 ): { allowed: boolean; retryAfterMs?: number } {
   const salon = getSalon(salonId);
   if (!salon) return { allowed: false };
-
   const oneHourAgo  = Date.now() - 3_600_000;
   const recentCount = salon.messages.filter(
     m => m.tokenId === tokenId && m.timestamp > oneHourAgo && m.isLlm
   ).length;
-
   if (recentCount >= MAX_MESSAGES_PER_HOUR) {
     const oldest = salon.messages
       .filter(m => m.tokenId === tokenId && m.timestamp > oneHourAgo && m.isLlm)
       .sort((a, b) => a.timestamp - b.timestamp)[0];
-    const retryAfterMs = oldest
-      ? (oldest.timestamp + 3_600_000) - Date.now()
-      : 3_600_000;
+    const retryAfterMs = oldest ? (oldest.timestamp + 3_600_000) - Date.now() : 3_600_000;
     return { allowed: false, retryAfterMs: Math.max(0, retryAfterMs) };
   }
-
   return { allowed: true };
 }
 
@@ -303,7 +288,6 @@ export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
   const resolvedName = registeredName ?? (
     msg.name && msg.name !== `Normie #${msg.tokenId}` ? msg.name : `Normie #${msg.tokenId}`
   );
-
   const id   = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const full: SalonMessage = { id, ...msg, name: resolvedName };
 
@@ -311,6 +295,11 @@ export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
     const sal = s.salons[msg.salonId];
     if (!sal) {
       console.error(`[salonStore] addMessage: salon "${msg.salonId}" not found. Keys:`, Object.keys(s.salons));
+      // Auto-create agora if missing (safety net)
+      if (msg.salonId === AGORA_SALON_ID) {
+        s.salons[AGORA_SALON_ID] = makeAgora();
+        s.salons[AGORA_SALON_ID].messages.push(full);
+      }
       return;
     }
     sal.messages.push(full);
@@ -319,10 +308,8 @@ export function addMessage(msg: Omit<SalonMessage, "id">): SalonMessage {
     }
   });
 
-  console.log(
-    `[salonStore] addMessage: ${resolvedName} → "${full.content.slice(0, 50)}…" ` +
-    `(salon ${msg.salonId}, now ${getStore().salons[msg.salonId]?.messages.length ?? 0} msgs)`
-  );
+  const count = getStore().salons[msg.salonId]?.messages.length ?? 0;
+  console.log(`[salonStore] +msg from ${resolvedName} → ${count} total in ${msg.salonId}`);
 
   return full;
 }
