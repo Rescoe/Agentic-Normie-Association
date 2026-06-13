@@ -90,6 +90,7 @@ async function blobSave(store: SalonStore): Promise<void> {
     await put(BLOB_PATH, JSON.stringify(store), {
       access:           "private",
       addRandomSuffix:  false,
+      allowOverwrite:   true,
       contentType:      "application/json",
     });
     console.log(`[salonStore] blob saved — ${store.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
