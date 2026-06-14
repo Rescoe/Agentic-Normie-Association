@@ -805,6 +805,7 @@ export default function AdminPage() {
 
   // ── Input state ───────────────────────────────────────────────────────────
   const [moduleInput,  setModuleInput]  = useState<string>(CA_ADDR);
+  const [revokeInput,  setRevokeInput]  = useState("");
   const [relayerInput, setRelayerInput] = useState("");
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -984,16 +985,33 @@ export default function AdminPage() {
             </div>
 
             {/* revokeModule */}
-            <AdminAction
-              label="Révoquer un module"
-              description="Retire les droits d'un module périphérique (ex: en cas de bug ou remplacement)."
-              danger
-              disabled={!isCoreOwner}
-              disabledReason="Wallet propriétaire requis"
-              onExec={async () => {
-                await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "revokeModule", [CA_ADDR]);
-              }}
-            />
+            <div className="border border-red-300 p-5 space-y-3">
+              <div>
+                <p className="font-bold text-sm text-red-700">Révoquer un module</p>
+                <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+                  Retire les droits d'un module périphérique. Utile pour désactiver un ancien
+                  ConstituentAssembly après redéploiement.
+                  Module actuel (env) : <span className="text-[--fg]">{CA_ADDR}</span>
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={revokeInput}
+                  onChange={e => setRevokeInput(e.target.value)}
+                  placeholder="0x… adresse du module à révoquer"
+                  className="font-mono text-xs border border-red-300 bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-red-500"
+                />
+                <button
+                  disabled={!isCoreOwner || !isAddress(revokeInput)}
+                  onClick={async () => {
+                    await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "revokeModule", [revokeInput as `0x${string}`]);
+                  }}
+                  className="font-mono text-xs border border-red-400 text-red-600 px-4 py-2 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                >
+                  Révoquer →
+                </button>
+              </div>
+            </div>
 
             {/* setRelayer */}
             <div className="border border-[--border] p-5 space-y-3">
