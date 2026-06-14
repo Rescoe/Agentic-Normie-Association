@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { ZoomableImage } from "@/components/ZoomableImage";
 
 export const metadata = {
   title: "Architecture — ANA",
@@ -77,31 +78,20 @@ export default function ArchitecturePage() {
               sub="Ethereum mainnet (Normies ERC-721) + Base mainnet (toute la logique ANA). Les acteurs : le déployeur (owner), les Normies-membres, et le relayer backend."
             />
 
-            {/* Image portrait + fiches acteurs côte à côte */}
-            <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-8 items-start">
+            {/* Texte gauche + image droite */}
+            <div className="flex flex-col lg:flex-row gap-8 items-start">
 
-              {/* Diagramme — colonne gauche, sticky pendant le scroll des cards */}
-              <div className="border border-[--border] bg-[--bg] p-2 lg:sticky lg:top-24">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src="/architecture-diagram.png"
-                  alt="Diagramme des contrats ANA — Ethereum + Base, AssociationCore, modules périphériques"
-                  className="w-full h-auto object-contain"
-                />
-              </div>
-
-              {/* Fiches acteurs — colonne droite, empilées */}
-              <div className="space-y-4">
+              {/* Fiches acteurs — gauche, compactes */}
+              <div className="space-y-3 lg:max-w-xs xl:max-w-sm flex-shrink-0">
                 {[
                   {
                     actor: "Normie membre",
                     actions: [
-                      "register(attestation, sig) → AssociationCore",
-                      "castVote(tokenId, role, candidateId) → ConstituentAssembly",
-                      "initiateWorkSession() → WorkRegistry (quand calendrier dû)",
-                      "triggerEvent(eventId) → GovernanceCalendar (quand dû)",
-                      "createCollection(tokenId, name, sym) → CollectionFactory",
-                      "withdraw() → TreasuryModule (si role holder)",
+                      "register(attestation, sig)",
+                      "castVote(tokenId, role, candidateId)",
+                      "initiateWorkSession()",
+                      "createCollection(tokenId, name, sym)",
+                      "withdraw() — si role holder",
                     ],
                     color: "border-blue-200 bg-blue-50/30",
                     badge: "text-blue-700 border-blue-300",
@@ -109,12 +99,11 @@ export default function ArchitecturePage() {
                   {
                     actor: "Owner / Deployer",
                     actions: [
-                      "authorizeModule(CA) → AssociationCore",
-                      "openSession() / closeSession() → ConstituentAssembly",
-                      "setSchedule(ts, period, active) → WorkRegistry",
-                      "initializeFoundingSchedule() → GovernanceCalendar",
-                      "registerFactory(type, addr) → FactoryRegistry",
-                      "setRelayer(addr) → AssociationCore (si clé compromise)",
+                      "authorizeModule(assembly)",
+                      "openSession() / closeSession()",
+                      "setSchedule(ts, period, active)",
+                      "registerFactory(type, addr)",
+                      "setRelayer(addr) — si clé compromise",
                     ],
                     color: "border-purple-200 bg-purple-50/30",
                     badge: "text-purple-700 border-purple-300",
@@ -122,28 +111,38 @@ export default function ArchitecturePage() {
                   {
                     actor: "Relayer backend",
                     actions: [
-                      "Vérifie ownerOf(tokenId) sur Ethereum mainnet",
-                      "Signe attestation EIP-712 (tokenId, owner, nonce, deadline)",
-                      "Le wallet Normie soumet register() avec la signature",
-                      "Le Core vérifie la signature ECDSA côté contrat",
-                      "(jamais de tx on-chain — signe seulement)",
+                      "Vérifie ownerOf(tokenId) sur Ethereum",
+                      "Signe attestation EIP-712",
+                      "Le wallet soumet register() avec la sig",
+                      "Jamais de tx on-chain — signe seulement",
                     ],
                     color: "border-orange-200 bg-orange-50/30",
                     badge: "text-orange-700 border-orange-300",
                   },
                 ].map((a) => (
-                  <div key={a.actor} className={`border ${a.color} p-5 space-y-3`}>
-                    <span className={`font-mono text-xs border px-2 py-0.5 ${a.badge}`}>{a.actor}</span>
-                    <ul className="space-y-1">
+                  <div key={a.actor} className={`border ${a.color} p-3 space-y-2`}>
+                    <span className={`font-mono text-[10px] border px-1.5 py-0.5 ${a.badge}`}>{a.actor}</span>
+                    <ul className="space-y-0.5">
                       {a.actions.map((action, i) => (
-                        <li key={i} className="font-mono text-xs text-[--fg-muted] flex gap-2">
-                          <span className="shrink-0">→</span>
+                        <li key={i} className="font-mono text-[10px] text-[--fg-muted] flex gap-1.5">
+                          <span className="shrink-0 opacity-50">→</span>
                           <span>{action}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
                 ))}
+              </div>
+
+              {/* Diagramme — droite, max width disponible, clic → plein écran */}
+              <div className="flex-1 border border-[--border] bg-[--bg] p-2 min-w-0">
+                <ZoomableImage
+                  src="/architecture-diagram.png"
+                  alt="Diagramme des contrats ANA — Ethereum + Base, AssociationCore, modules périphériques"
+                />
+                <p className="font-mono text-[10px] text-[--fg-muted] text-center mt-1 opacity-60">
+                  clic pour agrandir
+                </p>
               </div>
 
             </div>

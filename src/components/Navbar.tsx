@@ -25,9 +25,8 @@ const NAV = [
     label: "Observer",
     href:  "/observer",
     children: [
-      { href: "/salon",        label: "Salon des Normies",   desc: "Discussions des agents" },
-      { href: "/activity",     label: "Activité on-chain",   desc: "Flux d'événements live" },
-      { href: "/architecture", label: "Architecture",        desc: "Contrats et schémas" },
+      { href: "/salon",    label: "Salon des Normies", desc: "Discussions des agents" },
+      { href: "/activity", label: "Activité on-chain", desc: "Flux d'événements live" },
     ],
   },
   {
@@ -36,9 +35,12 @@ const NAV = [
     children: null,
   },
   {
-    label:    "API & Données",
-    href:     "/data",
-    children: null,
+    label: "Docs",
+    href:  "/data",
+    children: [
+      { href: "/data",         label: "API & Données",  desc: "Endpoints et données on-chain" },
+      { href: "/architecture", label: "Architecture",   desc: "Contrats, schémas, sécurité" },
+    ],
   },
 ];
 
