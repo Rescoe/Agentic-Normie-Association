@@ -795,7 +795,7 @@ export default function AdminPage() {
     address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession",
     query: { enabled: contractsDeployed, refetchInterval: 10_000 },
   });
-  const session = sessionRaw as unknown as { id: bigint; openedAt: bigint; deadline: bigint; active: boolean; resolved: boolean } | undefined;
+  const session = sessionRaw as unknown as { id: bigint; openedAt: bigint; active: boolean; resolved: boolean } | undefined;
 
   // ── Role holders ──────────────────────────────────────────────────────────
   const { data: memberTokenIds } = useReadContract({
@@ -1052,31 +1052,24 @@ export default function AdminPage() {
               </p>
             </div>
 
-            {/* Session deadline countdown */}
-            {session?.active && session.deadline > 0n && (
+            {session?.active && (
               <div className="border border-[--border] bg-[--bg-card] p-3 font-mono text-xs text-[--fg-muted]">
-                {(() => {
-                  const remaining = Number(session.deadline) - Math.floor(Date.now() / 1000);
-                  if (remaining <= 0) return <span className="text-orange-600">⏰ Session expirée — triggerClose() disponible</span>;
-                  const m = Math.floor(remaining / 60);
-                  const s = remaining % 60;
-                  return <span>⏱ Session active — fermeture dans {m}m {s}s</span>;
-                })()}
+                ⏱ Session active — fermeture manuelle requise (closeSession)
               </div>
             )}
 
             {/* openSession */}
             <AdminAction
-              label="Ouvrir la session de vote (10 min)"
+              label="Ouvrir la session de vote"
               description={
                 session?.active
                   ? "Une session est déjà active — clôturez-la d'abord."
-                  : "Démarre la phase de vote pour 10 minutes. triggerClose() disponible après expiration."
+                  : "Démarre la phase de vote. Fermeture manuelle via closeSession()."
               }
               disabled={!isCaOwner || !!session?.active}
               disabledReason={session?.active ? "Session déjà ouverte" : "Wallet propriétaire requis"}
               onExec={async () => {
-                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", [600n]);
+                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", []);
               }}
             />
 
@@ -1119,21 +1112,7 @@ export default function AdminPage() {
               }}
             />
 
-            {/* triggerClose — permissionless après deadline */}
-            <AdminAction
-              label="⏰ Clôturer après expiration (permissionless)"
-              description="Appelle triggerClose() via le relayer — disponible quand la deadline est passée."
-              disabled={!session?.active || (session?.deadline ? Number(session.deadline) > Math.floor(Date.now() / 1000) : true)}
-              disabledReason="Session non expirée ou inactive"
-              onExec={async () => {
-                const r = await fetch("/api/keeper/auto-vote", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ phase: "close" }),
-                });
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.error ?? "triggerClose failed");
-              }}
-            />
+            {/* triggerClose — disponible seulement avec le nouveau contrat (durationSeconds) */}
           </section>
 
           {/* ── WorkRegistry ── */}

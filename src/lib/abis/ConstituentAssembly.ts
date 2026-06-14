@@ -336,11 +336,6 @@ export const ConstituentAssemblyAbi = [
         "type": "uint256"
       },
       {
-        "internalType": "uint256",
-        "name": "deadline",
-        "type": "uint256"
-      },
-      {
         "internalType": "bool",
         "name": "active",
         "type": "bool"
@@ -478,13 +473,7 @@ export const ConstituentAssemblyAbi = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "durationSeconds",
-        "type": "uint256"
-      }
-    ],
+    "inputs": [],
     "name": "openSession",
     "outputs": [],
     "stateMutability": "nonpayable",
