@@ -13,7 +13,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
-import { mainnet, base, baseSepolia } from "viem/chains";
+import { mainnet, base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getLastNormieSupply, updateNormieSupply, createWork, getActiveWorks, ACTIVE_STATES } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
@@ -34,12 +34,10 @@ const mainnetClient = createPublicClient({
   transport: http(process.env.ETH_MAINNET_RPC_URL ?? "https://ethereum-rpc.publicnode.com"),
 });
 
-const ANA_CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
-const ANA_RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
-  ? (process.env.BASE_RPC_URL        ?? "https://mainnet.base.org")
-  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
-
-const baseClient = createPublicClient({ chain: ANA_CHAIN, transport: http(ANA_RPC_URL) });
+const baseClient = createPublicClient({
+  chain:     base,
+  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
+});
 
 async function getNormiesSupply(): Promise<number | null> {
   const addr = (process.env.NORMIES_CONTRACT_ADDRESS ?? process.env.NORMIES_NFT_MAINNET_ADDRESS) as `0x${string}` | undefined;

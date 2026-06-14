@@ -11,7 +11,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
-import { base, baseSepolia } from "viem/chains";
+import { base } from "viem/chains";
 import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
   getActiveWorks, getWork, updateWork, advanceState, addVote,
@@ -28,12 +28,10 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL        = "llama-3.3-70b-versatile";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
-const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
-const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
-  ? (process.env.BASE_RPC_URL        ?? "https://mainnet.base.org")
-  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
-
-const client = createPublicClient({ chain: CHAIN, transport: http(RPC_URL) });
+const client = createPublicClient({
+  chain:     base,
+  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
+});
 
 async function getMemberIds(): Promise<number[]> {
   try {
