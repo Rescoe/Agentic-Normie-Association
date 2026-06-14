@@ -7,6 +7,8 @@
  *   3. ConstituentAssembly  → authorized in Core
  *   4. WorkRegistry
  *   5. CollectionFactory
+ *   6. GovernanceCalendar   → initializeFoundingSchedule()
+ *   7. TreasuryModule
  *
  * No mock NFT needed: the relayer signs attestations off-chain,
  * so Normies ownership is verified by the relayer (not on-chain).
@@ -86,20 +88,48 @@ async function main() {
   console.log(`      ✓ ${wrAddr}`);
 
   // ── 5. CollectionFactory ──────────────────────────────────────────────────
-  console.log("\n[5/5] Deploying CollectionFactory (patched)...");
+  console.log("\n[5/7] Deploying CollectionFactory...");
   const CFF = await ethers.getContractFactory("CollectionFactory");
   const cf  = await CFF.deploy(coreAddr);
   await cf.waitForDeployment();
   const cfAddr = await cf.getAddress();
   console.log(`      ✓ ${cfAddr}`);
 
+  console.log("      → registerFactory(NORMIE_COLLECTION, collectionFactory)...");
+  const NORMIE_COLLECTION_TYPE = ethers.keccak256(ethers.toUtf8Bytes("NORMIE_COLLECTION"));
+  await (await (registry as any).registerFactory(NORMIE_COLLECTION_TYPE, cfAddr)).wait();
+  console.log("      ✓ registered in FactoryRegistry");
+
+  // ── 6. GovernanceCalendar ─────────────────────────────────────────────────
+  console.log("\n[6/7] Deploying GovernanceCalendar...");
+  const CalF = await ethers.getContractFactory("GovernanceCalendar");
+  const cal  = await CalF.deploy();
+  await cal.waitForDeployment();
+  const calAddr = await cal.getAddress();
+  console.log(`      ✓ ${calAddr}`);
+
+  console.log("      → initializeFoundingSchedule()...");
+  await (await (cal as any).initializeFoundingSchedule()).wait();
+  console.log("      ✓ founding schedule initialized");
+
+  // ── 7. TreasuryModule ─────────────────────────────────────────────────────
+  console.log("\n[7/7] Deploying TreasuryModule...");
+  const TrF      = await ethers.getContractFactory("TreasuryModule");
+  const treasury = await TrF.deploy(coreAddr);
+  await treasury.waitForDeployment();
+  const treasuryAddr = await treasury.getAddress();
+  console.log(`      ✓ ${treasuryAddr}`);
+
   // ── Transfer ownership to vault ───────────────────────────────────────────
   if (vaultAddress !== deployer.address) {
     console.log(`\n→ Transferring ownership to vault (${vaultAddress})...`);
     for (const [label, contract] of [
       ["AssociationCore",     core],
+      ["FactoryRegistry",     registry],
       ["WorkRegistry",        wr],
       ["CollectionFactory",   cf],
+      ["GovernanceCalendar",  cal],
+      ["TreasuryModule",      treasury],
     ] as const) {
       await (await (contract as any).transferOwnership(vaultAddress)).wait();
       console.log(`  ✓ ${label}`);
@@ -122,6 +152,8 @@ async function main() {
       ConstituentAssembly: assemblyAddr,
       WorkRegistry:        wrAddr,
       CollectionFactory:   cfAddr,
+      GovernanceCalendar:  calAddr,
+      TreasuryModule:      treasuryAddr,
     },
   };
 
@@ -141,17 +173,19 @@ NEXT_PUBLIC_WORK_REGISTRY_ADDRESS=${wrAddr}
 NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS=${cfAddr}
 NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS=${registryAddr}
 NEXT_PUBLIC_CONSTITUENT_ASSEMBLY_ADDRESS=${assemblyAddr}
-
-# Normies NFT — pointe vers un mock ou laisse vide sur staging
-# NORMIES_CONTRACT_ADDRESS=<mock_address_or_leave_empty>
+NEXT_PUBLIC_GOVERNANCE_CALENDAR_ADDRESS=${calAddr}
+NEXT_PUBLIC_TREASURY_MODULE_ADDRESS=${treasuryAddr}
 STAGING_SKIP_NFT_CHECK=true
 `);
   console.log("══════════════════════════════════════════════════════════");
   console.log(`  Deployment saved → deployments/${chainId}.json`);
   console.log("\n  Verify (optionnel):");
   console.log(`  npx hardhat verify --network baseSepolia ${coreAddr} "${relayerAddress}" "Agentic Normie Association" "ANA"`);
+  console.log(`  npx hardhat verify --network baseSepolia ${assemblyAddr} "${coreAddr}"`);
   console.log(`  npx hardhat verify --network baseSepolia ${wrAddr} "${coreAddr}"`);
   console.log(`  npx hardhat verify --network baseSepolia ${cfAddr} "${coreAddr}"`);
+  console.log(`  npx hardhat verify --network baseSepolia ${calAddr}`);
+  console.log(`  npx hardhat verify --network baseSepolia ${treasuryAddr} "${coreAddr}"`);
   console.log("══════════════════════════════════════════════════════════");
 }
 
