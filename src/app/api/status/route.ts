@@ -9,11 +9,12 @@ export async function GET() {
     getActiveWorks().catch(() => []),
   ]);
 
+  const session = stats.sessionState;
   const sessionPhase = !stats.deployed
     ? "pré-lancement"
-    : stats.sessionState?.resolved
+    : session?.resolved
     ? "rôles attribués"
-    : stats.sessionState?.active
+    : session?.active
     ? "AG constitutive"
     : "inscription";
 
@@ -21,10 +22,16 @@ export async function GET() {
     deployed:      stats.deployed,
     memberCount:   stats.memberCount,
     workCount:     stats.workCount,
-    activeWorks:   activeWorks.length,
-    sessionActive: stats.sessionState?.active ?? false,
+    sessionActive: session?.active ?? false,
+    sessionDeadline: session?.deadline ?? 0,
     sessionPhase,
-    chain:         process.env.NEXT_PUBLIC_CHAIN === "base" ? "Base" : "Base Sepolia",
-    updatedAt:     Date.now(),
+    activeWorks:   activeWorks.map(w => ({
+      id:    w.id,
+      title: w.title,
+      state: w.state,
+      isFoundingWork: w.isFoundingWork ?? false,
+    })),
+    chain:     "Base",
+    updatedAt: Date.now(),
   });
 }

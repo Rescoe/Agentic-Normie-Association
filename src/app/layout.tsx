@@ -3,6 +3,7 @@ import { Space_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { Providers } from "@/components/Providers";
+import { LiveEventsBanner } from "@/components/LiveEventsBanner";
 import "./globals.css";
 
 const spaceMono = Space_Mono({
@@ -76,6 +77,7 @@ export default function RootLayout({
   return (
     <html lang="fr" className={`${spaceMono.variable} ${jakarta.variable}`}>
       <body className="font-sans bg-[--bg] text-[--fg]">
+        <LiveEventsBanner />
         <Providers>{children}</Providers>
         <Analytics />
 

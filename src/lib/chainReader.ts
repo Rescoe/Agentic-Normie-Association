@@ -46,7 +46,7 @@ const CORE_ABI = parseAbi([
 ]);
 
 const ASSEMBLY_ABI = parseAbi([
-  "function currentSession() external view returns (uint256 id, uint256 openedAt, uint256 closedAt, bool active, bool resolved)",
+  "function currentSession() external view returns (uint256 id, uint256 openedAt, uint256 closedAt, uint256 deadline, bool active, bool resolved)",
   "function getElectableRoles() external view returns (bytes32[])",
   "function getVoteCount(bytes32 role, uint256 candidateTokenId) external view returns (uint256)",
   "function getLeader(bytes32 role) external view returns (uint256 tokenId, uint256 count)",
@@ -141,6 +141,7 @@ export interface SessionState {
   id:        number;
   openedAt:  number;
   closedAt:  number;
+  deadline:  number;
   active:    boolean;
   resolved:  boolean;
 }
@@ -153,11 +154,12 @@ export async function readCurrentSession(): Promise<SessionState | null> {
       abi: ASSEMBLY_ABI,
       functionName: "currentSession",
     });
-    const s = raw as unknown as { id: bigint; openedAt: bigint; closedAt: bigint; active: boolean; resolved: boolean };
+    const s = raw as unknown as { id: bigint; openedAt: bigint; closedAt: bigint; deadline: bigint; active: boolean; resolved: boolean };
     return {
       id:       Number(s.id),
       openedAt: Number(s.openedAt),
       closedAt: Number(s.closedAt),
+      deadline: Number(s.deadline),
       active:   s.active,
       resolved: s.resolved,
     };
