@@ -18,7 +18,7 @@ import {
   CONTRACT_ADDRESSES, ROLES, ROLE_LABELS,
 } from "@/lib/contracts";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
-import { addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
+import { addMessage, createSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 
 const GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL     = "llama-3.3-70b-versatile";
@@ -129,6 +129,20 @@ Format (une ligne par rôle):\n${roleEntries.map(([n, h]) => `${ROLE_LABELS[h as
   return decisions;
 }
 
+async function getOrCreateVoteSalon(sessionId: number): Promise<string> {
+  const salonName = `AG Constitutive — Session #${sessionId}`;
+  const all = await listSalons();
+  const existing = all.find(s => s.name === salonName);
+  if (existing) return existing.id;
+  const salon = await createSalon({
+    name: salonName,
+    description: `Candidatures et votes automatiques des Normies pour l'assemblée générale constitutive (session #${sessionId}).`,
+    createdBy: 0,
+    members: [],
+  });
+  return salon.id;
+}
+
 async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; failed: string[] }> {
   const key = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
   if (!key) throw new Error("RELAYER_PRIVATE_KEY not configured");
@@ -149,7 +163,9 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
       });
       ok++;
     } catch (e) {
-      failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("AlreadyVotedForRole")) { ok++; continue; }
+      failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 80)}`);
     }
   }
   return { ok, failed };
@@ -173,6 +189,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ phase: "close", txHash: hash });
     } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
   }
+
+  // Read session id for salon naming
+  let sessionId = 0;
+  try {
+    const raw = await pub.readContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession" });
+    const t = raw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean];
+    sessionId = Number(t[0]);
+  } catch { /* non-blocking — fall back to salon_vote_ag_0 */ }
+
+  const voteSalonId = await getOrCreateVoteSalon(sessionId);
 
   let memberIds: number[];
   try {
@@ -199,14 +225,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Post candidacy announcements to Agora (visible to all)
+  // Post candidacy announcements to the dedicated vote salon
   for (const cand of candidacies) {
     const persona = personas.find(p => p.tokenId === cand.tokenId);
     const content = cand.roleNames.length > 0
       ? `🙋 Je me présente pour : **${cand.roleNames.join(", ")}** — ${cand.reasoning}`
       : `Je ne me présente pour aucun rôle cette fois. ${cand.reasoning}`;
     await addMessage({
-      salonId:   AGORA_SALON_ID,
+      salonId:   voteSalonId,
       tokenId:   cand.tokenId,
       name:      cand.name,
       imageUrl:  persona?.imageUrl ?? "",
@@ -216,12 +242,23 @@ export async function POST(req: NextRequest) {
     }).catch(() => null);
   }
 
+  // Single announcement in Agora so members can find the vote salon
+  await addMessage({
+    salonId:   AGORA_SALON_ID,
+    tokenId:   0,
+    name:      "ANA",
+    imageUrl:  "",
+    content:   `🗳️ L'AG constitutive (session #${sessionId}) est en cours. Retrouvez les candidatures et votes dans le salon dédié.`,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   if (phase === "candidacy") return NextResponse.json({ phase: "candidacy", memberCount: memberIds.length, candidacies });
 
   const voteRes    = await Promise.allSettled(personas.map(p => decideAllVotes(p, candidacies, personas)));
   const allDecisions = voteRes.filter((r): r is PromiseFulfilledResult<VoteDecision[]> => r.status === "fulfilled").flatMap(r => r.value);
 
-  // Post one vote-summary message per voter to Agora
+  // Post one vote-summary message per voter to the vote salon
   for (const voter of personas) {
     const myDecisions = allDecisions.filter(d => d.voterTokenId === voter.tokenId);
     if (myDecisions.length === 0) continue;
@@ -229,11 +266,11 @@ export async function POST(req: NextRequest) {
       .map(d => `${d.roleLabel} → ${d.candidateName} (#${d.candidateTokenId})`)
       .join(" · ");
     await addMessage({
-      salonId:   AGORA_SALON_ID,
+      salonId:   voteSalonId,
       tokenId:   voter.tokenId,
       name:      voter.name,
       imageUrl:  voter.imageUrl ?? "",
-      content:   `🗳️ Mes votes pour l'AG : ${summary}`,
+      content:   `🗳️ Mes votes : ${summary}`,
       isLlm:     true,
       timestamp: Date.now(),
     }).catch(() => null);
