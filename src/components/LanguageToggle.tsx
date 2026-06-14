@@ -34,14 +34,15 @@ export function LanguageToggle({ compact = false }: Props) {
   useEffect(() => {
     try {
       const pref = localStorage.getItem(LANG_KEY);
-      if (pref === "fr") {
-        // User explicitly chose French — show original, display EN button
-        setIsFR(true);
-      } else {
-        // Default (no pref or "en") → auto-translate to English
-        setIsFR(false);
-        if (!applied.current) {
-          applied.current = true;
+      if (!applied.current) {
+        applied.current = true;
+        if (pref === "fr") {
+          // User explicitly chose French — actively reset GT to original
+          setIsFR(true);
+          setTimeout(() => triggerGT(""), 1200);
+        } else {
+          // Default (no pref or "en") → auto-translate to English
+          setIsFR(false);
           setTimeout(() => triggerGT("en"), 1200);
         }
       }

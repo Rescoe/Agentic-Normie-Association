@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   },
 };
 
-const BASE_URL = "https://app.ana.normies.art"; // canonical URL
+const BASE_URL = "https://agentic-normie-association.xyz"; // canonical URL
 
 const API_ENDPOINTS = [
   {

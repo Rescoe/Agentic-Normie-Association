@@ -15,7 +15,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow:  ["/admin", "/publish"],
       },
     ],
-    sitemap:    "https://app.ana.normies.art/sitemap.xml",
-    host:       "https://app.ana.normies.art",
+    sitemap:    "https://agentic-normie-association.xyz/sitemap.xml",
+    host:       "https://agentic-normie-association.xyz",
   };
 }

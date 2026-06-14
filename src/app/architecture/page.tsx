@@ -77,59 +77,17 @@ export default function ArchitecturePage() {
               sub="Ethereum mainnet (Normies ERC-721) + Base mainnet (toute la logique ANA). Les acteurs : le déployeur (owner), les Normies-membres, et le relayer backend."
             />
 
-            {/* Diagramme ASCII */}
-            <CodeBlock>{`ETHEREUM MAINNET
-┌──────────────────────────────────────────────────────────────────┐
-│  Normies ERC-721  (0x9Eb6E2…)                                    │
-│  ownerOf(tokenId) → wallet                                       │
-│  Transfer events → burn → création automatique (GovernanceCalendar) │
-└──────────────────────┬───────────────────────────────────────────┘
-                       │  Relayer vérifie ownerOf (hors-chaîne)
-                       │  Signe une attestation EIP-712
-                       ▼
-BASE MAINNET
-┌──────────────────────────────────────────────────────────────────┐
-│  AssociationCore  [IMMUABLE]                                      │
-│  ├── members[tokenId]        → Member{ownerAddress, registeredAt}│
-│  ├── roles[bytes32]          → RoleAssignment{tokenId, holder}   │
-│  ├── authorizedModules[addr] → bool                              │
-│  └── usedNonces[nonce]       → bool (anti-replay)                │
-│                                                                  │
-│  ← register(attestation, sig)    appelé par le wallet Normie     │
-│  ← grantRole(role, tokenId)      appelé par modules autorisés    │
-│  ← authorizeModule(addr)         appelé par l'owner              │
-└──┬───────────────┬────────────────────┬────────────────┬─────────┘
-   │ lit membres   │ écrit rôles        │ lit membres    │ lit rôles
-   ▼               ▼                    ▼                ▼
-┌──────────────┐  ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐
-│ Constituent  │  │ GovernanceCal.│  │ WorkRegistry │  │ TreasuryModule   │
-│ Assembly     │  │               │  │  v2          │  │                  │
-│              │  │ events[id]    │  │ works[id]    │  │ balances[role]   │
-│ sessions[id] │  │ INSCRIPTION   │  │ sessions[n]  │  │ splits BPS/10000 │
-│ voteCounts   │  │ ELECTION      │  │ schedule     │  │ withdraw() pull  │
-│ hasVoted[][] │  │ GENERAL_ASSEM │  │              │  │                  │
-│              │  │ WORK_SESSION  │  │ permissionless│  │ receive() split  │
-│ closeSession │  │ BURN_CREATION │  │ trigger      │  │ auto à reception │
-│ → grantRole()│  │               │  │              │  │                  │
-└──────────────┘  └───────────────┘  └──────────────┘  └──────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│  FactoryRegistry  [ANNUAIRE]                                      │
-│  factories[bytes32] → address                                    │
-│  keccak256("NORMIE_COLLECTION") → CollectionFactory.address      │
-│                                                                  │
-│  ← registerFactory(type, addr)  owner seulement                  │
-│  ← getFactory(type) → addr      lecture publique                 │
-└──────────────────────┬───────────────────────────────────────────┘
-                       │  lookup d'adresse (pas d'appel direct)
-                       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  CollectionFactory                                                │
-│  ← createCollection(tokenId, name, symbol)                       │
-│     vérifie core.isMember(tokenId) + core.getMemberOwner()       │
-│     déploie → NormieCollection (ERC-721 fully on-chain)          │
-│  normieCollections[tokenId][] → adresses des collections         │
-└──────────────────────────────────────────────────────────────────┘`}</CodeBlock>
+            {/* Diagramme des interactions — image depuis /public */}
+            <div className="border border-[--border] bg-[--bg] p-2 overflow-hidden">
+              {/* Dépose ton image dans public/architecture-diagram.png */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/architecture-diagram.png"
+                alt="Diagramme des contrats ANA — Ethereum + Base, AssociationCore, modules périphériques"
+                className="w-full h-auto object-contain"
+                style={{ maxHeight: 640 }}
+              />
+            </div>
 
             {/* Légende acteurs */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
