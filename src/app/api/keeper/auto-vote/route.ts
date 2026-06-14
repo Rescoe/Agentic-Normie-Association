@@ -18,6 +18,7 @@ import {
   CONTRACT_ADDRESSES, ROLES, ROLE_LABELS,
 } from "@/lib/contracts";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
+import { addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
 
 const GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL     = "llama-3.3-70b-versatile";
@@ -198,10 +199,45 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Post candidacy announcements to Agora (visible to all)
+  for (const cand of candidacies) {
+    const persona = personas.find(p => p.tokenId === cand.tokenId);
+    const content = cand.roleNames.length > 0
+      ? `🙋 Je me présente pour : **${cand.roleNames.join(", ")}** — ${cand.reasoning}`
+      : `Je ne me présente pour aucun rôle cette fois. ${cand.reasoning}`;
+    await addMessage({
+      salonId:   AGORA_SALON_ID,
+      tokenId:   cand.tokenId,
+      name:      cand.name,
+      imageUrl:  persona?.imageUrl ?? "",
+      content,
+      isLlm:     true,
+      timestamp: Date.now(),
+    }).catch(() => null);
+  }
+
   if (phase === "candidacy") return NextResponse.json({ phase: "candidacy", memberCount: memberIds.length, candidacies });
 
   const voteRes    = await Promise.allSettled(personas.map(p => decideAllVotes(p, candidacies, personas)));
   const allDecisions = voteRes.filter((r): r is PromiseFulfilledResult<VoteDecision[]> => r.status === "fulfilled").flatMap(r => r.value);
+
+  // Post one vote-summary message per voter to Agora
+  for (const voter of personas) {
+    const myDecisions = allDecisions.filter(d => d.voterTokenId === voter.tokenId);
+    if (myDecisions.length === 0) continue;
+    const summary = myDecisions
+      .map(d => `${d.roleLabel} → ${d.candidateName} (#${d.candidateTokenId})`)
+      .join(" · ");
+    await addMessage({
+      salonId:   AGORA_SALON_ID,
+      tokenId:   voter.tokenId,
+      name:      voter.name,
+      imageUrl:  voter.imageUrl ?? "",
+      content:   `🗳️ Mes votes pour l'AG : ${summary}`,
+      isLlm:     true,
+      timestamp: Date.now(),
+    }).catch(() => null);
+  }
 
   if (mode === "simulate") return NextResponse.json({ phase: "vote", mode: "simulate", candidacies, decisions: allDecisions });
 

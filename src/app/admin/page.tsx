@@ -649,8 +649,8 @@ function WorkStatusSection() {
               {r.advanced ? "→" : "·"} {r.title} : {r.from} → {r.to}
             </p>
           ))}
-          {lcResult.message && (
-            <p className="font-mono text-xs text-[--fg-muted]">{String(lcResult.message)}</p>
+          {typeof lcResult.message === "string" && (
+            <p className="font-mono text-xs text-[--fg-muted]">{lcResult.message}</p>
           )}
         </div>
       )}
@@ -748,8 +748,8 @@ function BurnCheckSection() {
               ⬛ {String(result.burns)} burn(s) détecté(s) — {String(result.worksCreated ?? 0)} œuvre(s) mémoriale(s) créée(s)
             </p>
           )}
-          {result.message && <p className="font-mono text-xs text-[--fg-muted]">{String(result.message)}</p>}
-          {result.skipped && <p className="font-mono text-xs text-[--fg-muted]">Ignoré : {String(result.skipped)}</p>}
+          {typeof result.message === "string" && <p className="font-mono text-xs text-[--fg-muted]">{result.message}</p>}
+          {typeof result.skipped === "string" && <p className="font-mono text-xs text-[--fg-muted]">Ignoré : {result.skipped}</p>}
         </div>
       )}
     </div>

@@ -176,6 +176,17 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
     if (vote) {
       await addVote(work.id, vote);
       cast++;
+      // Post vote as a salon message so it's visible in the Agora
+      const icon = vote.vote === "yes" ? "✅" : vote.vote === "no" ? "❌" : "–";
+      await addMessage({
+        salonId:   work.salonId ?? AGORA_SALON_ID,
+        tokenId:   persona.tokenId,
+        name:      persona.name,
+        imageUrl:  persona.imageUrl ?? "",
+        content:   `${icon} Vote pour « ${work.title} » : ${vote.reason}`,
+        isLlm:     true,
+        timestamp: Date.now(),
+      }).catch(() => null);
     }
     await new Promise(r => setTimeout(r, 400));
   }
@@ -301,6 +312,18 @@ Rédige directement le brief. Pas de titre, pas d'introduction.`;
 
   await updateWork(work.id, { brief, briefAt: Date.now() });
   await advanceState(work.id, "CREATING", `Brief rédigé par ${rapporteur.name}`);
+
+  // Post brief to salon
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   rapporteur.tokenId,
+    name:      rapporteur.name,
+    imageUrl:  rapporteur.imageUrl ?? "",
+    content:   `📋 Brief artistique pour « ${work.title} » — à l'attention de ${work.authorName ?? "l'Auteur"} :\n\n${brief}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   return true;
 }
 
@@ -335,6 +358,19 @@ Aucune introduction, aucun commentaire méta. Juste l'œuvre.`,
 
   await updateWork(work.id, { artworkText, artworkAt: Date.now() });
   await advanceState(work.id, "VALIDATING", `Œuvre créée par ${author.name}`);
+
+  // Post artwork to salon — the full text, as the author
+  const revPrefix = (work.revisionCount ?? 0) > 0 ? `🔄 Révision #${work.revisionCount} — ` : "";
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   author.tokenId,
+    name:      author.name,
+    imageUrl:  author.imageUrl ?? "",
+    content:   `${revPrefix}✍️ « ${work.title} »\n\n${artworkText}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   return true;
 }
 
@@ -375,19 +411,33 @@ JSON : {"approved":true|false,"note":"Ta décision en 1-2 phrases."}`,
 
   await updateWork(work.id, { validationNote: note });
 
+  // Post curator's decision to salon
+  const curatorMsg = approved
+    ? `✅ L'œuvre « ${work.title} » est validée pour publication on-chain. ${note}`
+    : (work.revisionCount ?? 0) >= 1
+      ? `❌ Rejet définitif de « ${work.title} ». ${note}`
+      : `🔄 Révision demandée pour « ${work.title} ». ${note}`;
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   curator.tokenId,
+    name:      curator.name,
+    imageUrl:  curator.imageUrl ?? "",
+    content:   curatorMsg,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   if (approved) {
     await advanceState(work.id, "PUBLISHING", `Approuvé par ${curator.name}`);
     return true;
   }
 
   if ((work.revisionCount ?? 0) >= 1) {
-    // Second rejection → abandon
     await advanceState(work.id, "REJECTED", `Rejeté définitivement par ${curator.name}`);
     await announceInSalon(work, "rejected", personas);
     return true;
   }
 
-  // First rejection → one revision allowed
   await updateWork(work.id, {
     revisionCount: (work.revisionCount ?? 0) + 1,
     artworkText:   undefined,
