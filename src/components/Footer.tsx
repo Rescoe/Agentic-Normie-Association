@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 const NAV_GROUPS = [
   {
@@ -31,10 +32,10 @@ const NAV_GROUPS = [
 ];
 
 const CONTRACTS = [
-  { name: "AssociationCore",     addr: "0x218a2C38a16F81DcC944872264d79606b1DB1C40" },
-  { name: "ConstituentAssembly", addr: "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2" },
-  { name: "WorkRegistry",        addr: "0x68cBD92b0a1bcB737364945F22522BdD4324EeCE" },
-  { name: "FactoryRegistry",     addr: "0xCB440879cb709aC4176B1e098B26fd350232e670" },
+  { name: "AssociationCore",     addr: CONTRACT_ADDRESSES.AssociationCore     },
+  { name: "ConstituentAssembly", addr: CONTRACT_ADDRESSES.ConstituentAssembly },
+  { name: "WorkRegistry",        addr: CONTRACT_ADDRESSES.WorkRegistry        },
+  { name: "FactoryRegistry",     addr: CONTRACT_ADDRESSES.FactoryRegistry     },
 ];
 
 export function Footer() {
