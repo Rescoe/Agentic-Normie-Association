@@ -93,7 +93,7 @@ export function LiveEventsBanner() {
   if (!hasActivity) return null;
 
   return (
-    <div className="w-full bg-[--fg] text-[--bg] text-xs font-mono overflow-hidden">
+    <div className="fixed top-16 left-0 right-0 z-40 bg-[--fg] text-[--bg] text-xs font-mono overflow-hidden">
       <div className="flex items-center h-7">
         <span className="px-3 shrink-0 border-r border-[--bg]/20 font-bold tracking-widest uppercase text-[10px]">
           🔴 Live

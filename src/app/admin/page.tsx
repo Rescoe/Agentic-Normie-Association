@@ -815,9 +815,15 @@ export default function AdminPage() {
     address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "authorizedModules",
     args: [CA_ADDR], query: { enabled: contractsDeployed },
   });
-  const { data: sessionRaw } = useReadContract({
+  const { data: sessionRaw, isLoading: sessionLoading } = useReadContract({
     address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession",
-    query: { enabled: contractsDeployed, refetchInterval: 10_000 },
+    query: {
+      enabled: contractsDeployed,
+      refetchInterval: 5_000,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+    },
   });
   const session = sessionRaw as unknown as { id: bigint; openedAt: bigint; deadline: bigint; active: boolean; resolved: boolean } | undefined;
 
@@ -947,12 +953,24 @@ export default function AdminPage() {
                   </a>
                 </div>
                 <StatusRow label="Adresse"   value={`${CA_ADDR.slice(0,10)}…${CA_ADDR.slice(-6)}`} />
-                <StatusRow label="Session #" value={session ? String(session.id) : "0"} />
+                <StatusRow label="Session #" value={sessionLoading ? "…" : session ? String(session.id) : "0"} />
                 <StatusRow
                   label="Statut session"
-                  value={session?.active ? "Ouverte" : session?.resolved ? "Clôturée" : "En attente"}
+                  value={
+                    sessionLoading ? "Chargement…" :
+                    session?.active ? "🟢 Ouverte" :
+                    session?.resolved ? "Clôturée" :
+                    session?.id ? "Expirée" :
+                    "En attente"
+                  }
                   ok={session?.active}
                 />
+                {session?.active && session.deadline && (
+                  <StatusRow
+                    label="Deadline"
+                    value={new Date(Number(session.deadline) * 1000).toLocaleTimeString("fr-FR")}
+                  />
+                )}
               </div>
             </div>
 
@@ -1084,12 +1102,18 @@ export default function AdminPage() {
             <AdminAction
               label="Ouvrir la session de vote (10 min)"
               description={
-                session?.active
+                sessionLoading
+                  ? "Lecture de l'état de la session…"
+                  : session?.active
                   ? "Une session est déjà active — clôturez-la d'abord."
                   : "Démarre la phase de vote pour 10 minutes. triggerClose() disponible après expiration."
               }
-              disabled={!isCaOwner || !!session?.active}
-              disabledReason={session?.active ? "Session déjà ouverte" : "Wallet propriétaire requis"}
+              disabled={!isCaOwner || !!session?.active || sessionLoading}
+              disabledReason={
+                sessionLoading ? "Lecture en cours…" :
+                session?.active ? "Session déjà ouverte" :
+                "Wallet propriétaire requis"
+              }
               onExec={async () => {
                 await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", [600n]);
               }}
@@ -1098,9 +1122,15 @@ export default function AdminPage() {
             {/* Lancer le vote automatique (candidature + votes via LLM) */}
             <AdminAction
               label="🤖 Lancer le vote automatique (LLM + relayer)"
-              description="Phase candidature puis vote : chaque Normie choisit ses rôles et vote via son persona LLM. Le relayer soumet les tx."
-              disabled={!session?.active}
-              disabledReason="Ouvrez une session d'abord"
+              description={
+                sessionLoading
+                  ? "Vérification de la session en cours…"
+                  : session?.active
+                  ? "Phase candidature puis vote : chaque Normie choisit ses rôles et vote via son persona LLM. Le relayer soumet les tx."
+                  : "⚠ Aucune session active — ouvrez une session de vote d'abord."
+              }
+              disabled={!session?.active || sessionLoading}
+              disabledReason={sessionLoading ? "Chargement…" : "Ouvrez une session d'abord"}
               onExec={async () => {
                 const r1 = await fetch("/api/keeper/auto-vote", {
                   method: "POST", headers: { "Content-Type": "application/json" },
@@ -1123,8 +1153,9 @@ export default function AdminPage() {
               label="Clôturer manuellement (owner)"
               description="Ferme le vote avant expiration. Attribue les 6 rôles on-chain."
               danger
-              disabled={!isCaOwner || !session?.active || isCAAuthorized === false}
+              disabled={!isCaOwner || !session?.active || isCAAuthorized === false || sessionLoading}
               disabledReason={
+                sessionLoading ? "Chargement…" :
                 !session?.active ? "Aucune session active" :
                 isCAAuthorized === false ? "Module non autorisé dans Core" :
                 "Wallet propriétaire requis"
@@ -1138,7 +1169,7 @@ export default function AdminPage() {
             <AdminAction
               label="⏰ Clôturer après expiration (permissionless)"
               description="Appelle triggerClose() via le relayer — disponible quand la deadline est passée."
-              disabled={!session?.active || (session?.deadline ? Number(session.deadline) > Math.floor(Date.now() / 1000) : true)}
+              disabled={sessionLoading || !session?.active || (session?.deadline ? Number(session.deadline) > Math.floor(Date.now() / 1000) : true)}
               disabledReason="Session non expirée ou inactive"
               onExec={async () => {
                 const r = await fetch("/api/keeper/auto-vote", {
