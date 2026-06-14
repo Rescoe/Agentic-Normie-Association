@@ -154,14 +154,15 @@ export async function readCurrentSession(): Promise<SessionState | null> {
       abi: ASSEMBLY_ABI,
       functionName: "currentSession",
     });
-    const s = raw as unknown as { id: bigint; openedAt: bigint; closedAt: bigint; deadline: bigint; active: boolean; resolved: boolean };
+    // viem retourne un tuple [id, openedAt, closedAt, deadline, active, resolved]
+    const t = raw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean];
     return {
-      id:       Number(s.id),
-      openedAt: Number(s.openedAt),
-      closedAt: Number(s.closedAt),
-      deadline: Number(s.deadline),
-      active:   s.active,
-      resolved: s.resolved,
+      id:       Number(t[0]),
+      openedAt: Number(t[1]),
+      closedAt: Number(t[2]),
+      deadline: Number(t[3]),
+      active:   Boolean(t[4]),
+      resolved: Boolean(t[5]),
     };
   } catch { return null; }
 }

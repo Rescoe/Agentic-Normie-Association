@@ -825,7 +825,16 @@ export default function AdminPage() {
       refetchOnWindowFocus: true,
     },
   });
-  const session = sessionRaw as unknown as { id: bigint; openedAt: bigint; deadline: bigint; active: boolean; resolved: boolean } | undefined;
+  // viem retourne un tuple indexé [id, openedAt, closedAt, deadline, active, resolved]
+  const sessionTuple = sessionRaw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean] | undefined;
+  const session = sessionTuple ? {
+    id:       sessionTuple[0],
+    openedAt: sessionTuple[1],
+    closedAt: sessionTuple[2],
+    deadline: sessionTuple[3],
+    active:   Boolean(sessionTuple[4]),
+    resolved: Boolean(sessionTuple[5]),
+  } : undefined;
 
   // ── Role holders ──────────────────────────────────────────────────────────
   const { data: memberTokenIds } = useReadContract({
