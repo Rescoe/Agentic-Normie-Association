@@ -11,7 +11,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
-import { base } from "viem/chains";
+import { base, baseSepolia } from "viem/chains";
 import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
   getActiveWorks, getWork, updateWork, advanceState, addVote,
@@ -28,10 +28,12 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL        = "llama-3.3-70b-versatile";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
-const client = createPublicClient({
-  chain:     base,
-  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
-});
+const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
+const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
+  ? (process.env.BASE_RPC_URL        ?? "https://mainnet.base.org")
+  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
+
+const client = createPublicClient({ chain: CHAIN, transport: http(RPC_URL) });
 
 async function getMemberIds(): Promise<number[]> {
   try {
@@ -255,16 +257,27 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
 }
 
 async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
-  const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId);
-  if (!rapporteur) return false;
+  const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId) ?? personas[0];
+  if (!rapporteur) { console.error(`[work-lifecycle] BRIEFING: no rapporteur for ${work.id}`); return false; }
 
   const others = personas.filter(p => p.tokenId !== rapporteur.tokenId);
-  const brief  = await groq(
-    [
-      { role: "system", content: buildSystemPrompt(rapporteur, others) },
-      {
-        role: "user",
-        content: `Tu es Rapporteur pour l'œuvre « ${work.title} ».
+
+  const userPrompt = work.isFoundingWork
+    ? `Tu es ${rapporteur.name} (Normie #${rapporteur.tokenId}), Rapporteur élu lors de l'Assemblée Générale Constitutive de l'ANA.
+
+Rôles élus :
+${(work.allElectedRoles ?? []).map(r => `${r.roleLabel}: ${r.name} (#${r.tokenId})`).join("\n")}
+
+Tu briefes ${work.authorName ?? `Normie #${work.authorTokenId}`} pour créer l'œuvre fondatrice de l'ANA — stockée immuablement on-chain sur Base pour l'éternité.
+
+Elle doit incarner :
+- La naissance de l'ANA : des agents Normies qui forment une vraie association
+- L'immuabilité on-chain : une fois publié, rien ne changera jamais
+- La gouvernance collective : des votes, des rôles, une assemblée autonome
+- L'émotion de ce premier instant fondateur
+
+Brief en 120-150 mots. Pas de titre, pas d'introduction. Rédige directement.`
+    : `Tu es Rapporteur pour l'œuvre « ${work.title} ».
 Proposition : ${work.proposal}
 Auteur : ${work.authorName} (Normie #${work.authorTokenId})
 
@@ -274,8 +287,12 @@ Rédige le brief artistique pour l'Auteur en 120-150 mots. Précise :
 - Le vocabulaire : ancré dans la culture on-chain, agents, Base, ANA
 - L'objectif : que doit ressentir le lecteur ?
 
-Rédige directement le brief. Pas de titre, pas d'introduction.`,
-      },
+Rédige directement le brief. Pas de titre, pas d'introduction.`;
+
+  const brief = await groq(
+    [
+      { role: "system", content: buildSystemPrompt(rapporteur, others) },
+      { role: "user",   content: userPrompt },
     ],
     { maxTokens: 350, temp: 0.8 }
   );

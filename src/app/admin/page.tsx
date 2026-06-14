@@ -558,6 +558,204 @@ function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
   );
 }
 
+// ─── WorkStatusSection ────────────────────────────────────────────────────────
+
+type ANAWorkSummary = {
+  id: string; title: string; state: string; isFoundingWork?: boolean; isBurnMemorial?: boolean;
+  proposedByName: string; proposedAt: number; stateHistory: Array<{ state: string; at: number; note?: string }>;
+};
+
+const STATE_COLOR: Record<string, string> = {
+  PROPOSED:     "text-blue-600",
+  VOTE_OPEN:    "text-yellow-600",
+  VOTE_TALLIED: "text-orange-600",
+  BRIEFING:     "text-purple-600",
+  CREATING:     "text-indigo-600",
+  VALIDATING:   "text-cyan-600",
+  PUBLISHING:   "text-teal-600",
+  PUBLISHED:    "text-green-600",
+  REJECTED:     "text-red-600",
+};
+
+function WorkStatusSection() {
+  const [works,   setWorks]   = useState<ANAWorkSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
+  const [lcError,  setLcError]  = useState<string | null>(null);
+  const [lcRunning, setLcRunning] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/works");
+      if (r.ok) setWorks(await r.json() as ANAWorkSummary[]);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const runLifecycle = async () => {
+    setLcRunning(true); setLcResult(null); setLcError(null);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) setLcError((d.error as string) ?? `HTTP ${r.status}`);
+      else { setLcResult(d); void refresh(); }
+    } catch (e) {
+      setLcError(e instanceof Error ? e.message : String(e));
+    } finally { setLcRunning(false); }
+  };
+
+  const activeWorks = works.filter(w =>
+    ["PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING"].includes(w.state)
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={runLifecycle}
+          disabled={lcRunning}
+          className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+        >
+          {lcRunning ? "En cours…" : "🎨 Déclencher work-lifecycle"}
+        </button>
+        <button
+          onClick={() => void refresh()}
+          disabled={loading}
+          className="font-mono text-xs border border-[--border] px-4 py-2.5 hover:bg-[--bg-card] disabled:opacity-40"
+        >
+          {loading ? "…" : "↻ Rafraîchir"}
+        </button>
+      </div>
+
+      {lcError && (
+        <div className="border border-red-300 bg-red-50/20 px-4 py-3">
+          <p className="font-mono text-xs text-red-600">{lcError}</p>
+        </div>
+      )}
+
+      {lcResult && (
+        <div className="border border-green-300 bg-green-50/20 px-4 py-3 space-y-1">
+          <p className="font-mono text-xs font-bold text-green-700">
+            ✓ {String(lcResult.advanced ?? 0)} / {String(lcResult.processed ?? 0)} œuvres avancées
+            {(lcResult.foundingCreated as boolean) && " — ★ Œuvre fondatrice créée !"}
+          </p>
+          {Array.isArray(lcResult.results) && (lcResult.results as Array<{title: string; from: string; to: string; advanced: boolean}>).map((r, i) => (
+            <p key={i} className="font-mono text-xs text-[--fg-muted]">
+              {r.advanced ? "→" : "·"} {r.title} : {r.from} → {r.to}
+            </p>
+          ))}
+          {lcResult.message && (
+            <p className="font-mono text-xs text-[--fg-muted]">{String(lcResult.message)}</p>
+          )}
+        </div>
+      )}
+
+      {/* Active works */}
+      {activeWorks.length > 0 ? (
+        <div className="space-y-2">
+          <p className="font-mono text-xs text-[--fg-muted]">{activeWorks.length} œuvre(s) active(s)</p>
+          {activeWorks.map(w => (
+            <div key={w.id} className="border border-[--border] p-4 space-y-1.5">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-bold text-sm">
+                  {w.isFoundingWork && "★ "}
+                  {w.isBurnMemorial && "⬛ "}
+                  {w.title}
+                </p>
+                <span className={`font-mono text-xs font-bold shrink-0 ${STATE_COLOR[w.state] ?? ""}`}>
+                  {w.state}
+                </span>
+              </div>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                par {w.proposedByName} · {new Date(w.proposedAt).toLocaleString("fr-FR")}
+              </p>
+              {w.stateHistory.length > 0 && (
+                <p className="font-mono text-xs text-[--fg-muted]">
+                  dernière étape : {w.stateHistory[w.stateHistory.length - 1]?.note ?? "—"}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        !loading && <p className="font-mono text-xs text-[--fg-muted]">Aucune œuvre active en cours.</p>
+      )}
+
+      {/* Published & rejected */}
+      {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").length > 0 && (
+        <details className="border border-[--border]">
+          <summary className="bg-[--bg-card] px-4 py-3 cursor-pointer font-mono text-xs text-[--fg-muted] hover:bg-[--bg]">
+            Historique ({works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").length} terminées) →
+          </summary>
+          <div className="divide-y divide-[--border]">
+            {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").map(w => (
+              <div key={w.id} className="px-4 py-3 flex items-center justify-between">
+                <p className="font-mono text-xs">{w.title}</p>
+                <span className={`font-mono text-xs font-bold ${STATE_COLOR[w.state] ?? ""}`}>{w.state}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+// ─── BurnCheckSection ─────────────────────────────────────────────────────────
+
+function BurnCheckSection() {
+  const [running, setRunning] = useState(false);
+  const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const run = async () => {
+    setRunning(true); setResult(null); setError(null);
+    try {
+      const r = await fetch("/api/keeper/check-burns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) setError((d.error as string) ?? `HTTP ${r.status}`);
+      else setResult(d);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setRunning(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={run}
+        disabled={running}
+        className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
+      >
+        {running ? "Vérification…" : "⬛ Vérifier burns Normies"}
+      </button>
+      {error && <p className="font-mono text-xs text-red-600">{error}</p>}
+      {result && (
+        <div className="border border-[--border] bg-[--bg-card] px-4 py-3 space-y-1">
+          <p className="font-mono text-xs font-bold">
+            Supply : {String(result.supply ?? "?")} · Burns : {String(result.burns ?? 0)}
+          </p>
+          {(result.burns as number) > 0 && (
+            <p className="font-mono text-xs text-orange-600">
+              ⬛ {String(result.burns)} burn(s) détecté(s) — {String(result.worksCreated ?? 0)} œuvre(s) mémoriale(s) créée(s)
+            </p>
+          )}
+          {result.message && <p className="font-mono text-xs text-[--fg-muted]">{String(result.message)}</p>}
+          {result.skipped && <p className="font-mono text-xs text-[--fg-muted]">Ignoré : {String(result.skipped)}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
@@ -939,29 +1137,27 @@ export default function AdminPage() {
             <AutoVoteSection sessionActive={session?.active ?? false} />
           </section>
 
-          {/* ── Work lifecycle ── */}
+          {/* ── Work lifecycle + status ── */}
           <section className="space-y-4 border-t border-[--border] pt-10">
             <div>
               <h2 className="text-xl font-bold">Work Lifecycle</h2>
               <p className="font-mono text-xs text-[--fg-muted] mt-1">
                 Avance toutes les œuvres actives d'un état. Crée l'œuvre fondatrice si les 6 rôles sont élus.
-                Vérifie les rôles on-chain avant toute action créative.
               </p>
             </div>
-            <AdminAction
-              label="🎨 Déclencher work-lifecycle"
-              description="Lance un tick du lifecycle : vérifie les rôles élus, crée l'œuvre fondatrice si possible, avance les œuvres en cours."
-              onExec={async () => {
-                const r = await fetch("/api/keeper/work-lifecycle", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", "x-admin-call": "1" },
-                });
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.error ?? "work-lifecycle failed");
-                console.log("[work-lifecycle]", d);
-                if (d.message) throw new Error(d.message); // surface "No active works" etc.
-              }}
-            />
+            <WorkStatusSection />
+          </section>
+
+          {/* ── Burns Normies ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Burns Normies</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Compare la supply actuelle des Normies NFT (Ethereum mainnet) à la dernière valeur enregistrée.
+                Si un burn est détecté, crée automatiquement une œuvre mémoriale.
+              </p>
+            </div>
+            <BurnCheckSection />
           </section>
 
           {/* ── Salon exchange keeper ── */}

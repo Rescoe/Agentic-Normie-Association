@@ -13,7 +13,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
-import { mainnet, base } from "viem/chains";
+import { mainnet, base, baseSepolia } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getLastNormieSupply, updateNormieSupply, createWork, getActiveWorks, ACTIVE_STATES } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
@@ -34,10 +34,12 @@ const mainnetClient = createPublicClient({
   transport: http(process.env.ETH_MAINNET_RPC_URL ?? "https://ethereum-rpc.publicnode.com"),
 });
 
-const baseClient = createPublicClient({
-  chain:     base,
-  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
-});
+const ANA_CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
+const ANA_RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
+  ? (process.env.BASE_RPC_URL        ?? "https://mainnet.base.org")
+  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
+
+const baseClient = createPublicClient({ chain: ANA_CHAIN, transport: http(ANA_RPC_URL) });
 
 async function getNormiesSupply(): Promise<number | null> {
   const addr = (process.env.NORMIES_CONTRACT_ADDRESS ?? process.env.NORMIES_NFT_MAINNET_ADDRESS) as `0x${string}` | undefined;
@@ -70,11 +72,12 @@ async function getMemberIds(): Promise<number[]> {
 }
 
 export async function POST(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const isCron     = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const cronSecret  = process.env.CRON_SECRET;
+  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isAdminCall = req.headers.get("x-admin-call") === "1";
 
-  if (!isCron) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret required" }, { status: 401 });
+  if (!isCron && !isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or x-admin-call required" }, { status: 401 });
   }
 
   const currentSupply = await getNormiesSupply();
