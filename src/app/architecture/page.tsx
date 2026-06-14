@@ -132,6 +132,127 @@ export default function ArchitecturePage() {
                     </ul>
                   </div>
                 ))}
+
+                {/* ── Contrats détaillés ─────────────────────────────────── */}
+                <p className="font-mono text-[9px] uppercase tracking-widest text-[--fg-muted] pt-3 pb-0.5">
+                  Contrats — détail
+                </p>
+
+                {/* AssociationCore */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">AssociationCore</span>
+                    <span className="font-mono text-[9px] border border-[--fg] px-1 leading-none py-0.5 text-[--fg]">IMMUABLE</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> members: tokenId → ownerAddress</li>
+                    <li><span className="opacity-50">→</span> roles: bytes32 → RoleInfo&#123;holder, since&#125;</li>
+                    <li><span className="opacity-50">→</span> usedNonces: bytes32 → bool</li>
+                    <li><span className="opacity-50">→</span> EIP-712 domain : "ANACore" v1</li>
+                    <li><span className="opacity-50">→</span> authorizeModule / revokeModule</li>
+                    <li><span className="opacity-50">→</span> setRelayer(addr) — si clé compromise</li>
+                  </ul>
+                </div>
+
+                {/* ConstituentAssembly */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">ConstituentAssembly</span>
+                    <span className="font-mono text-[9px] border border-purple-400 text-purple-700 px-1 leading-none py-0.5">GOV</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> sessions: id → &#123;openedAt, closedAt&#125;</li>
+                    <li><span className="opacity-50">→</span> hasVoted: sessionId × tokenId → bool</li>
+                    <li><span className="opacity-50">→</span> voteCounts: role × tokenId → count</li>
+                    <li><span className="opacity-50">→</span> openSession() / closeSession() — owner</li>
+                    <li><span className="opacity-50">→</span> castVote(sessionId, tokenId, role, candidateId)</li>
+                    <li><span className="opacity-50">→</span> closeSession() → core.grantRole(winner) ×6</li>
+                    <li><span className="opacity-50">→</span> 6 rôles élus : PRESIDENT, VP, SECRETARY,</li>
+                    <li><span className="opacity-50 invisible">→</span> AUTHOR, CURATOR, RAPPORTEUR</li>
+                  </ul>
+                </div>
+
+                {/* WorkRegistry */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">WorkRegistry</span>
+                    <span className="font-mono text-[9px] border border-blue-400 text-blue-700 px-1 leading-none py-0.5">CRÉATIF</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> works[]: Work&#123;id, content, authorTokenId,</li>
+                    <li><span className="opacity-50 invisible">→</span> curatorTokenId, rapporteurTokenId,</li>
+                    <li><span className="opacity-50 invisible">→</span> publishedAt, archived&#125;</li>
+                    <li><span className="opacity-50">→</span> schedule: CreationSchedule&#123;nextCreationAt,</li>
+                    <li><span className="opacity-50 invisible">→</span> periodSeconds, active&#125;</li>
+                    <li><span className="opacity-50">→</span> publish() — RAPPORTEUR ou relayer</li>
+                    <li><span className="opacity-50">→</span> archiveWork(id) — RAPPORTEUR ou relayer</li>
+                    <li><span className="opacity-50">→</span> setSchedule(ts, period, active) — owner</li>
+                  </ul>
+                  <p className="text-[9px] text-orange-600 border border-orange-200 bg-orange-50/40 px-1.5 py-1 mt-1">
+                    ⚠ Le diagramme affiche "events[]" — le stockage réel est works[] (mapping Work struct)
+                  </p>
+                </div>
+
+                {/* GovernanceCalendar */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">GovernanceCalendar</span>
+                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> 6 types d'events : INSCRIPTION_OPEN,</li>
+                    <li><span className="opacity-50 invisible">→</span> INSCRIPTION_CLOSE, ELECTION,</li>
+                    <li><span className="opacity-50 invisible">→</span> GENERAL_ASSEMBLY, WORK_SESSION,</li>
+                    <li><span className="opacity-50 invisible">→</span> BURN_CREATION</li>
+                    <li><span className="opacity-50">→</span> trigger permissionless — n'importe qui</li>
+                    <li><span className="opacity-50">→</span> récurrence configurable (periodSeconds)</li>
+                    <li><span className="opacity-50">→</span> initializeFoundingSchedule() — post-deploy</li>
+                  </ul>
+                </div>
+
+                {/* FactoryRegistry + CollectionFactory */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">FactoryRegistry</span>
+                    <span className="font-mono text-[9px] border border-green-400 text-green-700 px-1 leading-none py-0.5">DÉPLOYÉ</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> factories: bytes32 → address</li>
+                    <li><span className="opacity-50">→</span> registerFactory(type, addr) — owner</li>
+                    <li><span className="opacity-50">→</span> getFactory(type) → address — public</li>
+                    <li><span className="opacity-50">→</span> actuellement vide — CollectionFactory</li>
+                    <li><span className="opacity-50 invisible">→</span> à enregistrer après déploiement</li>
+                  </ul>
+                </div>
+
+                <div className="border border-dashed border-orange-300 p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">CollectionFactory</span>
+                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> vérifie core.isMember(tokenId)</li>
+                    <li><span className="opacity-50">→</span> déploie new NormieCollection(name, sym)</li>
+                    <li><span className="opacity-50">→</span> getCollectionsOf(tokenId) → address[]</li>
+                    <li><span className="opacity-50">→</span> NormieCollection : ERC-721 fully on-chain,</li>
+                    <li><span className="opacity-50 invisible">→</span> tokenURI() = data:application/json;base64</li>
+                  </ul>
+                </div>
+
+                {/* TreasuryModule */}
+                <div className="border border-dashed border-orange-300 p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">TreasuryModule</span>
+                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> splits en BPS (basis points, /10 000)</li>
+                    <li><span className="opacity-50">→</span> pull payment — pas de push</li>
+                    <li><span className="opacity-50">→</span> withdraw() réservé aux role holders</li>
+                    <li><span className="opacity-50">→</span> configurable par owner post-déploiement</li>
+                  </ul>
+                </div>
+
               </div>
 
               {/* Diagramme — droite, max width disponible, clic → plein écran */}
