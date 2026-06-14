@@ -597,7 +597,7 @@ export default function AdminPage() {
     address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession",
     query: { enabled: contractsDeployed, refetchInterval: 10_000 },
   });
-  const session = sessionRaw as unknown as { id: bigint; active: boolean; resolved: boolean } | undefined;
+  const session = sessionRaw as unknown as { id: bigint; openedAt: bigint; deadline: bigint; active: boolean; resolved: boolean } | undefined;
 
   // ── Role holders ──────────────────────────────────────────────────────────
   const { data: memberTokenIds } = useReadContract({
@@ -836,29 +836,61 @@ export default function AdminPage() {
               </p>
             </div>
 
+            {/* Session deadline countdown */}
+            {session?.active && session.deadline > 0n && (
+              <div className="border border-[--border] bg-[--bg-card] p-3 font-mono text-xs text-[--fg-muted]">
+                {(() => {
+                  const remaining = Number(session.deadline) - Math.floor(Date.now() / 1000);
+                  if (remaining <= 0) return <span className="text-orange-600">⏰ Session expirée — triggerClose() disponible</span>;
+                  const m = Math.floor(remaining / 60);
+                  const s = remaining % 60;
+                  return <span>⏱ Session active — fermeture dans {m}m {s}s</span>;
+                })()}
+              </div>
+            )}
+
             {/* openSession */}
             <AdminAction
-              label="Ouvrir la session de vote"
+              label="Ouvrir la session de vote (10 min)"
               description={
                 session?.active
                   ? "Une session est déjà active — clôturez-la d'abord."
-                  : "Démarre la phase de vote. Les membres pourront voter pour les 6 rôles."
+                  : "Démarre la phase de vote pour 10 minutes. triggerClose() disponible après expiration."
               }
-              disabled={!isCaOwner || session?.active}
+              disabled={!isCaOwner || !!session?.active}
               disabledReason={session?.active ? "Session déjà ouverte" : "Wallet propriétaire requis"}
               onExec={async () => {
-                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession");
+                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", [600n]);
               }}
             />
 
-            {/* closeSession */}
+            {/* Lancer le vote automatique (candidature + votes via LLM) */}
             <AdminAction
-              label="Clôturer et résoudre la session"
-              description={
-                isCAAuthorized === false
-                  ? "⚠ ConstituentAssembly n'est pas autorisé dans Core — autorisez-le d'abord."
-                  : "Ferme le vote. Calcule les leaders. Attribue les 6 rôles on-chain via Core.grantRole()."
-              }
+              label="🤖 Lancer le vote automatique (LLM + relayer)"
+              description="Phase candidature puis vote : chaque Normie choisit ses rôles et vote via son persona LLM. Le relayer soumet les tx."
+              disabled={!session?.active}
+              disabledReason="Ouvrez une session d'abord"
+              onExec={async () => {
+                const r1 = await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "candidacy" }),
+                });
+                const c = await r1.json();
+                console.log("[auto-vote] candidacy:", c);
+                const r2 = await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "vote", mode: "execute" }),
+                });
+                const v = await r2.json();
+                console.log("[auto-vote] vote:", v);
+                if (v.failed?.length) throw new Error(`${v.failed.length} votes failed: ${v.failed[0]}`);
+              }}
+            />
+
+            {/* closeSession — manuel (owner) */}
+            <AdminAction
+              label="Clôturer manuellement (owner)"
+              description="Ferme le vote avant expiration. Attribue les 6 rôles on-chain."
               danger
               disabled={!isCaOwner || !session?.active || isCAAuthorized === false}
               disabledReason={
@@ -868,6 +900,22 @@ export default function AdminPage() {
               }
               onExec={async () => {
                 await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "closeSession");
+              }}
+            />
+
+            {/* triggerClose — permissionless après deadline */}
+            <AdminAction
+              label="⏰ Clôturer après expiration (permissionless)"
+              description="Appelle triggerClose() via le relayer — disponible quand la deadline est passée."
+              disabled={!session?.active || (session?.deadline ? Number(session.deadline) > Math.floor(Date.now() / 1000) : true)}
+              disabledReason="Session non expirée ou inactive"
+              onExec={async () => {
+                const r = await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "close" }),
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error ?? "triggerClose failed");
               }}
             />
           </section>
@@ -889,6 +937,31 @@ export default function AdminPage() {
               </p>
             </div>
             <AutoVoteSection sessionActive={session?.active ?? false} />
+          </section>
+
+          {/* ── Work lifecycle ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Work Lifecycle</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Avance toutes les œuvres actives d'un état. Crée l'œuvre fondatrice si les 6 rôles sont élus.
+                Vérifie les rôles on-chain avant toute action créative.
+              </p>
+            </div>
+            <AdminAction
+              label="🎨 Déclencher work-lifecycle"
+              description="Lance un tick du lifecycle : vérifie les rôles élus, crée l'œuvre fondatrice si possible, avance les œuvres en cours."
+              onExec={async () => {
+                const r = await fetch("/api/keeper/work-lifecycle", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error ?? "work-lifecycle failed");
+                console.log("[work-lifecycle]", d);
+                if (d.message) throw new Error(d.message); // surface "No active works" etc.
+              }}
+            />
           </section>
 
           {/* ── Salon exchange keeper ── */}
