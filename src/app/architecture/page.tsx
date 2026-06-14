@@ -77,72 +77,75 @@ export default function ArchitecturePage() {
               sub="Ethereum mainnet (Normies ERC-721) + Base mainnet (toute la logique ANA). Les acteurs : le déployeur (owner), les Normies-membres, et le relayer backend."
             />
 
-            {/* Diagramme des interactions — image depuis /public */}
-            <div className="border border-[--border] bg-[--bg] p-2 overflow-hidden">
-              {/* Dépose ton image dans public/architecture-diagram.png */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/architecture-diagram.png"
-                alt="Diagramme des contrats ANA — Ethereum + Base, AssociationCore, modules périphériques"
-                className="w-full h-auto object-contain"
-                style={{ maxHeight: 640 }}
-              />
-            </div>
+            {/* Image portrait + fiches acteurs côte à côte */}
+            <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-8 items-start">
 
-            {/* Légende acteurs */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
-              {[
-                {
-                  actor: "Normie membre",
-                  actions: [
-                    "register(attestation, sig) → AssociationCore",
-                    "castVote(tokenId, role, candidateId) → ConstituentAssembly",
-                    "initiateWorkSession() → WorkRegistry (quand calendrier dû)",
-                    "triggerEvent(eventId) → GovernanceCalendar (quand dû)",
-                    "createCollection(tokenId, name, sym) → CollectionFactory",
-                    "withdraw() → TreasuryModule (si role holder)",
-                  ],
-                  color: "border-blue-200 bg-blue-50/30",
-                  badge: "text-blue-700 border-blue-300",
-                },
-                {
-                  actor: "Owner / Deployer",
-                  actions: [
-                    "authorizeModule(CA) → AssociationCore",
-                    "openSession() / closeSession() → ConstituentAssembly",
-                    "setSchedule(ts, period, active) → WorkRegistry",
-                    "initializeFoundingSchedule() → GovernanceCalendar",
-                    "registerFactory(type, addr) → FactoryRegistry",
-                    "setRelayer(addr) → AssociationCore (si clé compromise)",
-                  ],
-                  color: "border-purple-200 bg-purple-50/30",
-                  badge: "text-purple-700 border-purple-300",
-                },
-                {
-                  actor: "Relayer backend",
-                  actions: [
-                    "Vérifie ownerOf(tokenId) sur Ethereum mainnet",
-                    "Signe attestation EIP-712 (tokenId, owner, nonce, deadline)",
-                    "Le wallet Normie soumet register() avec la signature",
-                    "Le Core vérifie la signature ECDSA côté contrat",
-                    "(jamais de tx on-chain — signe seulement)",
-                  ],
-                  color: "border-orange-200 bg-orange-50/30",
-                  badge: "text-orange-700 border-orange-300",
-                },
-              ].map((a) => (
-                <div key={a.actor} className={`border ${a.color} p-5 space-y-3`}>
-                  <span className={`font-mono text-xs border px-2 py-0.5 ${a.badge}`}>{a.actor}</span>
-                  <ul className="space-y-1">
-                    {a.actions.map((action, i) => (
-                      <li key={i} className="font-mono text-xs text-[--fg-muted] flex gap-2">
-                        <span className="shrink-0">→</span>
-                        <span>{action}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+              {/* Diagramme — colonne gauche, sticky pendant le scroll des cards */}
+              <div className="border border-[--border] bg-[--bg] p-2 lg:sticky lg:top-24">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/architecture-diagram.png"
+                  alt="Diagramme des contrats ANA — Ethereum + Base, AssociationCore, modules périphériques"
+                  className="w-full h-auto object-contain"
+                />
+              </div>
+
+              {/* Fiches acteurs — colonne droite, empilées */}
+              <div className="space-y-4">
+                {[
+                  {
+                    actor: "Normie membre",
+                    actions: [
+                      "register(attestation, sig) → AssociationCore",
+                      "castVote(tokenId, role, candidateId) → ConstituentAssembly",
+                      "initiateWorkSession() → WorkRegistry (quand calendrier dû)",
+                      "triggerEvent(eventId) → GovernanceCalendar (quand dû)",
+                      "createCollection(tokenId, name, sym) → CollectionFactory",
+                      "withdraw() → TreasuryModule (si role holder)",
+                    ],
+                    color: "border-blue-200 bg-blue-50/30",
+                    badge: "text-blue-700 border-blue-300",
+                  },
+                  {
+                    actor: "Owner / Deployer",
+                    actions: [
+                      "authorizeModule(CA) → AssociationCore",
+                      "openSession() / closeSession() → ConstituentAssembly",
+                      "setSchedule(ts, period, active) → WorkRegistry",
+                      "initializeFoundingSchedule() → GovernanceCalendar",
+                      "registerFactory(type, addr) → FactoryRegistry",
+                      "setRelayer(addr) → AssociationCore (si clé compromise)",
+                    ],
+                    color: "border-purple-200 bg-purple-50/30",
+                    badge: "text-purple-700 border-purple-300",
+                  },
+                  {
+                    actor: "Relayer backend",
+                    actions: [
+                      "Vérifie ownerOf(tokenId) sur Ethereum mainnet",
+                      "Signe attestation EIP-712 (tokenId, owner, nonce, deadline)",
+                      "Le wallet Normie soumet register() avec la signature",
+                      "Le Core vérifie la signature ECDSA côté contrat",
+                      "(jamais de tx on-chain — signe seulement)",
+                    ],
+                    color: "border-orange-200 bg-orange-50/30",
+                    badge: "text-orange-700 border-orange-300",
+                  },
+                ].map((a) => (
+                  <div key={a.actor} className={`border ${a.color} p-5 space-y-3`}>
+                    <span className={`font-mono text-xs border px-2 py-0.5 ${a.badge}`}>{a.actor}</span>
+                    <ul className="space-y-1">
+                      {a.actions.map((action, i) => (
+                        <li key={i} className="font-mono text-xs text-[--fg-muted] flex gap-2">
+                          <span className="shrink-0">→</span>
+                          <span>{action}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+
             </div>
           </div>
         </section>
