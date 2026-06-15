@@ -18,7 +18,7 @@ import {
   CONTRACT_ADDRESSES, ROLES, ROLE_LABELS,
 } from "@/lib/contracts";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
-import { addMessage, createSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
+import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 
 const GROQ_URL  = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL     = "llama-3.3-70b-versatile";
@@ -113,10 +113,11 @@ Format (une ligne par rôle):\n${roleEntries.map(([n, h]) => `${ROLE_LABELS[h as
     const dedupIds  = [...new Set(validIds)];
     if (dedupIds.length === 0) continue;
 
-    const line  = resp.split("\n").find(l => l.toLowerCase().includes(label.toLowerCase())) ?? "";
+    const normalize = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const line  = resp.split("\n").find(l => normalize(l).includes(normalize(label))) ?? "";
     const match = line.match(/:\s*(\d+)/);
     let   cid   = match ? parseInt(match[1], 10) : -1;
-    if (!dedupIds.includes(cid)) cid = dedupIds[0];
+    if (!Number.isFinite(cid) || !dedupIds.includes(cid)) cid = dedupIds[0];
 
     const cand = allPersonas.find(p => p.tokenId === cid);
     decisions.push({
@@ -150,6 +151,16 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
 
   let ok = 0; const failed: string[] = [];
   for (const d of decisions) {
+    // Defensive: skip malformed decisions before hitting viem
+    if (!Number.isFinite(d.voterTokenId) || d.voterTokenId <= 0) {
+      failed.push(`invalid voterTokenId ${d.voterTokenId}`); continue;
+    }
+    if (!Number.isFinite(d.candidateTokenId) || d.candidateTokenId <= 0) {
+      failed.push(`#${d.voterTokenId}→${d.roleLabel}: invalid candidateTokenId ${d.candidateTokenId}`); continue;
+    }
+    if (!d.role || d.role.length !== 66) {
+      failed.push(`#${d.voterTokenId}→${d.roleLabel}: invalid role hash`); continue;
+    }
     try {
       const voted = await pub.readContract({
         address: CA, abi: CONSTITUENT_ASSEMBLY_ABI,
@@ -165,7 +176,7 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("AlreadyVotedForRole")) { ok++; continue; }
-      failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 80)}`);
+      failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 120)}`);
     }
   }
   return { ok, failed };
@@ -186,6 +197,17 @@ export async function POST(req: NextRequest) {
     try {
       const wallet = createWalletClient({ account: privateKeyToAccount(key), chain: CHAIN, transport: http(RPC_URL) });
       const hash = await wallet.writeContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "triggerClose", args: [] });
+      // Close the vote salon so Normies can no longer post in it
+      let closedSessionId = 0;
+      try {
+        const raw = await pub.readContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession" });
+        const t = raw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean];
+        closedSessionId = Number(t[0]);
+      } catch { /* non-blocking */ }
+      const salonName = `AG Constitutive — Session #${closedSessionId}`;
+      const all = await listSalons();
+      const voteSalon = all.find(s => s.name === salonName);
+      if (voteSalon) await closeSalon(voteSalon.id, 0).catch(() => null);
       return NextResponse.json({ phase: "close", txHash: hash });
     } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
   }
