@@ -245,25 +245,32 @@ export function ActivityClient() {
     setError(null);
 
     try {
-      // Base: ~2s/block. 100 000 blocks ≈ 2.3 days for recent events.
-      // MemberRegistered/RoleGranted: try all-time first, fall back to 7-day window.
-      const latest      = await rpcClient.getBlockNumber();
-      const recentFrom  = latest > 100_000n ? latest - 100_000n   : 0n;
-      const weekFrom    = latest > 300_000n ? latest - 300_000n   : 0n;
+      // Public Base RPC limits eth_getLogs to 2 000 blocks per request.
+      // We paginate in 2 000-block chunks and merge results.
+      const CHUNK = 2_000n;
+      const latest = await rpcClient.getBlockNumber();
 
-      // Try fromBlock, fall back to fallbackFrom if RPC rejects the range.
-      const safeGetLogs = async (
-        args: Parameters<typeof rpcClient.getLogs>[0],
-        fallbackFrom?: bigint,
+      // Recent window: 30 000 blocks ≈ 16h for votes/sessions/works
+      // Historical: 300 000 blocks ≈ 6.9 days for members/roles
+      const recentFrom = latest > 30_000n  ? latest - 30_000n  : 0n;
+      const histFrom   = latest > 300_000n ? latest - 300_000n : 0n;
+
+      const getLogsChunked = async (
+        args: Omit<Parameters<typeof rpcClient.getLogs>[0], "fromBlock" | "toBlock">,
+        from: bigint,
+        to: bigint,
       ): Promise<Awaited<ReturnType<typeof rpcClient.getLogs>>> => {
-        try { return await rpcClient.getLogs(args); }
-        catch {
-          if (fallbackFrom !== undefined) {
-            try { return await rpcClient.getLogs({ ...args, fromBlock: fallbackFrom }); }
-            catch { return []; }
-          }
-          return [];
+        const results: Awaited<ReturnType<typeof rpcClient.getLogs>> = [];
+        let cursor = from;
+        while (cursor <= to) {
+          const end = cursor + CHUNK - 1n > to ? to : cursor + CHUNK - 1n;
+          try {
+            const chunk = await rpcClient.getLogs({ ...args, fromBlock: cursor, toBlock: end });
+            results.push(...chunk);
+          } catch { /* skip failed chunk, continue */ }
+          cursor = end + 1n;
         }
+        return results;
       };
 
       const [
@@ -271,13 +278,13 @@ export function ActivityClient() {
         sessionOpenLogs, sessionCloseLogs,
         workLogs, workSessionLogs,
       ] = await Promise.all([
-        safeGetLogs({ address: CORE_ADDR, event: MEMBER_REGISTERED, fromBlock: 0n      }, weekFrom),
-        safeGetLogs({ address: CORE_ADDR, event: ROLE_GRANTED,      fromBlock: 0n      }, weekFrom),
-        safeGetLogs({ address: CA_ADDR,   event: VOTE_CAST,         fromBlock: recentFrom }),
-        safeGetLogs({ address: CA_ADDR,   event: SESSION_OPENED,    fromBlock: recentFrom }),
-        safeGetLogs({ address: CA_ADDR,   event: SESSION_CLOSED,    fromBlock: recentFrom }),
-        safeGetLogs({ address: WR_ADDR,   event: WORK_PUBLISHED,    fromBlock: recentFrom }),
-        safeGetLogs({ address: WR_ADDR,   event: WORK_SESSION_INIT, fromBlock: recentFrom }),
+        getLogsChunked({ address: CORE_ADDR, event: MEMBER_REGISTERED }, histFrom,   latest),
+        getLogsChunked({ address: CORE_ADDR, event: ROLE_GRANTED      }, histFrom,   latest),
+        getLogsChunked({ address: CA_ADDR,   event: VOTE_CAST         }, recentFrom, latest),
+        getLogsChunked({ address: CA_ADDR,   event: SESSION_OPENED    }, recentFrom, latest),
+        getLogsChunked({ address: CA_ADDR,   event: SESSION_CLOSED    }, recentFrom, latest),
+        getLogsChunked({ address: WR_ADDR,   event: WORK_PUBLISHED    }, recentFrom, latest),
+        getLogsChunked({ address: WR_ADDR,   event: WORK_SESSION_INIT }, recentFrom, latest),
       ]);
 
       const all: ActivityEvent[] = [
@@ -354,7 +361,7 @@ export function ActivityClient() {
         <div className="border border-[--border]">
           <div className="px-5 py-3 bg-[--bg-card] border-b border-[--border] flex items-center justify-between">
             <p className="font-mono text-xs text-[--fg-muted]">
-              {filtered.length} événement{filtered.length > 1 ? "s" : ""} — derniers 100 000 blocs Base (~2j)
+              {filtered.length} événement{filtered.length > 1 ? "s" : ""} — derniers ~7j Base
             </p>
           </div>
           <div className="px-5">

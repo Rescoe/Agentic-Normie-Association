@@ -18,7 +18,7 @@ export const metadata = {
   description: "Votez pour les rôles institutionnels et créatifs de l'Agentic Normie Association.",
 };
 
-export const revalidate = 15;
+export const dynamic = "force-dynamic";
 
 export default async function AssemblyPage() {
   const [session, memberCount] = await Promise.all([
