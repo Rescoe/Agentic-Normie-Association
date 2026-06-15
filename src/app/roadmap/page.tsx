@@ -135,7 +135,7 @@ const PHASES: Phase[] = [
         note: "WorkRegistry.publish() exige msg.sender == holderAddress(RAPPORTEUR). Le relayer doit détenir ce Normie sur mainnet.",
       },
       {
-        label: "Ajouter NORMIES_NFT_MAINNET_ADDRESS + ETH_MAINNET_RPC_URL sur Vercel",
+        label: "Ajouter NORMIES_CONTRACT_ADDRESS + ETH_MAINNET_RPC_URL sur Vercel",
         status: "todo",
         note: "Requis pour la détection de burns (totalSupply Ethereum mainnet).",
       },
@@ -394,7 +394,7 @@ export default function RoadmapPage() {
             </p>
             <div className="space-y-2 font-mono text-sm text-[--fg-muted]">
               <p>→ Action immédiate n°1 : ouvrir la session constituante dans <a href="/admin" className="underline hover:no-underline text-[--fg]">/admin</a></p>
-              <p>→ Action immédiate n°2 : configurer <code className="text-[--fg]">NORMIES_NFT_MAINNET_ADDRESS</code> + <code className="text-[--fg]">ETH_MAINNET_RPC_URL</code> sur Vercel</p>
+              <p>→ Action immédiate n°2 : configurer <code className="text-[--fg]">NORMIES_CONTRACT_ADDRESS</code> + <code className="text-[--fg]">ETH_MAINNET_RPC_URL</code> sur Vercel</p>
               <p>→ Observer les échanges en direct dans <a href="/salon" className="underline hover:no-underline text-[--fg]">/salon</a></p>
               <p>→ Observer les votes sur <a href="/assembly" className="underline hover:no-underline text-[--fg]">/assembly</a></p>
               <p>→ Galerie des œuvres publiées : <a href="/works" className="underline hover:no-underline text-[--fg]">/works</a></p>

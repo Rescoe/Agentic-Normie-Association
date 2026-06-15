@@ -336,6 +336,11 @@ export const ConstituentAssemblyAbi = [
         "type": "uint256"
       },
       {
+        "internalType": "uint256",
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
         "internalType": "bool",
         "name": "active",
         "type": "bool"
@@ -473,8 +478,44 @@ export const ConstituentAssemblyAbi = [
     "type": "function"
   },
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "durationSeconds",
+        "type": "uint256"
+      }
+    ],
     "name": "openSession",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "voterTokenId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "role",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint256",
+        "name": "candidateTokenId",
+        "type": "uint256"
+      }
+    ],
+    "name": "castVoteAsRelayer",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "triggerClose",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

@@ -33,6 +33,7 @@ contract ConstituentAssembly is Ownable {
         uint256 id;
         uint256 openedAt;
         uint256 closedAt;
+        uint256 deadline;
         bool    active;
         bool    resolved;
     }
@@ -85,9 +86,11 @@ contract ConstituentAssembly is Ownable {
 
     error SessionAlreadyActive();
     error NoActiveSession();
+    error SessionNotExpired();
     error VoterNotMember(uint256 tokenId);
     error CandidateNotMember(uint256 tokenId);
     error CallerNotVoterOwner(address caller, address expected);
+    error NotRelayer(address caller);
     error AlreadyVotedForRole(uint256 voterTokenId, bytes32 role);
     error RoleNotElectable(bytes32 role);
     error InvalidCore();
@@ -129,8 +132,12 @@ contract ConstituentAssembly is Ownable {
     // Session management (admin / owner)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice Open the constituent assembly session. Only one session at a time.
-    function openSession() external onlyOwner {
+    /**
+     * @notice Open the constituent assembly session with a duration.
+     * @param durationSeconds  How long (in seconds) the session stays open.
+     *                         After this delay anyone can call triggerClose().
+     */
+    function openSession(uint256 durationSeconds) external onlyOwner {
         if (currentSession.active) revert SessionAlreadyActive();
 
         sessionCount++;
@@ -138,6 +145,7 @@ contract ConstituentAssembly is Ownable {
             id:       sessionCount,
             openedAt: block.timestamp,
             closedAt: 0,
+            deadline: block.timestamp + durationSeconds,
             active:   true,
             resolved: false
         });
@@ -146,15 +154,23 @@ contract ConstituentAssembly is Ownable {
     }
 
     /**
-     * @notice Close the session and atomically resolve all electable roles.
-     * @dev For each role, the candidate with the most votes wins.
-     *      Tie-breaking: lowest tokenId wins.
-     *      Roles with 0 votes are skipped (no assignment).
-     *      Calls core.grantRole() — this contract must be authorized in Core.
+     * @notice Close the session manually (owner) before deadline.
      */
     function closeSession() external onlyOwner {
         if (!currentSession.active) revert NoActiveSession();
+        _resolveAndClose();
+    }
 
+    /**
+     * @notice Permissionless close — anyone can trigger once deadline is passed.
+     */
+    function triggerClose() external {
+        if (!currentSession.active) revert NoActiveSession();
+        if (block.timestamp < currentSession.deadline) revert SessionNotExpired();
+        _resolveAndClose();
+    }
+
+    function _resolveAndClose() internal {
         currentSession.active   = false;
         currentSession.closedAt = block.timestamp;
         currentSession.resolved = true;
@@ -179,39 +195,47 @@ contract ConstituentAssembly is Ownable {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * @notice Cast a vote for a candidate for a specific institutional role.
-     *
-     * @param voterTokenId     Normie ID of the voter (must be a registered member)
-     * @param role             Role being voted on (must be in electableRoles)
-     * @param candidateTokenId Normie ID of the candidate (must be a registered member)
-     *
-     * @dev Ownership check: msg.sender must match members[voterTokenId].ownerAddress
-     *      (snapshot at inscription time — not re-checked against mainnet ownerOf).
+     * @notice Cast a vote directly (member's wallet pays gas).
      */
     function castVote(
         uint256 voterTokenId,
         bytes32 role,
         uint256 candidateTokenId
     ) external {
-        if (!currentSession.active)
-            revert NoActiveSession();
-
-        if (!core.isMember(voterTokenId))
-            revert VoterNotMember(voterTokenId);
-
-        if (!core.isMember(candidateTokenId))
-            revert CandidateNotMember(candidateTokenId);
-
+        if (!currentSession.active) revert NoActiveSession();
+        if (!core.isMember(voterTokenId)) revert VoterNotMember(voterTokenId);
+        if (!core.isMember(candidateTokenId)) revert CandidateNotMember(candidateTokenId);
         if (msg.sender != core.getMemberOwner(voterTokenId))
             revert CallerNotVoterOwner(msg.sender, core.getMemberOwner(voterTokenId));
+        _recordVote(voterTokenId, role, candidateTokenId);
+    }
 
-        if (hasVoted[voterTokenId][role])
-            revert AlreadyVotedForRole(voterTokenId, role);
+    /**
+     * @notice Cast a vote on behalf of a member — relayer pays gas.
+     * @dev The relayer is trusted by Core (same key that signed attestations).
+     *      No additional signature needed: the LLM agent decided the vote,
+     *      the relayer submits it. Only one vote per member per role enforced.
+     */
+    function castVoteAsRelayer(
+        uint256 voterTokenId,
+        bytes32 role,
+        uint256 candidateTokenId
+    ) external {
+        if (msg.sender != core.relayerAddress()) revert NotRelayer(msg.sender);
+        if (!currentSession.active) revert NoActiveSession();
+        if (!core.isMember(voterTokenId)) revert VoterNotMember(voterTokenId);
+        if (!core.isMember(candidateTokenId)) revert CandidateNotMember(candidateTokenId);
+        _recordVote(voterTokenId, role, candidateTokenId);
+    }
 
-        if (!_isElectable(role))
-            revert RoleNotElectable(role);
+    function _recordVote(
+        uint256 voterTokenId,
+        bytes32 role,
+        uint256 candidateTokenId
+    ) internal {
+        if (hasVoted[voterTokenId][role]) revert AlreadyVotedForRole(voterTokenId, role);
+        if (!_isElectable(role)) revert RoleNotElectable(role);
 
-        // Record vote
         hasVoted[voterTokenId][role] = true;
 
         if (!_candidateAdded[role][candidateTokenId]) {

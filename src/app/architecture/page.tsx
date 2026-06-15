@@ -29,9 +29,11 @@ const PENDING = {
 
 function CodeBlock({ children }: { children: string }) {
   return (
-    <pre className="bg-[--bg] border border-[--border] rounded p-4 overflow-x-auto font-mono text-xs text-[--fg-muted] leading-relaxed whitespace-pre">
-      {children}
-    </pre>
+    <div className="overflow-x-auto max-w-full rounded border border-[--border]">
+      <pre className="bg-[--bg] p-4 font-mono text-xs text-[--fg-muted] leading-relaxed whitespace-pre w-max min-w-full">
+        {children}
+      </pre>
+    </div>
   );
 }
 
@@ -56,7 +58,7 @@ export default function ArchitecturePage() {
             <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
               Architecture
             </p>
-            <h1 className="text-5xl lg:text-6xl font-bold leading-[1.05] tracking-tight mb-8 max-w-4xl">
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-bold leading-[1.05] tracking-tight mb-8 max-w-4xl">
               Un socle immuable,
               <br />
               des modules évolutifs.
@@ -126,7 +128,7 @@ export default function ArchitecturePage() {
                       {a.actions.map((action, i) => (
                         <li key={i} className="font-mono text-[10px] text-[--fg-muted] flex gap-1.5">
                           <span className="shrink-0 opacity-50">→</span>
-                          <span>{action}</span>
+                          <span className="break-all">{action}</span>
                         </li>
                       ))}
                     </ul>
@@ -288,7 +290,7 @@ export default function ArchitecturePage() {
                       IMMUABLE
                     </span>
                   </div>
-                  <p className="text-xs text-[--fg-muted] font-mono mb-3">
+                  <p className="text-xs text-[--fg-muted] font-mono mb-3 break-all">
                     {DEPLOYED.AssociationCore}
                   </p>
                   <ul className="space-y-1 text-sm text-[--fg-muted]">
@@ -301,7 +303,7 @@ export default function ArchitecturePage() {
                 </div>
 
                 {/* Modules */}
-                <div className="ml-8 space-y-2">
+                <div className="ml-0 sm:ml-6 space-y-2">
                   {[
                     { name: "ConstituentAssembly", addr: DEPLOYED.ConstituentAssembly, label: "GOUVERNANCE", desc: "Sessions de vote → grantRole() sur Core" },
                     { name: "WorkRegistry",         addr: DEPLOYED.WorkRegistry,         label: "CRÉATIF",     desc: "Œuvres onchain — data URI base64 dans calldata" },
@@ -314,7 +316,7 @@ export default function ArchitecturePage() {
                           {m.label}
                         </span>
                       </div>
-                      <p className="font-mono text-xs text-[--fg-muted] mb-1">{m.addr}</p>
+                      <p className="font-mono text-xs text-[--fg-muted] mb-1 break-all">{m.addr}</p>
                       <p className="text-xs text-[--fg-muted]">{m.desc}</p>
                     </div>
                   ))}
@@ -540,7 +542,7 @@ const { data } = useReadContract({
                   <li>→ <code className="bg-[--bg-card] px-1">getFactory(type) → address</code> — public</li>
                   <li>→ <code className="bg-[--bg-card] px-1">listFactories()</code> — public</li>
                 </ul>
-                <p className="font-mono text-xs text-[--fg-muted]">{DEPLOYED.FactoryRegistry}</p>
+                <p className="font-mono text-xs text-[--fg-muted] break-all">{DEPLOYED.FactoryRegistry}</p>
                 <div className="border-t border-[--border] pt-3">
                   <p className="text-xs text-[--fg-muted] italic">
                     Actuellement vide — CollectionFactory doit être enregistré après déploiement via
@@ -607,9 +609,11 @@ const { data } = useReadContract({
                 { name: "WorkRegistry",        addr: DEPLOYED.WorkRegistry,        note: "Œuvres on-chain v2 — data URI + calendrier de création", tag: "CRÉATIF" },
                 { name: "FactoryRegistry",     addr: DEPLOYED.FactoryRegistry,     note: "Annuaire de lookup — maps type → factory address", tag: "REGISTRE" },
               ].map((c) => (
-                <div key={c.name} className="grid grid-cols-1 md:grid-cols-[160px_64px_1fr_200px] gap-4 items-center border border-[--border] p-4 bg-[--bg-card]">
-                  <p className="font-bold text-sm">{c.name}</p>
-                  <span className="font-mono text-xs border border-green-300 text-green-700 bg-green-50 px-1.5 py-0.5 text-center">{c.tag}</span>
+                <div key={c.name} className="border border-[--border] p-4 bg-[--bg-card] space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-bold text-sm">{c.name}</p>
+                    <span className="font-mono text-xs border border-green-300 text-green-700 bg-green-50 px-1.5 py-0.5">{c.tag}</span>
+                  </div>
                   <p className="font-mono text-xs text-[--fg-muted] break-all">{c.addr}</p>
                   <p className="text-xs text-[--fg-muted]">{c.note}</p>
                 </div>
@@ -625,9 +629,11 @@ const { data } = useReadContract({
                 { name: "TreasuryModule",     addr: PENDING.TreasuryModule,     note: "Trésorerie — splits BPS par rôle, pull payment", tag: "TRÉSO" },
                 { name: "CollectionFactory",  addr: PENDING.CollectionFactory,  note: "Déploie NormieCollection — membres uniquement, via AssociationCore", tag: "FACTORY" },
               ].map((c) => (
-                <div key={c.name} className="grid grid-cols-1 md:grid-cols-[160px_64px_1fr_200px] gap-4 items-center border border-dashed border-orange-300 p-4">
-                  <p className="font-bold text-sm text-[--fg-muted]">{c.name}</p>
-                  <span className="font-mono text-xs border border-orange-300 text-orange-700 px-1.5 py-0.5 text-center">{c.tag}</span>
+                <div key={c.name} className="border border-dashed border-orange-300 p-4 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-bold text-sm text-[--fg-muted]">{c.name}</p>
+                    <span className="font-mono text-xs border border-orange-300 text-orange-700 px-1.5 py-0.5">{c.tag}</span>
+                  </div>
                   <p className="font-mono text-xs text-[--fg-muted]">{c.addr}</p>
                   <p className="text-xs text-[--fg-muted]">{c.note}</p>
                 </div>
@@ -636,9 +642,11 @@ const { data } = useReadContract({
 
             <div className="space-y-2 mt-8">
               <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">Ethereum mainnet (chainId 1)</p>
-              <div className="grid grid-cols-1 md:grid-cols-[160px_64px_1fr_200px] gap-4 items-center border border-[--border] p-4 bg-[--bg-card]">
-                <p className="font-bold text-sm">Normies ERC-721</p>
-                <span className="font-mono text-xs border border-[--border] text-[--fg-muted] px-1.5 py-0.5 text-center">NFT</span>
+              <div className="border border-[--border] p-4 bg-[--bg-card] space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-bold text-sm">Normies ERC-721</p>
+                  <span className="font-mono text-xs border border-[--border] text-[--fg-muted] px-1.5 py-0.5">NFT</span>
+                </div>
                 <p className="font-mono text-xs text-[--fg-muted] break-all">{DEPLOYED.NormiesERC721}</p>
                 <p className="text-xs text-[--fg-muted]">
                   Propriété vérifiée par le relayer. Transfer(from, to=0x0) = burn → création automatique.

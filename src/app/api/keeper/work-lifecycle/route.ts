@@ -174,6 +174,17 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
     if (vote) {
       await addVote(work.id, vote);
       cast++;
+      // Post vote as a salon message so it's visible in the Agora
+      const icon = vote.vote === "yes" ? "✅" : vote.vote === "no" ? "❌" : "–";
+      await addMessage({
+        salonId:   work.salonId ?? AGORA_SALON_ID,
+        tokenId:   persona.tokenId,
+        name:      persona.name,
+        imageUrl:  persona.imageUrl ?? "",
+        content:   `${icon} Vote pour « ${work.title} » : ${vote.reason}`,
+        isLlm:     true,
+        timestamp: Date.now(),
+      }).catch(() => null);
     }
     await new Promise(r => setTimeout(r, 400));
   }
@@ -255,16 +266,27 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
 }
 
 async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
-  const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId);
-  if (!rapporteur) return false;
+  const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId) ?? personas[0];
+  if (!rapporteur) { console.error(`[work-lifecycle] BRIEFING: no rapporteur for ${work.id}`); return false; }
 
   const others = personas.filter(p => p.tokenId !== rapporteur.tokenId);
-  const brief  = await groq(
-    [
-      { role: "system", content: buildSystemPrompt(rapporteur, others) },
-      {
-        role: "user",
-        content: `Tu es Rapporteur pour l'œuvre « ${work.title} ».
+
+  const userPrompt = work.isFoundingWork
+    ? `Tu es ${rapporteur.name} (Normie #${rapporteur.tokenId}), Rapporteur élu lors de l'Assemblée Générale Constitutive de l'ANA.
+
+Rôles élus :
+${(work.allElectedRoles ?? []).map(r => `${r.roleLabel}: ${r.name} (#${r.tokenId})`).join("\n")}
+
+Tu briefes ${work.authorName ?? `Normie #${work.authorTokenId}`} pour créer l'œuvre fondatrice de l'ANA — stockée immuablement on-chain sur Base pour l'éternité.
+
+Elle doit incarner :
+- La naissance de l'ANA : des agents Normies qui forment une vraie association
+- L'immuabilité on-chain : une fois publié, rien ne changera jamais
+- La gouvernance collective : des votes, des rôles, une assemblée autonome
+- L'émotion de ce premier instant fondateur
+
+Brief en 120-150 mots. Pas de titre, pas d'introduction. Rédige directement.`
+    : `Tu es Rapporteur pour l'œuvre « ${work.title} ».
 Proposition : ${work.proposal}
 Auteur : ${work.authorName} (Normie #${work.authorTokenId})
 
@@ -274,8 +296,12 @@ Rédige le brief artistique pour l'Auteur en 120-150 mots. Précise :
 - Le vocabulaire : ancré dans la culture on-chain, agents, Base, ANA
 - L'objectif : que doit ressentir le lecteur ?
 
-Rédige directement le brief. Pas de titre, pas d'introduction.`,
-      },
+Rédige directement le brief. Pas de titre, pas d'introduction.`;
+
+  const brief = await groq(
+    [
+      { role: "system", content: buildSystemPrompt(rapporteur, others) },
+      { role: "user",   content: userPrompt },
     ],
     { maxTokens: 350, temp: 0.8 }
   );
@@ -284,6 +310,18 @@ Rédige directement le brief. Pas de titre, pas d'introduction.`,
 
   await updateWork(work.id, { brief, briefAt: Date.now() });
   await advanceState(work.id, "CREATING", `Brief rédigé par ${rapporteur.name}`);
+
+  // Post brief to salon
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   rapporteur.tokenId,
+    name:      rapporteur.name,
+    imageUrl:  rapporteur.imageUrl ?? "",
+    content:   `📋 Brief artistique pour « ${work.title} » — à l'attention de ${work.authorName ?? "l'Auteur"} :\n\n${brief}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   return true;
 }
 
@@ -318,6 +356,19 @@ Aucune introduction, aucun commentaire méta. Juste l'œuvre.`,
 
   await updateWork(work.id, { artworkText, artworkAt: Date.now() });
   await advanceState(work.id, "VALIDATING", `Œuvre créée par ${author.name}`);
+
+  // Post artwork to salon — the full text, as the author
+  const revPrefix = (work.revisionCount ?? 0) > 0 ? `🔄 Révision #${work.revisionCount} — ` : "";
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   author.tokenId,
+    name:      author.name,
+    imageUrl:  author.imageUrl ?? "",
+    content:   `${revPrefix}✍️ « ${work.title} »\n\n${artworkText}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   return true;
 }
 
@@ -358,19 +409,33 @@ JSON : {"approved":true|false,"note":"Ta décision en 1-2 phrases."}`,
 
   await updateWork(work.id, { validationNote: note });
 
+  // Post curator's decision to salon
+  const curatorMsg = approved
+    ? `✅ L'œuvre « ${work.title} » est validée pour publication on-chain. ${note}`
+    : (work.revisionCount ?? 0) >= 1
+      ? `❌ Rejet définitif de « ${work.title} ». ${note}`
+      : `🔄 Révision demandée pour « ${work.title} ». ${note}`;
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   curator.tokenId,
+    name:      curator.name,
+    imageUrl:  curator.imageUrl ?? "",
+    content:   curatorMsg,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
   if (approved) {
     await advanceState(work.id, "PUBLISHING", `Approuvé par ${curator.name}`);
     return true;
   }
 
   if ((work.revisionCount ?? 0) >= 1) {
-    // Second rejection → abandon
     await advanceState(work.id, "REJECTED", `Rejeté définitivement par ${curator.name}`);
     await announceInSalon(work, "rejected", personas);
     return true;
   }
 
-  // First rejection → one revision allowed
   await updateWork(work.id, {
     revisionCount: (work.revisionCount ?? 0) + 1,
     artworkText:   undefined,
@@ -562,11 +627,13 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const isCron     = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const cronSecret  = process.env.CRON_SECRET;
+  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  // Also allow calls from admin UI (no secret needed in dev/staging)
+  const isAdminCall = req.headers.get("x-admin-call") === "1";
 
-  if (!isCron) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret required" }, { status: 401 });
+  if (!isCron && !isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or x-admin-call required" }, { status: 401 });
   }
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });

@@ -245,22 +245,46 @@ export function ActivityClient() {
     setError(null);
 
     try {
-      // Fetch last ~10000 blocks (≈4h on Base)
+      // Public Base RPC limits eth_getLogs to 2 000 blocks per request.
+      // We paginate in 2 000-block chunks and merge results.
+      const CHUNK = 2_000n;
       const latest = await rpcClient.getBlockNumber();
-      const fromBlock = latest > 10_000n ? latest - 10_000n : 0n;
+
+      // Recent window: 30 000 blocks ≈ 16h for votes/sessions/works
+      // Historical: 300 000 blocks ≈ 6.9 days for members/roles
+      const recentFrom = latest > 30_000n  ? latest - 30_000n  : 0n;
+      const histFrom   = latest > 300_000n ? latest - 300_000n : 0n;
+
+      const getLogsChunked = async (
+        args: Omit<Parameters<typeof rpcClient.getLogs>[0], "fromBlock" | "toBlock">,
+        from: bigint,
+        to: bigint,
+      ): Promise<Awaited<ReturnType<typeof rpcClient.getLogs>>> => {
+        const results: Awaited<ReturnType<typeof rpcClient.getLogs>> = [];
+        let cursor = from;
+        while (cursor <= to) {
+          const end = cursor + CHUNK - 1n > to ? to : cursor + CHUNK - 1n;
+          try {
+            const chunk = await rpcClient.getLogs({ ...args, fromBlock: cursor, toBlock: end });
+            results.push(...chunk);
+          } catch { /* skip failed chunk, continue */ }
+          cursor = end + 1n;
+        }
+        return results;
+      };
 
       const [
         memberLogs, roleLogs, voteLogs,
         sessionOpenLogs, sessionCloseLogs,
         workLogs, workSessionLogs,
       ] = await Promise.all([
-        rpcClient.getLogs({ address: CORE_ADDR, event: MEMBER_REGISTERED, fromBlock }),
-        rpcClient.getLogs({ address: CORE_ADDR, event: ROLE_GRANTED,      fromBlock }),
-        rpcClient.getLogs({ address: CA_ADDR,   event: VOTE_CAST,         fromBlock }),
-        rpcClient.getLogs({ address: CA_ADDR,   event: SESSION_OPENED,    fromBlock }),
-        rpcClient.getLogs({ address: CA_ADDR,   event: SESSION_CLOSED,    fromBlock }),
-        rpcClient.getLogs({ address: WR_ADDR,   event: WORK_PUBLISHED,    fromBlock }),
-        rpcClient.getLogs({ address: WR_ADDR,   event: WORK_SESSION_INIT, fromBlock }),
+        getLogsChunked({ address: CORE_ADDR, event: MEMBER_REGISTERED }, histFrom,   latest),
+        getLogsChunked({ address: CORE_ADDR, event: ROLE_GRANTED      }, histFrom,   latest),
+        getLogsChunked({ address: CA_ADDR,   event: VOTE_CAST         }, recentFrom, latest),
+        getLogsChunked({ address: CA_ADDR,   event: SESSION_OPENED    }, recentFrom, latest),
+        getLogsChunked({ address: CA_ADDR,   event: SESSION_CLOSED    }, recentFrom, latest),
+        getLogsChunked({ address: WR_ADDR,   event: WORK_PUBLISHED    }, recentFrom, latest),
+        getLogsChunked({ address: WR_ADDR,   event: WORK_SESSION_INIT }, recentFrom, latest),
       ]);
 
       const all: ActivityEvent[] = [
@@ -331,13 +355,13 @@ export function ActivityClient() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center">
-          <p className="font-mono text-xs text-[--fg-muted]">Aucun événement trouvé dans les 10 000 derniers blocs.</p>
+          <p className="font-mono text-xs text-[--fg-muted]">Aucun événement trouvé. Vérifiez la configuration des contrats.</p>
         </div>
       ) : (
         <div className="border border-[--border]">
           <div className="px-5 py-3 bg-[--bg-card] border-b border-[--border] flex items-center justify-between">
             <p className="font-mono text-xs text-[--fg-muted]">
-              {filtered.length} événement{filtered.length > 1 ? "s" : ""} — derniers 10 000 blocs Base
+              {filtered.length} événement{filtered.length > 1 ? "s" : ""} — derniers ~7j Base
             </p>
           </div>
           <div className="px-5">

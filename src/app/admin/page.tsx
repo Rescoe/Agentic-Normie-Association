@@ -558,6 +558,228 @@ function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
   );
 }
 
+// ─── WorkStatusSection ────────────────────────────────────────────────────────
+
+type ANAWorkSummary = {
+  id: string; title: string; state: string; isFoundingWork?: boolean; isBurnMemorial?: boolean;
+  proposedByName: string; proposedAt: number; stateHistory: Array<{ state: string; at: number; note?: string }>;
+};
+
+const STATE_COLOR: Record<string, string> = {
+  PROPOSED:     "text-blue-600",
+  VOTE_OPEN:    "text-yellow-600",
+  VOTE_TALLIED: "text-orange-600",
+  BRIEFING:     "text-purple-600",
+  CREATING:     "text-indigo-600",
+  VALIDATING:   "text-cyan-600",
+  PUBLISHING:   "text-teal-600",
+  PUBLISHED:    "text-green-600",
+  REJECTED:     "text-red-600",
+};
+
+function WorkStatusSection() {
+  const [works,   setWorks]   = useState<ANAWorkSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
+  const [lcError,  setLcError]  = useState<string | null>(null);
+  const [lcRunning, setLcRunning] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/works");
+      if (r.ok) setWorks(await r.json() as ANAWorkSummary[]);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const runLifecycle = async () => {
+    setLcRunning(true); setLcResult(null); setLcError(null);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) setLcError((d.error as string) ?? `HTTP ${r.status}`);
+      else { setLcResult(d); void refresh(); }
+    } catch (e) {
+      setLcError(e instanceof Error ? e.message : String(e));
+    } finally { setLcRunning(false); }
+  };
+
+  const activeWorks = works.filter(w =>
+    ["PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING"].includes(w.state)
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={runLifecycle}
+          disabled={lcRunning}
+          className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
+        >
+          {lcRunning ? "En cours…" : "🎨 Déclencher work-lifecycle"}
+        </button>
+        <button
+          onClick={() => void refresh()}
+          disabled={loading}
+          className="font-mono text-xs border border-[--border] px-4 py-2.5 hover:bg-[--bg-card] disabled:opacity-40"
+        >
+          {loading ? "…" : "↻ Rafraîchir"}
+        </button>
+      </div>
+
+      {lcError && (
+        <div className="border border-red-300 bg-red-50/20 px-4 py-3">
+          <p className="font-mono text-xs text-red-600">{lcError}</p>
+        </div>
+      )}
+
+      {lcResult && (
+        <div className="border border-green-300 bg-green-50/20 px-4 py-3 space-y-1">
+          <p className="font-mono text-xs font-bold text-green-700">
+            ✓ {String(lcResult.advanced ?? 0)} / {String(lcResult.processed ?? 0)} œuvres avancées
+            {(lcResult.foundingCreated as boolean) && " — ★ Œuvre fondatrice créée !"}
+          </p>
+          {Array.isArray(lcResult.results) && (lcResult.results as Array<{title: string; from: string; to: string; advanced: boolean}>).map((r, i) => (
+            <p key={i} className="font-mono text-xs text-[--fg-muted]">
+              {r.advanced ? "→" : "·"} {r.title} : {r.from} → {r.to}
+            </p>
+          ))}
+          {typeof lcResult.message === "string" && (
+            <p className="font-mono text-xs text-[--fg-muted]">{lcResult.message}</p>
+          )}
+        </div>
+      )}
+
+      {/* Active works */}
+      {activeWorks.length > 0 ? (
+        <div className="space-y-2">
+          <p className="font-mono text-xs text-[--fg-muted]">{activeWorks.length} œuvre(s) active(s)</p>
+          {activeWorks.map(w => (
+            <div key={w.id} className="border border-[--border] p-4 space-y-1.5">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-bold text-sm">
+                  {w.isFoundingWork && "★ "}
+                  {w.isBurnMemorial && "⬛ "}
+                  {w.title}
+                </p>
+                <span className={`font-mono text-xs font-bold shrink-0 ${STATE_COLOR[w.state] ?? ""}`}>
+                  {w.state}
+                </span>
+              </div>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                par {w.proposedByName} · {new Date(w.proposedAt).toLocaleString("fr-FR")}
+              </p>
+              {w.stateHistory.length > 0 && (
+                <p className="font-mono text-xs text-[--fg-muted]">
+                  dernière étape : {w.stateHistory[w.stateHistory.length - 1]?.note ?? "—"}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        !loading && <p className="font-mono text-xs text-[--fg-muted]">Aucune œuvre active en cours.</p>
+      )}
+
+      {/* Published & rejected */}
+      {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").length > 0 && (
+        <details className="border border-[--border]">
+          <summary className="bg-[--bg-card] px-4 py-3 cursor-pointer font-mono text-xs text-[--fg-muted] hover:bg-[--bg]">
+            Historique ({works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").length} terminées) →
+          </summary>
+          <div className="divide-y divide-[--border]">
+            {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").map(w => (
+              <div key={w.id} className="px-4 py-3 flex items-center justify-between">
+                <p className="font-mono text-xs">{w.title}</p>
+                <span className={`font-mono text-xs font-bold ${STATE_COLOR[w.state] ?? ""}`}>{w.state}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+// ─── BurnCheckSection ─────────────────────────────────────────────────────────
+
+function BurnCheckSection() {
+  const [running, setRunning] = useState(false);
+  const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const run = async () => {
+    setRunning(true); setResult(null); setError(null);
+    try {
+      const r = await fetch("/api/keeper/check-burns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) setError((d.error as string) ?? `HTTP ${r.status}`);
+      else setResult(d);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setRunning(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={run}
+        disabled={running}
+        className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
+      >
+        {running ? "Vérification…" : "⬛ Vérifier burns Normies"}
+      </button>
+      {error && <p className="font-mono text-xs text-red-600">{error}</p>}
+      {result && (
+        <div className="border border-[--border] bg-[--bg-card] px-4 py-3 space-y-1">
+          <p className="font-mono text-xs font-bold">
+            Supply : {String(result.supply ?? "?")} · Burns : {String(result.burns ?? 0)}
+          </p>
+          {(result.burns as number) > 0 && (
+            <p className="font-mono text-xs text-orange-600">
+              ⬛ {String(result.burns)} burn(s) détecté(s) — {String(result.worksCreated ?? 0)} œuvre(s) mémoriale(s) créée(s)
+            </p>
+          )}
+          {typeof result.message === "string" && <p className="font-mono text-xs text-[--fg-muted]">{result.message}</p>}
+          {typeof result.skipped === "string" && <p className="font-mono text-xs text-[--fg-muted]">Ignoré : {result.skipped}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SessionCountdown — ticks every second ────────────────────────────────────
+
+function SessionCountdown({ deadline }: { deadline: bigint }) {
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const remaining = Number(deadline) - now;
+  if (remaining <= 0) return (
+    <div className="border border-orange-300 bg-orange-50/20 p-3 font-mono text-xs text-orange-600">
+      ⏰ Session expirée — triggerClose() disponible
+    </div>
+  );
+  const m = Math.floor(remaining / 60);
+  const s = remaining % 60;
+  return (
+    <div className="border border-[--border] bg-[--bg-card] p-3 font-mono text-xs text-[--fg-muted]">
+      ⏱ Session active — fermeture dans{" "}
+      <span className="text-[--fg] font-bold">{m}m {String(s).padStart(2, "0")}s</span>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
@@ -593,11 +815,26 @@ export default function AdminPage() {
     address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "authorizedModules",
     args: [CA_ADDR], query: { enabled: contractsDeployed },
   });
-  const { data: sessionRaw } = useReadContract({
+  const { data: sessionRaw, isLoading: sessionLoading } = useReadContract({
     address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession",
-    query: { enabled: contractsDeployed, refetchInterval: 10_000 },
+    query: {
+      enabled: contractsDeployed,
+      refetchInterval: 5_000,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+    },
   });
-  const session = sessionRaw as unknown as { id: bigint; active: boolean; resolved: boolean } | undefined;
+  // viem retourne un tuple indexé [id, openedAt, closedAt, deadline, active, resolved]
+  const sessionTuple = sessionRaw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean] | undefined;
+  const session = sessionTuple ? {
+    id:       sessionTuple[0],
+    openedAt: sessionTuple[1],
+    closedAt: sessionTuple[2],
+    deadline: sessionTuple[3],
+    active:   Boolean(sessionTuple[4]),
+    resolved: Boolean(sessionTuple[5]),
+  } : undefined;
 
   // ── Role holders ──────────────────────────────────────────────────────────
   const { data: memberTokenIds } = useReadContract({
@@ -607,6 +844,7 @@ export default function AdminPage() {
 
   // ── Input state ───────────────────────────────────────────────────────────
   const [moduleInput,  setModuleInput]  = useState<string>(CA_ADDR);
+  const [revokeInput,  setRevokeInput]  = useState("");
   const [relayerInput, setRelayerInput] = useState("");
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -724,12 +962,24 @@ export default function AdminPage() {
                   </a>
                 </div>
                 <StatusRow label="Adresse"   value={`${CA_ADDR.slice(0,10)}…${CA_ADDR.slice(-6)}`} />
-                <StatusRow label="Session #" value={session ? String(session.id) : "0"} />
+                <StatusRow label="Session #" value={sessionLoading ? "…" : session ? String(session.id) : "0"} />
                 <StatusRow
                   label="Statut session"
-                  value={session?.active ? "Ouverte" : session?.resolved ? "Clôturée" : "En attente"}
+                  value={
+                    sessionLoading ? "Chargement…" :
+                    session?.active ? "🟢 Ouverte" :
+                    session?.resolved ? "Clôturée" :
+                    session?.id ? "Expirée" :
+                    "En attente"
+                  }
                   ok={session?.active}
                 />
+                {session?.active && session.deadline && (
+                  <StatusRow
+                    label="Deadline"
+                    value={new Date(Number(session.deadline) * 1000).toLocaleTimeString("fr-FR")}
+                  />
+                )}
               </div>
             </div>
 
@@ -786,16 +1036,33 @@ export default function AdminPage() {
             </div>
 
             {/* revokeModule */}
-            <AdminAction
-              label="Révoquer un module"
-              description="Retire les droits d'un module périphérique (ex: en cas de bug ou remplacement)."
-              danger
-              disabled={!isCoreOwner}
-              disabledReason="Wallet propriétaire requis"
-              onExec={async () => {
-                await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "revokeModule", [CA_ADDR]);
-              }}
-            />
+            <div className="border border-red-300 p-5 space-y-3">
+              <div>
+                <p className="font-bold text-sm text-red-700">Révoquer un module</p>
+                <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+                  Retire les droits d'un module périphérique. Utile pour désactiver un ancien
+                  ConstituentAssembly après redéploiement.
+                  Module actuel (env) : <span className="text-[--fg]">{CA_ADDR}</span>
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={revokeInput}
+                  onChange={e => setRevokeInput(e.target.value)}
+                  placeholder="0x… adresse du module à révoquer"
+                  className="font-mono text-xs border border-red-300 bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-red-500"
+                />
+                <button
+                  disabled={!isCoreOwner || !isAddress(revokeInput)}
+                  onClick={async () => {
+                    await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "revokeModule", [revokeInput as `0x${string}`]);
+                  }}
+                  className="font-mono text-xs border border-red-400 text-red-600 px-4 py-2 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                >
+                  Révoquer →
+                </button>
+              </div>
+            </div>
 
             {/* setRelayer */}
             <div className="border border-[--border] p-5 space-y-3">
@@ -836,38 +1103,90 @@ export default function AdminPage() {
               </p>
             </div>
 
+            {session?.active && (
+              <SessionCountdown deadline={session.deadline} />
+            )}
+
             {/* openSession */}
             <AdminAction
-              label="Ouvrir la session de vote"
+              label="Ouvrir la session de vote (10 min)"
               description={
-                session?.active
+                sessionLoading
+                  ? "Lecture de l'état de la session…"
+                  : session?.active
                   ? "Une session est déjà active — clôturez-la d'abord."
-                  : "Démarre la phase de vote. Les membres pourront voter pour les 6 rôles."
+                  : "Démarre la phase de vote pour 10 minutes. triggerClose() disponible après expiration."
               }
-              disabled={!isCaOwner || session?.active}
-              disabledReason={session?.active ? "Session déjà ouverte" : "Wallet propriétaire requis"}
+              disabled={!isCaOwner || !!session?.active || sessionLoading}
+              disabledReason={
+                sessionLoading ? "Lecture en cours…" :
+                session?.active ? "Session déjà ouverte" :
+                "Wallet propriétaire requis"
+              }
               onExec={async () => {
-                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession");
+                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", [600n]);
               }}
             />
 
-            {/* closeSession */}
+            {/* Lancer le vote automatique (candidature + votes via LLM) */}
             <AdminAction
-              label="Clôturer et résoudre la session"
+              label="🤖 Lancer le vote automatique (LLM + relayer)"
               description={
-                isCAAuthorized === false
-                  ? "⚠ ConstituentAssembly n'est pas autorisé dans Core — autorisez-le d'abord."
-                  : "Ferme le vote. Calcule les leaders. Attribue les 6 rôles on-chain via Core.grantRole()."
+                sessionLoading
+                  ? "Vérification de la session en cours…"
+                  : session?.active
+                  ? "Phase candidature puis vote : chaque Normie choisit ses rôles et vote via son persona LLM. Le relayer soumet les tx."
+                  : "⚠ Aucune session active — ouvrez une session de vote d'abord."
               }
+              disabled={!session?.active || sessionLoading}
+              disabledReason={sessionLoading ? "Chargement…" : "Ouvrez une session d'abord"}
+              onExec={async () => {
+                const r1 = await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "candidacy" }),
+                });
+                const c = await r1.json();
+                console.log("[auto-vote] candidacy:", c);
+                const r2 = await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "vote", mode: "execute" }),
+                });
+                const v = await r2.json();
+                console.log("[auto-vote] vote:", v);
+                if (v.failed?.length) throw new Error(`${v.failed.length} votes failed: ${v.failed[0]}`);
+              }}
+            />
+
+            {/* closeSession — manuel (owner) */}
+            <AdminAction
+              label="Clôturer manuellement (owner)"
+              description="Ferme le vote avant expiration. Attribue les 6 rôles on-chain."
               danger
-              disabled={!isCaOwner || !session?.active || isCAAuthorized === false}
+              disabled={!isCaOwner || !session?.active || isCAAuthorized === false || sessionLoading}
               disabledReason={
+                sessionLoading ? "Chargement…" :
                 !session?.active ? "Aucune session active" :
                 isCAAuthorized === false ? "Module non autorisé dans Core" :
                 "Wallet propriétaire requis"
               }
               onExec={async () => {
                 await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "closeSession");
+              }}
+            />
+
+            {/* triggerClose — permissionless après deadline */}
+            <AdminAction
+              label="⏰ Clôturer après expiration (permissionless)"
+              description="Appelle triggerClose() via le relayer — disponible quand la deadline est passée."
+              disabled={sessionLoading || !session?.active || (session?.deadline ? Number(session.deadline) > Math.floor(Date.now() / 1000) : true)}
+              disabledReason="Session non expirée ou inactive"
+              onExec={async () => {
+                const r = await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "close" }),
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error((d as { error?: string }).error ?? "triggerClose failed");
               }}
             />
           </section>
@@ -889,6 +1208,29 @@ export default function AdminPage() {
               </p>
             </div>
             <AutoVoteSection sessionActive={session?.active ?? false} />
+          </section>
+
+          {/* ── Work lifecycle + status ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Work Lifecycle</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Avance toutes les œuvres actives d'un état. Crée l'œuvre fondatrice si les 6 rôles sont élus.
+              </p>
+            </div>
+            <WorkStatusSection />
+          </section>
+
+          {/* ── Burns Normies ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Burns Normies</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Compare la supply actuelle des Normies NFT (Ethereum mainnet) à la dernière valeur enregistrée.
+                Si un burn est détecté, crée automatiquement une œuvre mémoriale.
+              </p>
+            </div>
+            <BurnCheckSection />
           </section>
 
           {/* ── Salon exchange keeper ── */}

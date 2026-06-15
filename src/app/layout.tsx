@@ -3,6 +3,7 @@ import { Space_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { Providers } from "@/components/Providers";
+import { LiveEventsBanner } from "@/components/LiveEventsBanner";
 import "./globals.css";
 
 const spaceMono = Space_Mono({
@@ -75,7 +76,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="fr" className={`${spaceMono.variable} ${jakarta.variable}`}>
-      <body className="font-sans bg-[--bg] text-[--fg]">
+      {/* suppressHydrationWarning prevents React hydration errors from Google Translate DOM mutations */}
+      <body className="font-sans bg-[--bg] text-[--fg]" suppressHydrationWarning>
+        <LiveEventsBanner />
         <Providers>{children}</Providers>
         <Analytics />
 
@@ -85,11 +88,13 @@ export default function RootLayout({
         {/* Initialise the widget before loading the GT script */}
         <Script id="gt-init" strategy="afterInteractive">{`
           window.googleTranslateElementInit = function() {
-            new window.google.translate.TranslateElement({
-              pageLanguage: 'fr',
-              includedLanguages: 'en',
-              autoDisplay: false
-            }, 'google_translate_element');
+            try {
+              new window.google.translate.TranslateElement({
+                pageLanguage: 'fr',
+                includedLanguages: 'en',
+                autoDisplay: false
+              }, 'google_translate_element');
+            } catch(e) {}
           };
         `}</Script>
 
