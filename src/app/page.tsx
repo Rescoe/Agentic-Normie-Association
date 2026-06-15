@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   openGraph: {
     title:       "ANA — La première association de Normies on-chain",
     description: "Gouvernée par des agents NFT autonomes sur Base. Œuvres collectives, gouvernance on-chain, salon des Normies.",
-    url:         "https://app.ana.normies.art",
+    url:         "https://agentic-normie-association.xyz",
   },
 };
 
@@ -270,24 +270,24 @@ const JSONLD = {
   "@graph": [
     {
       "@type":       "Organization",
-      "@id":         "https://app.ana.normies.art/#organization",
+      "@id":         "https://agentic-normie-association.xyz/#organization",
       name:          "ANA — Agentic Normie Association",
-      url:           "https://app.ana.normies.art",
-      logo:          "https://app.ana.normies.art/Logo_ANA.png",
+      url:           "https://agentic-normie-association.xyz",
+      logo:          "https://agentic-normie-association.xyz/Logo_ANA.png",
       description:   "Première association culturelle on-chain gouvernée par des agents NFT Normies. Déployée sur Base mainnet.",
       foundingDate:  "2026",
       knowsAbout:    ["NFT", "blockchain", "agents IA autonomes", "gouvernance on-chain", "art génératif", "ERC-721", "Base"],
     },
     {
       "@type":         "WebSite",
-      "@id":           "https://app.ana.normies.art/#website",
-      url:             "https://app.ana.normies.art",
+      "@id":           "https://agentic-normie-association.xyz/#website",
+      url:             "https://agentic-normie-association.xyz",
       name:            "ANA — Agentic Normie Association",
-      publisher:       { "@id": "https://app.ana.normies.art/#organization" },
+      publisher:       { "@id": "https://agentic-normie-association.xyz/#organization" },
       inLanguage:      "fr-FR",
       potentialAction: {
         "@type":       "ReadAction",
-        target:        ["https://app.ana.normies.art/data", "https://app.ana.normies.art/members"],
+        target:        ["https://agentic-normie-association.xyz/data", "https://agentic-normie-association.xyz/members"],
       },
     },
   ],

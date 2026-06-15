@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { ZoomableImage } from "@/components/ZoomableImage";
 
 export const metadata = {
   title: "Architecture — ANA",
@@ -79,114 +80,194 @@ export default function ArchitecturePage() {
               sub="Ethereum mainnet (Normies ERC-721) + Base mainnet (toute la logique ANA). Les acteurs : le déployeur (owner), les Normies-membres, et le relayer backend."
             />
 
-            {/* Diagramme ASCII */}
-            <CodeBlock>{`ETHEREUM MAINNET
-┌──────────────────────────────────────────────────────────────────┐
-│  Normies ERC-721  (0x9Eb6E2…)                                    │
-│  ownerOf(tokenId) → wallet                                       │
-│  Transfer events → burn → création automatique (GovernanceCalendar) │
-└──────────────────────┬───────────────────────────────────────────┘
-                       │  Relayer vérifie ownerOf (hors-chaîne)
-                       │  Signe une attestation EIP-712
-                       ▼
-BASE MAINNET
-┌──────────────────────────────────────────────────────────────────┐
-│  AssociationCore  [IMMUABLE]                                      │
-│  ├── members[tokenId]        → Member{ownerAddress, registeredAt}│
-│  ├── roles[bytes32]          → RoleAssignment{tokenId, holder}   │
-│  ├── authorizedModules[addr] → bool                              │
-│  └── usedNonces[nonce]       → bool (anti-replay)                │
-│                                                                  │
-│  ← register(attestation, sig)    appelé par le wallet Normie     │
-│  ← grantRole(role, tokenId)      appelé par modules autorisés    │
-│  ← authorizeModule(addr)         appelé par l'owner              │
-└──┬───────────────┬────────────────────┬────────────────┬─────────┘
-   │ lit membres   │ écrit rôles        │ lit membres    │ lit rôles
-   ▼               ▼                    ▼                ▼
-┌──────────────┐  ┌───────────────┐  ┌──────────────┐  ┌──────────────────┐
-│ Constituent  │  │ GovernanceCal.│  │ WorkRegistry │  │ TreasuryModule   │
-│ Assembly     │  │               │  │  v2          │  │                  │
-│              │  │ events[id]    │  │ works[id]    │  │ balances[role]   │
-│ sessions[id] │  │ INSCRIPTION   │  │ sessions[n]  │  │ splits BPS/10000 │
-│ voteCounts   │  │ ELECTION      │  │ schedule     │  │ withdraw() pull  │
-│ hasVoted[][] │  │ GENERAL_ASSEM │  │              │  │                  │
-│              │  │ WORK_SESSION  │  │ permissionless│  │ receive() split  │
-│ closeSession │  │ BURN_CREATION │  │ trigger      │  │ auto à reception │
-│ → grantRole()│  │               │  │              │  │                  │
-└──────────────┘  └───────────────┘  └──────────────┘  └──────────────────┘
+            {/* Texte gauche + image droite */}
+            <div className="flex flex-col lg:flex-row gap-8 items-start">
 
-┌──────────────────────────────────────────────────────────────────┐
-│  FactoryRegistry  [ANNUAIRE]                                      │
-│  factories[bytes32] → address                                    │
-│  keccak256("NORMIE_COLLECTION") → CollectionFactory.address      │
-│                                                                  │
-│  ← registerFactory(type, addr)  owner seulement                  │
-│  ← getFactory(type) → addr      lecture publique                 │
-└──────────────────────┬───────────────────────────────────────────┘
-                       │  lookup d'adresse (pas d'appel direct)
-                       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  CollectionFactory                                                │
-│  ← createCollection(tokenId, name, symbol)                       │
-│     vérifie core.isMember(tokenId) + core.getMemberOwner()       │
-│     déploie → NormieCollection (ERC-721 fully on-chain)          │
-│  normieCollections[tokenId][] → adresses des collections         │
-└──────────────────────────────────────────────────────────────────┘`}</CodeBlock>
+              {/* Fiches acteurs — gauche, compactes */}
+              <div className="space-y-3 lg:max-w-xs xl:max-w-sm flex-shrink-0">
+                {[
+                  {
+                    actor: "Normie membre",
+                    actions: [
+                      "register(attestation, sig)",
+                      "castVote(tokenId, role, candidateId)",
+                      "initiateWorkSession()",
+                      "createCollection(tokenId, name, sym)",
+                      "withdraw() — si role holder",
+                    ],
+                    color: "border-blue-200 bg-blue-50/30",
+                    badge: "text-blue-700 border-blue-300",
+                  },
+                  {
+                    actor: "Owner / Deployer",
+                    actions: [
+                      "authorizeModule(assembly)",
+                      "openSession() / closeSession()",
+                      "setSchedule(ts, period, active)",
+                      "registerFactory(type, addr)",
+                      "setRelayer(addr) — si clé compromise",
+                    ],
+                    color: "border-purple-200 bg-purple-50/30",
+                    badge: "text-purple-700 border-purple-300",
+                  },
+                  {
+                    actor: "Relayer backend",
+                    actions: [
+                      "Vérifie ownerOf(tokenId) sur Ethereum",
+                      "Signe attestation EIP-712",
+                      "Le wallet soumet register() avec la sig",
+                      "Jamais de tx on-chain — signe seulement",
+                    ],
+                    color: "border-orange-200 bg-orange-50/30",
+                    badge: "text-orange-700 border-orange-300",
+                  },
+                ].map((a) => (
+                  <div key={a.actor} className={`border ${a.color} p-3 space-y-2`}>
+                    <span className={`font-mono text-[10px] border px-1.5 py-0.5 ${a.badge}`}>{a.actor}</span>
+                    <ul className="space-y-0.5">
+                      {a.actions.map((action, i) => (
+                        <li key={i} className="font-mono text-[10px] text-[--fg-muted] flex gap-1.5">
+                          <span className="shrink-0 opacity-50">→</span>
+                          <span className="break-all">{action}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
 
-            {/* Légende acteurs */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
-              {[
-                {
-                  actor: "Normie membre",
-                  actions: [
-                    "register(attestation, sig) → AssociationCore",
-                    "castVote(tokenId, role, candidateId) → ConstituentAssembly",
-                    "initiateWorkSession() → WorkRegistry (quand calendrier dû)",
-                    "triggerEvent(eventId) → GovernanceCalendar (quand dû)",
-                    "createCollection(tokenId, name, sym) → CollectionFactory",
-                    "withdraw() → TreasuryModule (si role holder)",
-                  ],
-                  color: "border-blue-200 bg-blue-50/30",
-                  badge: "text-blue-700 border-blue-300",
-                },
-                {
-                  actor: "Owner / Deployer",
-                  actions: [
-                    "authorizeModule(CA) → AssociationCore",
-                    "openSession() / closeSession() → ConstituentAssembly",
-                    "setSchedule(ts, period, active) → WorkRegistry",
-                    "initializeFoundingSchedule() → GovernanceCalendar",
-                    "registerFactory(type, addr) → FactoryRegistry",
-                    "setRelayer(addr) → AssociationCore (si clé compromise)",
-                  ],
-                  color: "border-purple-200 bg-purple-50/30",
-                  badge: "text-purple-700 border-purple-300",
-                },
-                {
-                  actor: "Relayer backend",
-                  actions: [
-                    "Vérifie ownerOf(tokenId) sur Ethereum mainnet",
-                    "Signe attestation EIP-712 (tokenId, owner, nonce, deadline)",
-                    "Le wallet Normie soumet register() avec la signature",
-                    "Le Core vérifie la signature ECDSA côté contrat",
-                    "(jamais de tx on-chain — signe seulement)",
-                  ],
-                  color: "border-orange-200 bg-orange-50/30",
-                  badge: "text-orange-700 border-orange-300",
-                },
-              ].map((a) => (
-                <div key={a.actor} className={`border ${a.color} p-5 space-y-3`}>
-                  <span className={`font-mono text-xs border px-2 py-0.5 ${a.badge}`}>{a.actor}</span>
-                  <ul className="space-y-1">
-                    {a.actions.map((action, i) => (
-                      <li key={i} className="font-mono text-xs text-[--fg-muted] flex gap-2">
-                        <span className="shrink-0">→</span>
-                        <span className="break-all">{action}</span>
-                      </li>
-                    ))}
+                {/* ── Contrats détaillés ─────────────────────────────────── */}
+                <p className="font-mono text-[9px] uppercase tracking-widest text-[--fg-muted] pt-3 pb-0.5">
+                  Contrats — détail
+                </p>
+
+                {/* AssociationCore */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">AssociationCore</span>
+                    <span className="font-mono text-[9px] border border-[--fg] px-1 leading-none py-0.5 text-[--fg]">IMMUABLE</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> members: tokenId → ownerAddress</li>
+                    <li><span className="opacity-50">→</span> roles: bytes32 → RoleInfo&#123;holder, since&#125;</li>
+                    <li><span className="opacity-50">→</span> usedNonces: bytes32 → bool</li>
+                    <li><span className="opacity-50">→</span> EIP-712 domain : "ANACore" v1</li>
+                    <li><span className="opacity-50">→</span> authorizeModule / revokeModule</li>
+                    <li><span className="opacity-50">→</span> setRelayer(addr) — si clé compromise</li>
                   </ul>
                 </div>
-              ))}
+
+                {/* ConstituentAssembly */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">ConstituentAssembly</span>
+                    <span className="font-mono text-[9px] border border-purple-400 text-purple-700 px-1 leading-none py-0.5">GOV</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> sessions: id → &#123;openedAt, closedAt&#125;</li>
+                    <li><span className="opacity-50">→</span> hasVoted: sessionId × tokenId → bool</li>
+                    <li><span className="opacity-50">→</span> voteCounts: role × tokenId → count</li>
+                    <li><span className="opacity-50">→</span> openSession() / closeSession() — owner</li>
+                    <li><span className="opacity-50">→</span> castVote(sessionId, tokenId, role, candidateId)</li>
+                    <li><span className="opacity-50">→</span> closeSession() → core.grantRole(winner) ×6</li>
+                    <li><span className="opacity-50">→</span> 6 rôles élus : PRESIDENT, VP, SECRETARY,</li>
+                    <li><span className="opacity-50 invisible">→</span> AUTHOR, CURATOR, RAPPORTEUR</li>
+                  </ul>
+                </div>
+
+                {/* WorkRegistry */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">WorkRegistry</span>
+                    <span className="font-mono text-[9px] border border-blue-400 text-blue-700 px-1 leading-none py-0.5">CRÉATIF</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> works[]: Work&#123;id, content, authorTokenId,</li>
+                    <li><span className="opacity-50 invisible">→</span> curatorTokenId, rapporteurTokenId,</li>
+                    <li><span className="opacity-50 invisible">→</span> publishedAt, archived&#125;</li>
+                    <li><span className="opacity-50">→</span> schedule: CreationSchedule&#123;nextCreationAt,</li>
+                    <li><span className="opacity-50 invisible">→</span> periodSeconds, active&#125;</li>
+                    <li><span className="opacity-50">→</span> publish() — RAPPORTEUR ou relayer</li>
+                    <li><span className="opacity-50">→</span> archiveWork(id) — RAPPORTEUR ou relayer</li>
+                    <li><span className="opacity-50">→</span> setSchedule(ts, period, active) — owner</li>
+                  </ul>
+                  <p className="text-[9px] text-orange-600 border border-orange-200 bg-orange-50/40 px-1.5 py-1 mt-1">
+                    ⚠ Le diagramme affiche "events[]" — le stockage réel est works[] (mapping Work struct)
+                  </p>
+                </div>
+
+                {/* GovernanceCalendar */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">GovernanceCalendar</span>
+                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> 6 types d'events : INSCRIPTION_OPEN,</li>
+                    <li><span className="opacity-50 invisible">→</span> INSCRIPTION_CLOSE, ELECTION,</li>
+                    <li><span className="opacity-50 invisible">→</span> GENERAL_ASSEMBLY, WORK_SESSION,</li>
+                    <li><span className="opacity-50 invisible">→</span> BURN_CREATION</li>
+                    <li><span className="opacity-50">→</span> trigger permissionless — n'importe qui</li>
+                    <li><span className="opacity-50">→</span> récurrence configurable (periodSeconds)</li>
+                    <li><span className="opacity-50">→</span> initializeFoundingSchedule() — post-deploy</li>
+                  </ul>
+                </div>
+
+                {/* FactoryRegistry + CollectionFactory */}
+                <div className="border border-[--border] p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">FactoryRegistry</span>
+                    <span className="font-mono text-[9px] border border-green-400 text-green-700 px-1 leading-none py-0.5">DÉPLOYÉ</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> factories: bytes32 → address</li>
+                    <li><span className="opacity-50">→</span> registerFactory(type, addr) — owner</li>
+                    <li><span className="opacity-50">→</span> getFactory(type) → address — public</li>
+                    <li><span className="opacity-50">→</span> actuellement vide — CollectionFactory</li>
+                    <li><span className="opacity-50 invisible">→</span> à enregistrer après déploiement</li>
+                  </ul>
+                </div>
+
+                <div className="border border-dashed border-orange-300 p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">CollectionFactory</span>
+                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> vérifie core.isMember(tokenId)</li>
+                    <li><span className="opacity-50">→</span> déploie new NormieCollection(name, sym)</li>
+                    <li><span className="opacity-50">→</span> getCollectionsOf(tokenId) → address[]</li>
+                    <li><span className="opacity-50">→</span> NormieCollection : ERC-721 fully on-chain,</li>
+                    <li><span className="opacity-50 invisible">→</span> tokenURI() = data:application/json;base64</li>
+                  </ul>
+                </div>
+
+                {/* TreasuryModule */}
+                <div className="border border-dashed border-orange-300 p-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] font-bold">TreasuryModule</span>
+                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                  </div>
+                  <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
+                    <li><span className="opacity-50">→</span> splits en BPS (basis points, /10 000)</li>
+                    <li><span className="opacity-50">→</span> pull payment — pas de push</li>
+                    <li><span className="opacity-50">→</span> withdraw() réservé aux role holders</li>
+                    <li><span className="opacity-50">→</span> configurable par owner post-déploiement</li>
+                  </ul>
+                </div>
+
+              </div>
+
+              {/* Diagramme — droite, max width disponible, clic → plein écran */}
+              <div className="flex-1 border border-[--border] bg-[--bg] p-2 min-w-0">
+                <ZoomableImage
+                  src="/architecture-diagram.png"
+                  alt="Diagramme des contrats ANA — Ethereum + Base, AssociationCore, modules périphériques"
+                />
+                <p className="font-mono text-[10px] text-[--fg-muted] text-center mt-1 opacity-60">
+                  clic pour agrandir
+                </p>
+              </div>
+
             </div>
           </div>
         </section>
