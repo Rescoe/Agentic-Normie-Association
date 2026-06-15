@@ -10,28 +10,21 @@ const nextConfig = {
       },
     ],
   },
-  webpack(config, { isServer }) {
-    // Optional peer deps pulled in by pino and @metamask/sdk that don't exist
-    // in a Next.js / browser context — tell webpack to ignore them.
+  // pino-pretty is an optional peer dep of pino (server-side logging).
+  // Keep it external so Next.js doesn't try to bundle it.
+  serverExternalPackages: ["pino", "pino-pretty"],
+  webpack(config) {
+    // Optional/React-Native peer deps pulled in by @metamask/sdk that don't
+    // exist in a browser context — tell webpack to return an empty module.
     config.resolve.fallback = {
       ...config.resolve.fallback,
-      "pino-pretty": false,
       "@react-native-async-storage/async-storage": false,
       "react-native-encrypted-storage": false,
       "react-native": false,
+      fs: false,
+      net: false,
+      tls: false,
     };
-
-    if (!isServer) {
-      // These Node.js built-ins are pulled in by some wallet libs on the server
-      // side only — safe to stub on client bundles.
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        net: false,
-        tls: false,
-      };
-    }
-
     return config;
   },
 };

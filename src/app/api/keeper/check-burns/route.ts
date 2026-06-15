@@ -5,7 +5,7 @@
  * work proposal in the PROPOSED state for the ANA to process.
  *
  * Requires:
- *   NORMIES_NFT_MAINNET_ADDRESS — Normies ERC721 contract on Ethereum mainnet
+ *   NORMIES_CONTRACT_ADDRESS    — Normies ERC721 contract on Ethereum mainnet
  *   ETH_MAINNET_RPC_URL        — Ethereum mainnet RPC (e.g. Alchemy/Infura)
  *
  * Protected by x-cron-secret.
@@ -40,9 +40,9 @@ const baseClient = createPublicClient({
 });
 
 async function getNormiesSupply(): Promise<number | null> {
-  const addr = (process.env.NORMIES_CONTRACT_ADDRESS ?? process.env.NORMIES_NFT_MAINNET_ADDRESS) as `0x${string}` | undefined;
+  const addr = process.env.NORMIES_CONTRACT_ADDRESS as `0x${string}` | undefined;
   if (!addr) {
-    console.warn("[check-burns] NORMIES_NFT_MAINNET_ADDRESS not set — skipping supply check");
+    console.warn("[check-burns] NORMIES_CONTRACT_ADDRESS not set — skipping supply check");
     return null;
   }
   try {
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
   const currentSupply = await getNormiesSupply();
   if (currentSupply === null) {
     return NextResponse.json({
-      message:       "Supply check skipped (NORMIES_NFT_MAINNET_ADDRESS not configured)",
+      message:       "Supply check skipped (NORMIES_CONTRACT_ADDRESS not configured)",
       burns:         0,
       worksCreated:  0,
     });
