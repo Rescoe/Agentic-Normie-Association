@@ -23,7 +23,7 @@ const rpcUrl = isMainnet
 
 export const publicClient = createPublicClient({
   chain: targetChain,
-  transport: http(rpcUrl),
+  transport: http(rpcUrl, { timeout: 8_000 }),
 });
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
