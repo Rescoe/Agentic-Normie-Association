@@ -58,7 +58,7 @@ function useAllMembers(): number[] {
     address: CORE_ADDR,
     abi:     ASSOCIATION_CORE_ABI,
     functionName: "getMemberTokenIds",
-    query: { enabled: contractsDeployed, refetchInterval: 15_000 },
+    query: { enabled: contractsDeployed, refetchInterval: 15_000, staleTime: 0, refetchOnMount: "always" },
   });
   return (data as bigint[] | undefined)?.map(Number) ?? [];
 }
@@ -985,7 +985,7 @@ export function AssemblyClient({
     address: CA_ADDR,
     abi:     CONSTITUENT_ASSEMBLY_ABI,
     functionName: "currentSession",
-    query: { enabled: contractsDeployed, refetchInterval: 6_000 },
+    query: { enabled: contractsDeployed, refetchInterval: 6_000, staleTime: 0, refetchOnMount: "always" },
   });
   const liveSession = sessionRaw as unknown as {
     id: bigint; active: boolean; resolved: boolean;

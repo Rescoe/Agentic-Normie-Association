@@ -245,22 +245,39 @@ export function ActivityClient() {
     setError(null);
 
     try {
-      // Fetch last ~10000 blocks (≈4h on Base)
-      const latest = await rpcClient.getBlockNumber();
-      const fromBlock = latest > 10_000n ? latest - 10_000n : 0n;
+      // Base: ~2s/block. 100 000 blocks ≈ 2.3 days for recent events.
+      // MemberRegistered/RoleGranted: try all-time first, fall back to 7-day window.
+      const latest      = await rpcClient.getBlockNumber();
+      const recentFrom  = latest > 100_000n ? latest - 100_000n   : 0n;
+      const weekFrom    = latest > 300_000n ? latest - 300_000n   : 0n;
+
+      // Try fromBlock, fall back to fallbackFrom if RPC rejects the range.
+      const safeGetLogs = async (
+        args: Parameters<typeof rpcClient.getLogs>[0],
+        fallbackFrom?: bigint,
+      ): Promise<Awaited<ReturnType<typeof rpcClient.getLogs>>> => {
+        try { return await rpcClient.getLogs(args); }
+        catch {
+          if (fallbackFrom !== undefined) {
+            try { return await rpcClient.getLogs({ ...args, fromBlock: fallbackFrom }); }
+            catch { return []; }
+          }
+          return [];
+        }
+      };
 
       const [
         memberLogs, roleLogs, voteLogs,
         sessionOpenLogs, sessionCloseLogs,
         workLogs, workSessionLogs,
       ] = await Promise.all([
-        rpcClient.getLogs({ address: CORE_ADDR, event: MEMBER_REGISTERED, fromBlock }),
-        rpcClient.getLogs({ address: CORE_ADDR, event: ROLE_GRANTED,      fromBlock }),
-        rpcClient.getLogs({ address: CA_ADDR,   event: VOTE_CAST,         fromBlock }),
-        rpcClient.getLogs({ address: CA_ADDR,   event: SESSION_OPENED,    fromBlock }),
-        rpcClient.getLogs({ address: CA_ADDR,   event: SESSION_CLOSED,    fromBlock }),
-        rpcClient.getLogs({ address: WR_ADDR,   event: WORK_PUBLISHED,    fromBlock }),
-        rpcClient.getLogs({ address: WR_ADDR,   event: WORK_SESSION_INIT, fromBlock }),
+        safeGetLogs({ address: CORE_ADDR, event: MEMBER_REGISTERED, fromBlock: 0n      }, weekFrom),
+        safeGetLogs({ address: CORE_ADDR, event: ROLE_GRANTED,      fromBlock: 0n      }, weekFrom),
+        safeGetLogs({ address: CA_ADDR,   event: VOTE_CAST,         fromBlock: recentFrom }),
+        safeGetLogs({ address: CA_ADDR,   event: SESSION_OPENED,    fromBlock: recentFrom }),
+        safeGetLogs({ address: CA_ADDR,   event: SESSION_CLOSED,    fromBlock: recentFrom }),
+        safeGetLogs({ address: WR_ADDR,   event: WORK_PUBLISHED,    fromBlock: recentFrom }),
+        safeGetLogs({ address: WR_ADDR,   event: WORK_SESSION_INIT, fromBlock: recentFrom }),
       ]);
 
       const all: ActivityEvent[] = [
@@ -331,13 +348,13 @@ export function ActivityClient() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center">
-          <p className="font-mono text-xs text-[--fg-muted]">Aucun événement trouvé dans les 10 000 derniers blocs.</p>
+          <p className="font-mono text-xs text-[--fg-muted]">Aucun événement trouvé. Vérifiez la configuration des contrats.</p>
         </div>
       ) : (
         <div className="border border-[--border]">
           <div className="px-5 py-3 bg-[--bg-card] border-b border-[--border] flex items-center justify-between">
             <p className="font-mono text-xs text-[--fg-muted]">
-              {filtered.length} événement{filtered.length > 1 ? "s" : ""} — derniers 10 000 blocs Base
+              {filtered.length} événement{filtered.length > 1 ? "s" : ""} — derniers 100 000 blocs Base (~2j)
             </p>
           </div>
           <div className="px-5">
