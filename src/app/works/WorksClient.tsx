@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useReadContract } from "wagmi";
 import Image from "next/image";
 import Link from "next/link";
-import { WORK_REGISTRY_ABI, CONTRACT_ADDRESSES, ROLES, ROLE_LABELS } from "@/lib/contracts";
+import { WORK_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -70,8 +70,8 @@ function WorkCard({ work }: { work: Work }) {
         </div>
       ) : (
         <button
-          onClick={() => setPreviewOpen(true)}
-          className="relative aspect-video bg-[--bg-card] overflow-hidden group cursor-pointer flex items-center justify-center"
+          onClick={() => source.type === "onchain" && setPreviewOpen(true)}
+          className={`relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center ${source.type === "onchain" ? "cursor-pointer" : "cursor-default"}`}
         >
           <div className="flex gap-3 items-center">
             {[work.authorTokenId, work.curatorTokenId, work.rapporteurTokenId].map((tid, i) => (
@@ -87,11 +87,20 @@ function WorkCard({ work }: { work: Work }) {
               </div>
             ))}
           </div>
-          <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
-              {source.type === "onchain" ? "Exécuter ▶" : "Format inconnu"}
-            </span>
-          </div>
+          {source.type === "onchain" ? (
+            <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+              <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
+                Exécuter ▶
+              </span>
+            </div>
+          ) : (
+            <div className="absolute bottom-2 left-0 right-0 flex justify-center">
+              <span className="font-mono text-[10px] bg-[--bg]/80 text-[--fg-muted] border border-[--border] px-2 py-0.5 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse inline-block" />
+                Récupération depuis la blockchain…
+              </span>
+            </div>
+          )}
         </button>
       )}
 
@@ -138,7 +147,7 @@ function WorkCard({ work }: { work: Work }) {
         {/* Source */}
         <div className="flex items-center justify-between pt-1 border-t border-[--border]">
           <p className="font-mono text-xs text-[--fg-muted]">
-            {source.type === "onchain" ? "✓ onchain" : "format inconnu"}
+            {source.type === "onchain" ? "✓ on-chain · exécutable" : "⏳ décodage…"}
           </p>
           <span className="font-mono text-xs text-[--fg-muted]">
             #{String(work.id)}
@@ -179,6 +188,9 @@ function WorkList({ count }: { count: number }) {
 }
 
 function WorkCardLoader({ workId }: { workId: number }) {
+  const [apiContent, setApiContent] = useState<string | null>(null);
+  const [apiLoading, setApiLoading] = useState(false);
+
   const { data, isLoading } = useReadContract({
     address:      WR_ADDR,
     abi:          WORK_REGISTRY_ABI,
@@ -187,6 +199,22 @@ function WorkCardLoader({ workId }: { workId: number }) {
     query: { enabled: deployed },
   });
 
+  const work = data ? (data as unknown as Work) : null;
+
+  // When contract content doesn't parse, fetch from server-side API (decodes from tx receipt/logs)
+  useEffect(() => {
+    if (!work) return;
+    const source = resolveWorkSource(work.content);
+    if (source.type !== "unknown") return; // already OK
+    if (apiContent !== null || apiLoading) return;
+    setApiLoading(true);
+    fetch(`/api/works/content/${workId}`)
+      .then(r => r.json())
+      .then((d: { content?: string }) => { if (d.content) setApiContent(d.content); })
+      .catch(() => null)
+      .finally(() => setApiLoading(false));
+  }, [work, workId, apiContent, apiLoading]);
+
   if (isLoading) {
     return (
       <div className="border border-[--border] bg-[--bg-card] aspect-video flex items-center justify-center">
@@ -194,10 +222,11 @@ function WorkCardLoader({ workId }: { workId: number }) {
       </div>
     );
   }
-  if (!data) return null;
+  if (!work) return null;
 
-  const work = data as unknown as Work;
-  return <WorkCard work={work} />;
+  // Merge API content if available
+  const merged = apiContent ? { ...work, content: apiContent } : work;
+  return <WorkCard work={merged} />;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
