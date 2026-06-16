@@ -281,7 +281,13 @@ export async function POST(req: NextRequest) {
       const all = await listSalons();
       const voteSalon = all.find(s => s.name === salonName);
       if (voteSalon) await closeSalon(voteSalon.id, 0).catch(() => null);
-      return NextResponse.json({ phase: "close", txHash: hash });
+
+      // Auto-create work with the elected Auteur — fire-and-forget
+      const proposeUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/api/keeper/propose-work`;
+      fetch(proposeUrl, { method: "POST", headers: { "x-admin-call": "1", "Content-Type": "application/json" }, body: "{}" })
+        .catch(() => null);
+
+      return NextResponse.json({ phase: "close", txHash: hash, postElection: "propose-work triggered" });
     } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
   }
 

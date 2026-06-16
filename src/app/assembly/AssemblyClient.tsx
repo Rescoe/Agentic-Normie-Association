@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   useAccount,
   useReadContract,
@@ -102,6 +102,7 @@ function SessionControls({ sessionActive }: { sessionActive: boolean }) {
   const [txHash,   setTxHash]   = useState<`0x${string}` | null>(null);
   const [txState,  setTxState]  = useState<"idle" | "pending" | "confirming" | "done" | "error">("idle");
   const [txError,  setTxError]  = useState<string | null>(null);
+  const lastFn = useRef<"openSession" | "closeSession">("openSession");
 
   // Owner of ConstituentAssembly (only owner can open/close)
   const { data: ownerRaw } = useReadContract({
@@ -124,13 +125,22 @@ function SessionControls({ sessionActive }: { sessionActive: boolean }) {
   useEffect(() => {
     if (txConfirmed && txState === "confirming") {
       setTxState("done");
-      router.refresh(); // revalidate server component
+      router.refresh();
+      // After closeSession confirms, auto-trigger post-election work creation
+      if (lastFn.current === "closeSession") {
+        fetch("/api/keeper/propose-work", {
+          method: "POST",
+          headers: { "x-admin-call": "1", "Content-Type": "application/json" },
+          body: "{}",
+        }).catch(() => null);
+      }
       const t = setTimeout(() => setTxState("idle"), 4000);
       return () => clearTimeout(t);
     }
   }, [txConfirmed, txState, router]);
 
   const exec = useCallback(async (fn: "openSession" | "closeSession") => {
+    lastFn.current = fn;
     setTxError(null);
     setTxState("pending");
     try {
@@ -458,15 +468,29 @@ function ElectionResults({
   allMemberIds:    number[];
   sessionResolved: boolean;
 }) {
-  // For every (role, candidate) pair, read voteCount — batched in one call
-  const pairs: { roleHash: `0x${string}`; label: string; candidateId: number }[] = [];
-  for (const r of ORDERED_ROLES) {
-    for (const id of allMemberIds) {
-      pairs.push({ roleHash: r.hash, label: r.label, candidateId: id });
-    }
-  }
+  // Fast path — getLeader (6 calls) gives the winner immediately
+  const { data: leaderData, isLoading: leadersLoading } = useReadContracts({
+    contracts: ORDERED_ROLES.map(r => ({
+      address:      CA_ADDR,
+      abi:          CONSTITUENT_ASSEMBLY_ABI,
+      functionName: "getLeader" as const,
+      args:         [r.hash as `0x${string}`],
+    })),
+    query: { enabled: contractsDeployed, refetchInterval: 8_000, staleTime: 0 },
+  });
 
-  const { data: rawCounts, isLoading } = useReadContracts({
+  const leaders = (ORDERED_ROLES as readonly typeof ORDERED_ROLES[number][]).map((_, idx) => {
+    const raw = leaderData?.[idx]?.result as [bigint, bigint] | undefined;
+    return { tokenId: Number(raw?.[0] ?? 0n), count: Number(raw?.[1] ?? 0n) };
+  });
+
+  // Detailed tally — getVoteCount for all (role, candidate) pairs, for full ranking
+  const pairs: Array<{ roleIdx: number; roleHash: `0x${string}`; candidateId: number }> = [];
+  ORDERED_ROLES.forEach((r, ri) => {
+    allMemberIds.forEach(id => pairs.push({ roleIdx: ri, roleHash: r.hash, candidateId: id }));
+  });
+
+  const { data: rawCounts, isLoading: tallyLoading } = useReadContracts({
     contracts: pairs.map(p => ({
       address:      CA_ADDR,
       abi:          CONSTITUENT_ASSEMBLY_ABI,
@@ -476,18 +500,37 @@ function ElectionResults({
     query: { enabled: allMemberIds.length > 0 && contractsDeployed, refetchInterval: 8_000 },
   });
 
-  // Organize: roleHash → candidateId → voteCount
-  const tally: Record<string, Record<number, number>> = {};
+  const tally: Record<number, Record<number, number>> = {};
   pairs.forEach((p, i) => {
-    tally[p.roleHash] ??= {};
-    tally[p.roleHash][p.candidateId] = Number(rawCounts?.[i]?.result ?? 0n);
+    tally[p.roleIdx] ??= {};
+    tally[p.roleIdx][p.candidateId] = Number(rawCounts?.[i]?.result ?? 0n);
   });
 
-  const totalVotes = Object.values(tally).reduce((sum, candidates) =>
-    sum + Object.values(candidates).reduce((s, c) => s + c, 0), 0
-  );
+  // Skeleton while getLeader loads
+  if (leadersLoading) {
+    return (
+      <div className="space-y-5">
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+          Résultats en temps réel
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {ORDERED_ROLES.map(r => (
+            <div key={r.hash} className="border border-[--border] animate-pulse">
+              <div className="px-4 py-2.5 bg-[--bg-card] border-b border-[--border] space-y-1.5">
+                <div className="h-2.5 bg-[--border] rounded w-20" />
+                <div className="h-3.5 bg-[--border] rounded w-32" />
+              </div>
+              <div className="px-4 py-3">
+                <div className="h-7 bg-[--border] rounded w-24" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-  if (allMemberIds.length === 0) return null;
+  const hasAnyVotes = leaders.some(l => l.count > 0);
 
   return (
     <div className="space-y-5">
@@ -502,36 +545,43 @@ function ElectionResults({
             </p>
           )}
         </div>
-        {isLoading && (
+        {(tallyLoading && allMemberIds.length > 0) && (
           <div className="w-4 h-4 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
         )}
       </div>
 
-      {totalVotes === 0 && !isLoading && (
+      {!hasAnyVotes && (
         <p className="font-mono text-xs text-[--fg-muted]">Aucun vote enregistré pour l'instant.</p>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {ORDERED_ROLES.map(role => {
-          const roleTally = tally[role.hash] ?? {};
-          const sorted    = [...allMemberIds]
-            .map(id => ({ id, votes: roleTally[id] ?? 0 }))
-            .filter(c => c.votes > 0)
-            .sort((a, b) => b.votes - a.votes || a.id - b.id);
+        {ORDERED_ROLES.map((role, idx) => {
+          const leader = leaders[idx];
+          const roleTally = tally[idx] ?? {};
 
-          const leader    = sorted[0];
-          const maxVotes  = leader?.votes ?? 1;
+          // Full ranking from tally (when allMemberIds loaded) or leader-only fallback
+          const sorted = allMemberIds.length > 0
+            ? [...allMemberIds]
+                .map(id => ({ id, votes: roleTally[id] ?? 0 }))
+                .filter(c => c.votes > 0)
+                .sort((a, b) => b.votes - a.votes || a.id - b.id)
+            : leader.tokenId > 0
+              ? [{ id: leader.tokenId, votes: leader.count }]
+              : [];
+
+          const maxVotes = sorted[0]?.votes ?? 1;
+          const isElected = sessionResolved && leader.tokenId > 0;
 
           return (
-            <div key={role.hash} className={`border ${sessionResolved && leader ? "border-green-300" : "border-[--border]"} bg-[--bg]`}>
-              <div className={`px-4 py-2.5 flex items-center justify-between ${sessionResolved && leader ? "bg-green-50/30" : "bg-[--bg-card]"} border-b border-[--border]`}>
+            <div key={role.hash} className={`border ${isElected ? "border-green-300" : "border-[--border]"} bg-[--bg]`}>
+              <div className={`px-4 py-2.5 flex items-center justify-between ${isElected ? "bg-green-50/30" : "bg-[--bg-card]"} border-b border-[--border]`}>
                 <div>
                   <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-wide">
                     {role.group === "institutional" ? "Institutionnel" : "Créatif"}
                   </p>
                   <p className="font-bold text-sm">{role.label}</p>
                 </div>
-                {sessionResolved && leader && (
+                {isElected && (
                   <span className="font-mono text-xs text-green-700 border border-green-300 bg-green-100 px-2 py-0.5">
                     Élu
                   </span>
@@ -545,7 +595,7 @@ function ElectionResults({
                   sorted.map((c, rank) => {
                     const pct = Math.round((c.votes / maxVotes) * 100);
                     return (
-                      <div key={c.id} className={`space-y-1 ${rank === 0 && sessionResolved ? "opacity-100" : rank === 0 ? "opacity-100" : "opacity-70"}`}>
+                      <div key={c.id} className={`space-y-1 ${rank > 0 ? "opacity-70" : ""}`}>
                         <div className="flex items-center gap-2">
                           <div className="relative w-7 h-7 shrink-0 overflow-hidden">
                             <Image
@@ -563,7 +613,6 @@ function ElectionResults({
                             {c.votes} vote{c.votes > 1 ? "s" : ""}
                           </span>
                         </div>
-                        {/* Progress bar */}
                         <div className="h-1.5 bg-[--bg-card] border border-[--border] overflow-hidden">
                           <div
                             className={`h-full transition-all duration-500 ${rank === 0 ? "bg-[--fg]" : "bg-[--fg]/30"}`}
@@ -1131,8 +1180,8 @@ export function AssemblyClient({
         </div>
       )}
 
-      {/* Election results — visible during and after session */}
-      {allMemberIds.length > 0 && (
+      {/* Election results — visible always (getLeader loads fast without needing memberIds) */}
+      {contractsDeployed && (
         <div className="border-t border-[--border] pt-8">
           <ElectionResults
             allMemberIds={allMemberIds}
