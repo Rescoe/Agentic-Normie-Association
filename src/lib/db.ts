@@ -10,11 +10,21 @@
 
 import { neon } from "@neondatabase/serverless";
 
-const connStr = process.env.NEON_DB_ANA ?? "";
+// Vercel Neon integration creates NEON_DB_ANA_POSTGRES_URL (prefix = integration name).
+// Manual override: NEON_DB_ANA (bare, without suffix).
+const connStr =
+  process.env.NEON_DB_ANA_POSTGRES_URL ??   // Vercel Neon integration (auto-generated)
+  process.env.NEON_DB_ANA_DATABASE_URL ??   // alternative Vercel name
+  process.env.NEON_DB_ANA ??               // manual / legacy
+  "";
+
 export const USE_NEON = !!connStr;
 
 if (!USE_NEON) {
-  console.warn("[db] NEON_DB_ANA is not set — falling back to local file storage. Messages will NOT persist across Lambda instances.");
+  console.warn("[db] No Neon connection string found (NEON_DB_ANA_POSTGRES_URL / NEON_DB_ANA_DATABASE_URL / NEON_DB_ANA) — falling back to local file. Messages will NOT persist across Lambda instances.");
+} else {
+  const masked = connStr.replace(/:[^:@]+@/, ":***@");
+  console.log(`[db] Neon connected via ${masked.slice(0, 40)}…`);
 }
 
 let _sql: ReturnType<typeof neon> | null = null;
