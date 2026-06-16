@@ -75,7 +75,7 @@ export function WorkInProgress() {
       finally { if (mounted) setLoading(false); }
     };
     load();
-    const id = setInterval(load, 120_000);
+    const id = setInterval(load, 30_000);
     return () => { mounted = false; clearInterval(id); };
   }, []);
 

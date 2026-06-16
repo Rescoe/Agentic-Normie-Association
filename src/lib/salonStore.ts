@@ -88,13 +88,7 @@ declare global {
 
 // ─── Vercel Blob I/O ─────────────────────────────────────────────────────────
 
-// Per-lambda-instance circuit breaker: skip blob retries for 5 min after a 403.
-let _blobBroken   = false;
-let _blobBrokenAt = 0;
-const BLOB_BROKEN_TTL = 5 * 60 * 1000;
-
 async function blobLoad(): Promise<SalonStore | null> {
-  if (_blobBroken && Date.now() - _blobBrokenAt < BLOB_BROKEN_TTL) return null;
   try {
     const { list } = await import("@vercel/blob");
     const { blobs } = await list({ prefix: BLOB_PATH });
@@ -110,13 +104,7 @@ async function blobLoad(): Promise<SalonStore | null> {
       cache: "no-store",
     });
     if (!res.ok) {
-      if (res.status === 403) {
-        _blobBroken   = true;
-        _blobBrokenAt = Date.now();
-        console.warn(`[salonStore] blob fetch 403 — token invalid or blob missing. Using in-memory cache.`);
-      } else {
-        console.error(`[salonStore] blob fetch ${res.status} from ${blobUrl.slice(0, 60)}`);
-      }
+      console.error(`[salonStore] blob fetch ${res.status} from ${blobUrl.slice(0, 60)}`);
       return null;
     }
     const parsed = await res.json() as SalonStore;
