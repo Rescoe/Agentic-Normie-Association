@@ -3,20 +3,19 @@
  * Returns the HTML content of an on-chain work by its WorkRegistry id.
  *
  * Strategy (in order):
- *  1. workStore has txHash → decode WorkPublished log from receipt (fastest, exact)
- *  2. getLogs scan for WorkPublished(workId=id) over last ~500k blocks (fallback)
+ *  1. readContract getWork()  — server-side, pas de limite RPC browser
+ *  2. getLogs WorkPublished   — fallback si readContract échoue ou retourne vide
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, decodeEventLog } from "viem";
+import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { WorkRegistryAbi } from "@/lib/abis/WorkRegistry";
-import { listWorks } from "@/lib/workStore";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 const client = createPublicClient({
   chain:     base,
-  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org", { timeout: 20_000 }),
+  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org", { timeout: 25_000 }),
 });
 
 const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
@@ -33,6 +32,11 @@ const WORK_PUBLISHED_EVENT = {
   ],
 } as const;
 
+function findDataUri(raw: string): string | null {
+  const idx = raw.indexOf("data:text/html");
+  return idx !== -1 ? raw.slice(idx) : null;
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -41,49 +45,36 @@ export async function GET(
   if (!Number.isInteger(onChainId) || onChainId <= 0) {
     return NextResponse.json({ error: "Invalid work id" }, { status: 400 });
   }
-
   if (!WR_ADDR) {
     return NextResponse.json({ error: "WorkRegistry not configured" }, { status: 503 });
   }
 
-  // ── 1. txHash from workStore → decode receipt log ─────────────────────────
-  let txHash: `0x${string}` | undefined;
+  // ── 1. readContract server-side (primary) ────────────────────────────────
   try {
-    const works = await listWorks();
-    const match = works.find(w => w.onChainWorkId === onChainId && w.txHash);
-    if (match?.txHash) txHash = match.txHash as `0x${string}`;
-  } catch { /* workStore unavailable */ }
+    const work = await client.readContract({
+      address:      WR_ADDR,
+      abi:          WorkRegistryAbi,
+      functionName: "getWork",
+      args:         [BigInt(onChainId)],
+    }) as { id: bigint; content: string; authorTokenId: bigint; curatorTokenId: bigint; rapporteurTokenId: bigint; publishedAt: bigint; archived: boolean };
 
-  if (txHash) {
-    try {
-      const receipt = await client.getTransactionReceipt({ hash: txHash });
-      for (const log of receipt.logs) {
-        try {
-          const decoded = decodeEventLog({
-            abi:       WorkRegistryAbi,
-            eventName: "WorkPublished",
-            data:      log.data,
-            topics:    log.topics as [`0x${string}`, ...`0x${string}`[]],
-          });
-          const content = (decoded.args as Record<string, unknown>).content as string | undefined;
-          if (content) {
-            return NextResponse.json({ content, source: "receipt" });
-          }
-        } catch { /* not the WorkPublished log */ }
-      }
-    } catch (e) {
-      console.error(`[works/content] receipt error for txHash ${txHash}:`, e);
+    const content = findDataUri(work.content ?? "");
+    if (content) {
+      console.log(`[works/content] readContract ok — work #${onChainId}, ${content.length} chars`);
+      return NextResponse.json({ content, source: "contract" });
     }
+    console.warn(`[works/content] readContract returned unparseable content for #${onChainId}: "${String(work.content).slice(0, 80)}"`);
+  } catch (e) {
+    console.error(`[works/content] readContract error for #${onChainId}:`, e);
   }
 
-  // ── 2. getLogs fallback ───────────────────────────────────────────────────
+  // ── 2. getLogs WorkPublished (fallback) ──────────────────────────────────
   try {
-    const latest   = await client.getBlockNumber();
-    const fromBlock = latest > 500_000n ? latest - 500_000n : 0n;
+    const latest    = await client.getBlockNumber();
+    const fromBlock = latest > 2_000_000n ? latest - 2_000_000n : 0n;
+    const CHUNK     = 2_000n;
+    let cursor      = fromBlock;
 
-    // getLogs in 2k-block chunks to respect Base RPC limits
-    const CHUNK = 2_000n;
-    let cursor = fromBlock;
     while (cursor <= latest) {
       const end = cursor + CHUNK - 1n > latest ? latest : cursor + CHUNK - 1n;
       try {
@@ -95,16 +86,19 @@ export async function GET(
           toBlock:   end,
         });
         if (logs.length > 0) {
-          const content = (logs[0].args as Record<string, unknown>).content as string | undefined;
+          const raw     = (logs[0].args as Record<string, unknown>).content as string | undefined;
+          const content = raw ? findDataUri(raw) : null;
           if (content) {
+            console.log(`[works/content] getLogs ok — work #${onChainId} found at block ~${cursor}`);
             return NextResponse.json({ content, source: "logs" });
           }
         }
       } catch { /* skip chunk */ }
       cursor = end + 1n;
     }
+    console.warn(`[works/content] getLogs: no WorkPublished found for #${onChainId} in last 2M blocks`);
   } catch (e) {
-    console.error(`[works/content] getLogs error for workId ${onChainId}:`, e);
+    console.error(`[works/content] getLogs error for #${onChainId}:`, e);
   }
 
   return NextResponse.json({ error: "Content not found on-chain", source: "none" }, { status: 404 });

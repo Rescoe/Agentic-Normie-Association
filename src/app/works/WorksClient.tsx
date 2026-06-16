@@ -201,17 +201,21 @@ function WorkCardLoader({ workId }: { workId: number }) {
 
   const work = data ? (data as unknown as Work) : null;
 
-  // When contract content doesn't parse, fetch from server-side API (decodes from tx receipt/logs)
+  // When contract content doesn't parse client-side, fetch via server-side API
   useEffect(() => {
     if (!work) return;
     const source = resolveWorkSource(work.content);
-    if (source.type !== "unknown") return; // already OK
+    if (source.type !== "unknown") return; // already parsed OK
     if (apiContent !== null || apiLoading) return;
+    console.log(`[WorkCard #${workId}] client content unparseable ("${work.content.slice(0,40)}") — calling API`);
     setApiLoading(true);
     fetch(`/api/works/content/${workId}`)
       .then(r => r.json())
-      .then((d: { content?: string }) => { if (d.content) setApiContent(d.content); })
-      .catch(() => null)
+      .then((d: { content?: string; error?: string; source?: string }) => {
+        console.log(`[WorkCard #${workId}] API response: source=${d.source} contentLength=${d.content?.length}`);
+        if (d.content) setApiContent(d.content);
+      })
+      .catch(e => console.error(`[WorkCard #${workId}] API error:`, e))
       .finally(() => setApiLoading(false));
   }, [work, workId, apiContent, apiLoading]);
 
