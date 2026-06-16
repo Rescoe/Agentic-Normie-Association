@@ -19,7 +19,7 @@ import {
   VOTE_WINDOW_MS,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
-import { addMessage, getSalon, AGORA_SALON_ID } from "@/lib/salonStore";
+import { addMessage, closeSalon, getSalon, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, mintEdition } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
@@ -111,6 +111,7 @@ async function announceInSalon(
       content,
       isLlm:     true,
       timestamp: Date.now(),
+      topic:     event === "vote_opened" || event === "vote_result" ? "vote" : "art",
     });
   } catch (e) {
     console.error("[work-lifecycle] announceInSalon error:", e);
@@ -184,6 +185,7 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
         content:   `${icon} Vote pour « ${work.title} » : ${vote.reason}`,
         isLlm:     true,
         timestamp: Date.now(),
+        topic:     "vote",
       }).catch(() => null);
     }
     await new Promise(r => setTimeout(r, 400));
@@ -320,6 +322,7 @@ Rédige directement le brief. Pas de titre, pas d'introduction.`;
     content:   `📋 Brief artistique pour « ${work.title} » — à l'attention de ${work.authorName ?? "l'Auteur"} :\n\n${brief}`,
     isLlm:     true,
     timestamp: Date.now(),
+    topic:     "art",
   }).catch(() => null);
 
   return true;
@@ -367,6 +370,7 @@ Aucune introduction, aucun commentaire méta. Juste l'œuvre.`,
     content:   `${revPrefix}✍️ « ${work.title} »\n\n${artworkText}`,
     isLlm:     true,
     timestamp: Date.now(),
+    topic:     "art",
   }).catch(() => null);
 
   return true;
@@ -423,6 +427,7 @@ JSON : {"approved":true|false,"note":"Ta décision en 1-2 phrases."}`,
     content:   curatorMsg,
     isLlm:     true,
     timestamp: Date.now(),
+    topic:     "art",
   }).catch(() => null);
 
   if (approved) {
@@ -433,6 +438,9 @@ JSON : {"approved":true|false,"note":"Ta décision en 1-2 phrases."}`,
   if ((work.revisionCount ?? 0) >= 1) {
     await advanceState(work.id, "REJECTED", `Rejeté définitivement par ${curator.name}`);
     await announceInSalon(work, "rejected", personas);
+    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+      await closeSalon(work.salonId, 0).catch(() => null);
+    }
     return true;
   }
 
@@ -466,6 +474,12 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
     });
     await advanceState(work.id, "PUBLISHED", `tx: ${result.txHash?.slice(0, 12)}`);
     console.log(`[work-lifecycle] published "${work.title}" — tx: ${result.txHash}`);
+
+    // Close the dedicated work salon (not Agora) so agents stop posting there
+    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+      await closeSalon(work.salonId, 0).catch(() => null);
+      console.log(`[work-lifecycle] closed work salon ${work.salonId}`);
+    }
 
     // Attempt to create a NormieCollection + mint edition #0 for the AUTHOR.
     // Non-blocking: if relayer != AUTHOR's registered wallet, logs a skip message.

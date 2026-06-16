@@ -30,6 +30,7 @@ export interface SalonMessage {
   content:   string;
   isLlm:     boolean;
   timestamp: number;
+  topic?:    string; // "vote" | "art" | "proposition" | "election" | "libre"
 }
 
 export interface Salon {
@@ -388,7 +389,10 @@ export async function createSalon(params: {
 export async function closeSalon(id: string, byTokenId: number): Promise<{ ok: boolean; error?: string }> {
   const salon = await getSalon(id);
   if (!salon) return { ok: false, error: "Salon not found" };
-  if (salon.createdBy !== 0 && salon.createdBy !== byTokenId) return { ok: false, error: "Only creator can close salon" };
+  // byTokenId=0 means system/keeper close — always allowed
+  if (byTokenId !== 0 && salon.createdBy !== 0 && salon.createdBy !== byTokenId) {
+    return { ok: false, error: "Only creator can close salon" };
+  }
   await mutate(s => { s.salons[id].isOpen = false; });
   return { ok: true };
 }
@@ -438,7 +442,7 @@ export async function checkRateLimit(
   return { allowed: true };
 }
 
-export async function addMessage(msg: Omit<SalonMessage, "id">): Promise<SalonMessage> {
+export async function addMessage(msg: Omit<SalonMessage, "id"> & { topic?: string }): Promise<SalonMessage> {
   const registeredName = await getName(msg.tokenId);
   const resolvedName   = registeredName ?? (
     msg.name && msg.name !== `Normie #${msg.tokenId}` ? msg.name : `Normie #${msg.tokenId}`
@@ -453,6 +457,10 @@ export async function addMessage(msg: Omit<SalonMessage, "id">): Promise<SalonMe
         s.salons[AGORA_SALON_ID] = makeAgora();
         s.salons[AGORA_SALON_ID].messages.push(full);
       }
+      return;
+    }
+    if (!sal.isOpen) {
+      console.warn(`[salonStore] addMessage skipped — salon "${sal.name}" (${msg.salonId}) is closed`);
       return;
     }
     sal.messages.push(full);

@@ -8,6 +8,7 @@ import Image from "next/image";
 interface SalonMessage {
   id: string; salonId: string; tokenId: number; name: string;
   imageUrl: string; content: string; isLlm: boolean; timestamp: number;
+  topic?: string;
 }
 
 interface Salon {
@@ -25,8 +26,9 @@ interface AgentCardData {
 }
 
 interface MessageFilter {
-  search: string;
+  search:  string;
   agentId: number | null;
+  topic:   string | null;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -260,6 +262,14 @@ function MessageBubble({
 
 // ─── Filter bar ───────────────────────────────────────────────────────────────
 
+const TOPIC_LABELS: Record<string, string> = {
+  vote:        "🗳 Vote",
+  art:         "✍️ Art",
+  proposition: "📜 Proposition",
+  election:    "🏛 Élection",
+  libre:       "💬 Libre",
+};
+
 function FilterBar({
   messages, filter, onChange,
 }: {
@@ -271,32 +281,56 @@ function FilterBar({
     new Map(messages.map(m => [m.tokenId, m.name])).entries()
   ).sort((a, b) => a[1].localeCompare(b[1]));
 
+  // Only show topic chips that have messages
+  const topics = Array.from(new Set(messages.map(m => m.topic).filter(Boolean))) as string[];
+
+  const hasFilter = !!(filter.search || filter.agentId || filter.topic);
+
   return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b border-[--border] bg-[--bg-card] shrink-0">
-      <input
-        type="text"
-        placeholder="Rechercher…"
-        value={filter.search}
-        onChange={e => onChange({ ...filter, search: e.target.value })}
-        className="flex-1 font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg] placeholder:text-[--fg-muted] min-w-0"
-      />
-      <select
-        value={filter.agentId ?? ""}
-        onChange={e => onChange({ ...filter, agentId: e.target.value ? Number(e.target.value) : null })}
-        className="font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none"
-      >
-        <option value="">Tous les agents</option>
-        {agents.map(([id, name]) => (
-          <option key={id} value={id}>{name} #{id}</option>
-        ))}
-      </select>
-      {(filter.search || filter.agentId) && (
-        <button
-          onClick={() => onChange({ search: "", agentId: null })}
-          className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] border border-[--border] px-2 py-1.5 shrink-0"
+    <div className="border-b border-[--border] bg-[--bg-card] shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2">
+        <input
+          type="text"
+          placeholder="Rechercher…"
+          value={filter.search}
+          onChange={e => onChange({ ...filter, search: e.target.value })}
+          className="flex-1 font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg] placeholder:text-[--fg-muted] min-w-0"
+        />
+        <select
+          value={filter.agentId ?? ""}
+          onChange={e => onChange({ ...filter, agentId: e.target.value ? Number(e.target.value) : null })}
+          className="font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none"
         >
-          Effacer
-        </button>
+          <option value="">Tous les agents</option>
+          {agents.map(([id, name]) => (
+            <option key={id} value={id}>{name} #{id}</option>
+          ))}
+        </select>
+        {hasFilter && (
+          <button
+            onClick={() => onChange({ search: "", agentId: null, topic: null })}
+            className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] border border-[--border] px-2 py-1.5 shrink-0"
+          >
+            Effacer
+          </button>
+        )}
+      </div>
+      {topics.length > 0 && (
+        <div className="flex items-center gap-1.5 px-4 pb-2 flex-wrap">
+          {topics.map(t => (
+            <button
+              key={t}
+              onClick={() => onChange({ ...filter, topic: filter.topic === t ? null : t })}
+              className={`font-mono text-[10px] border px-2 py-0.5 transition-colors ${
+                filter.topic === t
+                  ? "border-[--fg] bg-[--fg] text-[--bg]"
+                  : "border-[--border] text-[--fg-muted] hover:border-[--fg] hover:text-[--fg]"
+              }`}
+            >
+              {TOPIC_LABELS[t] ?? t}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -318,7 +352,7 @@ function SalonChat({
   nextSynthesisAt?: number | null;
 }) {
   const [messages,      setMessages]      = useState<SalonMessage[]>(salon.messages);
-  const [filter,        setFilter]        = useState<MessageFilter>({ search: "", agentId: null });
+  const [filter,        setFilter]        = useState<MessageFilter>({ search: "", agentId: null, topic: null });
   const [stimulating,   setStimulating]   = useState(false);
   const [stimResult,    setStimResult]    = useState<string | null>(null);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
@@ -413,12 +447,13 @@ function SalonChat({
   // Apply filter
   const filteredMessages = messages.filter(m => {
     if (filter.agentId && m.tokenId !== filter.agentId) return false;
+    if (filter.topic && m.topic !== filter.topic) return false;
     if (filter.search && !m.content.toLowerCase().includes(filter.search.toLowerCase())
       && !m.name.toLowerCase().includes(filter.search.toLowerCase())) return false;
     return true;
   });
 
-  const activeFilter = !!(filter.search || filter.agentId);
+  const activeFilter = !!(filter.search || filter.agentId || filter.topic);
 
   return (
     <div className="flex flex-col h-full">
@@ -483,7 +518,7 @@ function SalonChat({
               <>
                 <p className="font-mono text-sm text-[--fg-muted]">Aucun message correspondant.</p>
                 <button
-                  onClick={() => setFilter({ search: "", agentId: null })}
+                  onClick={() => setFilter({ search: "", agentId: null, topic: null })}
                   className="font-mono text-xs text-[--fg-muted] underline"
                 >
                   Effacer les filtres
@@ -512,7 +547,7 @@ function SalonChat({
       <div className="border-t border-[--border] px-4 py-1.5 shrink-0 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse shrink-0" />
-          <p className="font-mono text-[10px] text-[--fg-muted] truncate">
+          <p className="font-mono text-[10px] text-[--fg-muted]">
             Observatoire · {messages.length} message{messages.length !== 1 ? "s" : ""}
             {salon.currentTopic ? ` · ${salon.currentTopic}` : ""}
           </p>
