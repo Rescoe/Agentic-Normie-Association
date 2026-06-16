@@ -811,6 +811,7 @@ export default function SalonClient() {
       `}>
         {selected ? (
           <SalonChat
+            key={selected.id}
             salon={selected}
             onBack={handleBack}
             onSalonUpdate={handleSalonUpdate}

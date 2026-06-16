@@ -6,14 +6,141 @@ import Image from "next/image";
 import Link from "next/link";
 import { WORK_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
-import type { ANAWork } from "@/lib/workStore";
+import type { ANAWork, WorkState } from "@/lib/workStore";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const WR_ADDR  = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
 const deployed = !!CONTRACT_ADDRESSES.WorkRegistry;
 
-// ─── WorkCard (Neon data) ─────────────────────────────────────────────────────
+const ACTIVE_STATES: WorkState[] = [
+  "PROPOSED", "VOTE_OPEN", "VOTE_TALLIED",
+  "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING",
+];
+
+const STATE_LABEL: Record<string, string> = {
+  PROPOSED:     "Proposée",
+  VOTE_OPEN:    "Vote en cours",
+  VOTE_TALLIED: "Vote clôturé",
+  BRIEFING:     "Brief en rédaction",
+  CREATING:     "Création en cours",
+  VALIDATING:   "Validation",
+  PUBLISHING:   "Publication on-chain…",
+};
+
+const STATE_COLOR: Record<string, string> = {
+  PROPOSED:     "text-blue-500 border-blue-500/30",
+  VOTE_OPEN:    "text-yellow-500 border-yellow-500/30",
+  VOTE_TALLIED: "text-orange-500 border-orange-500/30",
+  BRIEFING:     "text-purple-500 border-purple-500/30",
+  CREATING:     "text-indigo-500 border-indigo-500/30",
+  VALIDATING:   "text-cyan-500 border-cyan-500/30",
+  PUBLISHING:   "text-teal-500 border-teal-500/30",
+};
+
+// ─── InProgressWorkCard ───────────────────────────────────────────────────────
+
+function InProgressWorkCard({ work }: { work: ANAWork }) {
+  const label    = STATE_LABEL[work.state]  ?? work.state;
+  const colorCls = STATE_COLOR[work.state]  ?? "text-[--fg-muted] border-[--border]";
+  const lastStep = work.stateHistory[work.stateHistory.length - 1];
+  const trio = [
+    { label: "Rapporteur", tid: work.rapporteurTokenId, name: work.rapporteurName },
+    { label: "Auteur",     tid: work.authorTokenId,     name: work.authorName },
+    { label: "Curateur",   tid: work.curatorTokenId,    name: work.curatorName },
+  ].filter(r => r.tid != null);
+
+  const steps: WorkState[] = ["PROPOSED", "VOTE_OPEN", "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING"];
+  const currentStep = steps.indexOf(work.state === "VOTE_TALLIED" ? "VOTE_OPEN" : work.state as WorkState);
+
+  return (
+    <div className="border border-[--border] bg-[--bg] flex flex-col gap-4 p-5">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <p className="font-bold text-sm leading-snug">{work.title}</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5">
+            par {work.proposedByName} · {new Date(work.proposedAt).toLocaleDateString("fr-FR")}
+          </p>
+        </div>
+        <span className={`font-mono text-[10px] border px-2 py-0.5 shrink-0 ${colorCls}`}>
+          {label}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="flex gap-1 items-center">
+        {steps.map((s, i) => (
+          <div
+            key={s}
+            className={`h-1 flex-1 rounded-sm transition-colors ${
+              i <= currentStep ? "bg-[--fg]/60" : "bg-[--border]"
+            }`}
+          />
+        ))}
+      </div>
+
+      {/* Proposal */}
+      {work.proposal && (
+        <p className="text-xs text-[--fg-muted] leading-relaxed line-clamp-2 italic border-l-2 border-[--border] pl-2">
+          {work.proposal}
+        </p>
+      )}
+
+      {/* Trio (only after roles assigned) */}
+      {trio.length > 0 && (
+        <div className="flex gap-4">
+          {trio.map(({ label: roleLabel, tid, name }) => (
+            <div key={roleLabel} className="flex items-center gap-1.5">
+              <div className="relative w-6 h-6 overflow-hidden shrink-0">
+                <Image
+                  src={getNormieImageUrl(tid!)}
+                  alt={`#${tid}`}
+                  fill
+                  className="object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                  unoptimized
+                />
+              </div>
+              <div>
+                <p className="font-mono text-[9px] text-[--fg-muted]">{roleLabel}</p>
+                <p className="font-mono text-[10px]">{name ?? `#${tid}`}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Vote results */}
+      {work.yesCount != null && (
+        <div className="flex gap-3 font-mono text-xs">
+          <span className="text-green-500">✓ {work.yesCount} oui</span>
+          <span className="text-red-400">✗ {work.noCount ?? 0} non</span>
+          {(work.absCount ?? 0) > 0 && <span className="text-[--fg-muted]">– {work.absCount} abs</span>}
+        </div>
+      )}
+
+      {/* Salon link */}
+      {work.salonId && work.salonId !== "salon_agora_ana" && (
+        <Link
+          href={`/salon?s=${work.salonId}`}
+          className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors underline-offset-2 hover:underline"
+        >
+          → Salon dédié ↗
+        </Link>
+      )}
+
+      {/* Last step note */}
+      {lastStep?.note && (
+        <p className="font-mono text-[10px] text-[--fg-muted] truncate">
+          ▸ {lastStep.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── WorkCard (Neon data — PUBLISHED) ────────────────────────────────────────
 
 function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
   const [open, setOpen] = useState(false);
@@ -251,7 +378,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
   );
 }
 
-// ─── WorkList ─────────────────────────────────────────────────────────────────
+// ─── WorkList (published on-chain) ───────────────────────────────────────────
 
 function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] }) {
   const neonMap = new Map(
@@ -276,7 +403,7 @@ function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] })
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function WorksClient() {
-  const [neonWorks, setNeonWorks] = useState<ANAWork[]>([]);
+  const [allWorks, setAllWorks] = useState<ANAWork[]>([]);
 
   const { data: countRaw, isLoading } = useReadContract({
     address:      WR_ADDR,
@@ -290,9 +417,12 @@ export function WorksClient() {
   useEffect(() => {
     fetch("/api/works")
       .then(r => r.json())
-      .then((works: ANAWork[]) => setNeonWorks(works.filter(w => w.state === "PUBLISHED")))
+      .then((works: ANAWork[]) => setAllWorks(works))
       .catch(() => null);
   }, []);
+
+  const publishedWorks = allWorks.filter(w => w.state === "PUBLISHED");
+  const activeWorks    = allWorks.filter(w => ACTIVE_STATES.includes(w.state));
 
   if (!deployed) {
     return (
@@ -302,7 +432,7 @@ export function WorksClient() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && allWorks.length === 0) {
     return (
       <div className="flex items-center justify-center py-24 gap-4">
         <div className="w-6 h-6 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
@@ -311,7 +441,9 @@ export function WorksClient() {
     );
   }
 
-  if (count === 0) {
+  const isEmpty = count === 0 && activeWorks.length === 0;
+
+  if (isEmpty) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-6 text-center">
         <div className="border border-[--border] bg-[--bg-card] p-10 max-w-lg space-y-4">
@@ -335,19 +467,56 @@ export function WorksClient() {
   }
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <p className="font-mono text-xs text-[--fg-muted]">
-          {count} œuvre{count > 1 ? "s" : ""} publiée{count > 1 ? "s" : ""}
-        </p>
-        <Link
-          href="/publish"
-          className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80"
-        >
-          + Nouvelle œuvre
-        </Link>
-      </div>
-      <WorkList count={count} neonWorks={neonWorks} />
+    <div className="space-y-16">
+
+      {/* ── Créations en cours ── */}
+      {activeWorks.length > 0 && (
+        <section className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
+                Création en cours
+              </p>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                {activeWorks.length} œuvre{activeWorks.length > 1 ? "s" : ""} dans le pipeline
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[--fg]/60 animate-pulse" />
+              <span className="font-mono text-xs text-[--fg-muted]">Live</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {activeWorks.map(w => (
+              <InProgressWorkCard key={w.id} work={w} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Galerie on-chain ── */}
+      {count > 0 && (
+        <section className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
+                Galerie
+              </p>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                {count} œuvre{count > 1 ? "s" : ""} publiée{count > 1 ? "s" : ""} on-chain
+              </p>
+            </div>
+            <Link
+              href="/publish"
+              className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80"
+            >
+              + Nouvelle œuvre
+            </Link>
+          </div>
+          <WorkList count={count} neonWorks={publishedWorks} />
+        </section>
+      )}
+
     </div>
   );
 }
