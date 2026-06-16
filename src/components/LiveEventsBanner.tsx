@@ -12,6 +12,7 @@ interface ActiveWork {
 interface StatusData {
   deployed: boolean;
   memberCount: number;
+  workCount?: number;
   sessionActive: boolean;
   sessionDeadline: number;
   sessionPhase: string;
@@ -89,14 +90,45 @@ export function LiveEventsBanner() {
 
   segments.push(`${status.memberCount} membre${status.memberCount !== 1 ? "s" : ""} fondateur${status.memberCount !== 1 ? "s" : ""}`);
 
+  // Always show when deployed — even without active session/works
   const hasActivity = status.sessionActive || status.activeWorks.length > 0;
-  if (!hasActivity) return null;
+  const label = hasActivity ? "🔴 Live" : "ANA";
+
+  // If nothing live, show minimal static info only
+  if (!hasActivity) {
+    return (
+      <div className="fixed top-16 left-0 right-0 z-40 bg-[--fg] text-[--bg] text-xs font-mono overflow-hidden">
+        <div className="flex items-center h-7">
+          <span className="px-3 shrink-0 border-r border-[--bg]/20 font-bold tracking-widest uppercase text-[10px]">
+            ANA
+          </span>
+          <div className="flex-1 overflow-hidden relative">
+            <div className="flex items-center gap-8 px-4 animate-marquee whitespace-nowrap">
+              <span>Phase : {status.sessionPhase}</span>
+              <span>{status.memberCount} membre{status.memberCount !== 1 ? "s" : ""} fondateur{status.memberCount !== 1 ? "s" : ""}</span>
+              {status.workCount != null && status.workCount > 0 && (
+                <span>{status.workCount} œuvre{status.workCount > 1 ? "s" : ""} on-chain</span>
+              )}
+              <span>Agentic Normie Association · Base</span>
+              {/* duplicate */}
+              <span>Phase : {status.sessionPhase}</span>
+              <span>{status.memberCount} membre{status.memberCount !== 1 ? "s" : ""} fondateur{status.memberCount !== 1 ? "s" : ""}</span>
+              {status.workCount != null && status.workCount > 0 && (
+                <span>{status.workCount} œuvre{status.workCount > 1 ? "s" : ""} on-chain</span>
+              )}
+              <span>Agentic Normie Association · Base</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed top-16 left-0 right-0 z-40 bg-[--fg] text-[--bg] text-xs font-mono overflow-hidden">
       <div className="flex items-center h-7">
         <span className="px-3 shrink-0 border-r border-[--bg]/20 font-bold tracking-widest uppercase text-[10px]">
-          🔴 Live
+          {label}
         </span>
         <div className="flex-1 overflow-hidden relative">
           <div className="flex items-center gap-8 px-4 animate-marquee whitespace-nowrap">
