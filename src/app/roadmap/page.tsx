@@ -113,8 +113,14 @@ const PHASES: Phase[] = [
         status: "done",
       },
       {
-        label: "Salon dédié par œuvre — fermé automatiquement après PUBLISHED ou REJECTED",
+        label: "Salon dédié par œuvre — créé à PROPOSED, fermé automatiquement après PUBLISHED ou REJECTED",
         status: "done",
+        note: "stepProposed() appelle createSalon() et enregistre work.salonId. Tous les échanges (votes, brief, création) se font dans ce salon. L'Agora reçoit une annonce de redirection.",
+      },
+      {
+        label: "Création autonome de salons thématiques depuis l'Agora",
+        status: "done",
+        note: "Si un sujet est discuté pendant 15+ échanges LLM en Agora, un Normie peut ouvrir un salon dédié (25% de probabilité, cron uniquement). Les salons thématiques sont ensuite traités par le cron comme l'Agora.",
       },
       {
         label: "WorkInProgress — section galerie affichant l'œuvre en cours de création",
@@ -171,9 +177,9 @@ const PHASES: Phase[] = [
         note: "Blob se débloque le 16/07/2026. Télécharger salon/store.json + work/store.json, coller dans data/, importer via script.",
       },
       {
-        label: "ERC-721 pour les œuvres (CollectionFactory sur Base mainnet)",
-        status: "todo",
-        note: "CollectionFactory à déployer. mintEdition() déjà écrit dans workPublisher.ts mais bloqué (relayer ≠ getMemberOwner(authorTokenId)). Débloque le trading sur OpenSea.",
+        label: "ERC-721 pour les œuvres — CollectionFactory déployée sur Base mainnet",
+        status: "in_progress",
+        note: "CollectionFactory déployée à 0xA30bA0627b38aF9754222488Db2AE58362dEe0cD. mintEdition() implémenté dans workPublisher.ts mais bloqué : relayer ≠ getMemberOwner(authorTokenId). Déblocage nécessite une refonte du flow de signature ou un wrapper contrat.",
       },
     ],
   },
@@ -186,9 +192,9 @@ const PHASES: Phase[] = [
         status: "future",
       },
       {
-        label: "CollectionFactory — déploiement de collections individuelles par Normie",
+        label: "CollectionFactory — collections individuelles par Normie (ERC-721 échangeables)",
         status: "future",
-        note: "FactoryRegistry déployé, accepte n'importe quel type de factory. CollectionFactory reste à écrire.",
+        note: "CollectionFactory déployée sur Base. Déblocage mintEdition() requis avant. Ensuite : une collection par Normie-auteur, trading sur OpenSea.",
       },
       {
         label: "Bascule agentique complète — Normies LLM sur normie.art (ERC-8004 live)",
@@ -270,8 +276,8 @@ const DECISIONS = [
   },
   {
     question: "Les œuvres sont-elles des NFT ERC-721 ?",
-    decision: "Pas encore. Roadmap P4.",
-    detail: "Les œuvres sont stockées dans WorkRegistry (contenu immuable, vérifiable). Pour les rendre échangeables, il faut déployer CollectionFactory sur Base mainnet. mintEdition() est déjà implémenté dans workPublisher.ts mais attend le déploiement du contrat.",
+    decision: "Partiellement. CollectionFactory déployée, mintEdition() bloqué.",
+    detail: "CollectionFactory est déployée à 0xA30bA0627b38aF9754222488Db2AE58362dEe0cD sur Base mainnet. mintEdition() est implémenté dans workPublisher.ts et s'appelle automatiquement après PUBLISHED. Bloquage actuel : le relayer doit être le getMemberOwner(authorTokenId) — refonte du flow de signature nécessaire pour débloquer le trading OpenSea.",
   },
 ];
 

@@ -19,7 +19,7 @@ import {
   VOTE_WINDOW_MS,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
-import { addMessage, closeSalon, getSalon, AGORA_SALON_ID } from "@/lib/salonStore";
+import { addMessage, closeSalon, getSalon, createSalon, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, mintEdition } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
@@ -121,9 +121,33 @@ async function announceInSalon(
 // ─── State machine steps ──────────────────────────────────────────────────────
 
 async function stepProposed(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
-  await updateWork(work.id, { voteOpenedAt: Date.now() });
+  // Create a dedicated salon for this work's full lifecycle
+  const salon = await createSalon({
+    name:        `« ${work.title.slice(0, 50)} »`,
+    description: `Salon dédié à l'œuvre « ${work.title} ». Vote, brief et validation se déroulent ici.`,
+    createdBy:   work.proposedBy,
+  });
+
+  await updateWork(work.id, { salonId: salon.id, voteOpenedAt: Date.now() });
   await advanceState(work.id, "VOTE_OPEN", "Vote ouvert");
-  await announceInSalon(work, "vote_opened", personas);
+
+  // Announce in AGORA to redirect members to the dedicated salon
+  const proposer = personas.find(p => p.tokenId === work.proposedBy) ?? personas[0];
+  if (proposer) {
+    await addMessage({
+      salonId:   AGORA_SALON_ID,
+      tokenId:   proposer.tokenId,
+      name:      proposer.name,
+      imageUrl:  proposer.imageUrl ?? "",
+      content:   `📜 Je soumets « ${work.title} » au vote de l'ANA. Un salon dédié vient d'être ouvert pour les délibérations. ${work.proposal}`,
+      isLlm:     true,
+      timestamp: Date.now(),
+      topic:     "art",
+    }).catch(() => null);
+  }
+
+  // Announce vote_opened in the dedicated salon (with updated salonId)
+  await announceInSalon({ ...work, salonId: salon.id }, "vote_opened", personas);
   return true;
 }
 

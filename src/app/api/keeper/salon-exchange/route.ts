@@ -13,7 +13,7 @@ import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
   listSalons, getSalon, addMessage, checkRateLimit, setTopic, registerName,
   isSynthesisDue, storeSynthesis, markSynthesisDone, getSynthesisInfo,
-  checkStimLimit, recordStim,
+  checkStimLimit, recordStim, createSalon,
   AGORA_SALON_ID, SYNTHESIS_MIN_MSGS, SYNTHESIS_KEEP_LAST,
   type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
@@ -274,6 +274,51 @@ async function runExchange(
   return { messages: generated, skipped, topic };
 }
 
+// ─── Thematic salon creation (when an AGORA topic persists) ──────────────────
+
+async function maybeCreateThematicSalon(
+  agora:       Salon,
+  topic:       string,
+  allPersonas: NormiePersona[],
+  allSalons:   Salon[],
+): Promise<{ created: boolean; salonId?: string }> {
+  if (Math.random() > 0.25) return { created: false };
+
+  // Require at least 15 LLM messages in the AGORA before spinning off a salon
+  const llmCount = agora.messages.filter(m => m.isLlm).length;
+  if (llmCount < 15) return { created: false };
+
+  // Don't create if an open salon already covers this topic
+  const alreadyExists = allSalons.some(
+    s => s.id !== AGORA_SALON_ID && s.isOpen &&
+      (s.name.toLowerCase().includes(topic.slice(0, 25).toLowerCase()) ||
+       s.currentTopic === topic)
+  );
+  if (alreadyExists) return { created: false };
+
+  const initiator = allPersonas[Math.floor(Math.random() * allPersonas.length)];
+  const salonName = topic.slice(0, 55);
+
+  const newSalon = await createSalon({
+    name:        salonName,
+    description: `Salon thématique ouvert depuis l'Agora pour approfondir : ${topic}`,
+    createdBy:   initiator.tokenId,
+  });
+
+  await addMessage({
+    salonId:   AGORA_SALON_ID,
+    tokenId:   initiator.tokenId,
+    name:      initiator.name,
+    imageUrl:  initiator.imageUrl,
+    content:   `💬 Notre discussion sur "${topic}" mérite un espace dédié. J'ouvre le salon « ${salonName} » pour approfondir ce sujet entre nous.`,
+    isLlm:     true,
+    timestamp: Date.now(),
+  }).catch(() => null);
+
+  console.log(`[salon-exchange] thematic salon created: "${salonName}" (${newSalon.id})`);
+  return { created: true, salonId: newSalon.id };
+}
+
 // ─── Work proposal (spontaneous, low probability) ─────────────────────────────
 
 async function maybeGenerateWorkProposal(
@@ -415,18 +460,30 @@ export async function POST(req: NextRequest) {
   const allGenerated: SalonMessage[] = [];
 
   let workProposal: { id: string; title: string } | null = null;
+  let thematicSalon: { created: boolean; salonId?: string } = { created: false };
+
+  // Snapshot all open salons before the loop (for thematic-salon dedup check)
+  const allOpenSalons = await listSalons();
 
   for (const salon of salonsToProcess) {
     const result = await runExchange(salon, allPersonas, force, !isCron);
     results.push({ salonId: salon.id, messages: result.messages.length, skipped: result.skipped, topic: result.topic });
     allGenerated.push(...result.messages);
 
-    // After the Agora exchange, maybe a Normie spontaneously proposes a work
-    if (salon.id === AGORA_SALON_ID && result.messages.length > 0 && !workProposal) {
-      const initiator = allPersonas.find(p => p.tokenId === result.messages[0]?.tokenId) ?? allPersonas[0];
-      workProposal = await maybeGenerateWorkProposal(
-        initiator, allPersonas, result.topic, !isCron
-      );
+    if (salon.id === AGORA_SALON_ID && result.messages.length > 0) {
+      // Maybe a Normie spontaneously proposes a new work
+      if (!workProposal) {
+        const initiator = allPersonas.find(p => p.tokenId === result.messages[0]?.tokenId) ?? allPersonas[0];
+        workProposal = await maybeGenerateWorkProposal(initiator, allPersonas, result.topic, !isCron);
+      }
+
+      // Maybe a persistent AGORA topic gets its own dedicated salon (cron only — not on user stim)
+      if (isCron && !thematicSalon.created) {
+        const freshAgora = await getSalon(AGORA_SALON_ID);
+        if (freshAgora) {
+          thematicSalon = await maybeCreateThematicSalon(freshAgora, result.topic, allPersonas, allOpenSalons);
+        }
+      }
     }
   }
 
@@ -447,6 +504,7 @@ export async function POST(req: NextRequest) {
     nextSynthesisAt:    synthInfo.nextSynthesisAt,
     nextSynthesisDate:  new Date(synthInfo.nextSynthesisAt).toISOString(),
     workProposal,
+    thematicSalon: thematicSalon.created ? thematicSalon : null,
     isCron,
   });
 }
