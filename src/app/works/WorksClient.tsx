@@ -28,9 +28,12 @@ interface Work {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function resolveWorkSource(raw: string): { type: "onchain"; srcDoc: string } | { type: "unknown" } {
-  if (raw.startsWith("data:text/html")) {
+  // Search for the data URI even if garbage bytes precede it (on-chain encoding artefact)
+  const idx = raw.indexOf("data:text/html");
+  if (idx !== -1) {
     try {
-      const b64 = raw.replace(/^data:text\/html;base64,/, "");
+      const cleaned = raw.slice(idx);
+      const b64 = cleaned.replace(/^data:text\/html;base64,/, "");
       const html = decodeURIComponent(escape(atob(b64)));
       return { type: "onchain", srcDoc: html };
     } catch {
@@ -194,8 +197,6 @@ function WorkCardLoader({ workId }: { workId: number }) {
   if (!data) return null;
 
   const work = data as unknown as Work;
-  if (work.archived) return null;
-
   return <WorkCard work={work} />;
 }
 
