@@ -443,13 +443,34 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const salonsToProcess: Salon[] = body.salonId
-    ? [(await getSalon(body.salonId))].filter((s): s is Salon => s !== null && s.isOpen)
-    : (await listSalons()).filter(s => s.isOpen);
+  let salonsToProcess: Salon[];
+  if (body.salonId) {
+    const s = await getSalon(body.salonId);
+    salonsToProcess = s && s.isOpen ? [s] : [];
+  } else {
+    const allOpen = (await listSalons()).filter(s => s.isOpen);
 
-  if (!body.salonId && !salonsToProcess.find(s => s.id === AGORA_SALON_ID)) {
-    const agora = await getSalon(AGORA_SALON_ID);
-    if (agora?.isOpen) salonsToProcess.unshift(agora);
+    // Always include Agora first (fetch separately if not in listSalons)
+    let agora: Salon | null = allOpen.find(s => s.id === AGORA_SALON_ID) ?? null;
+    if (!agora) {
+      const fetched = await getSalon(AGORA_SALON_ID);
+      agora = (fetched?.isOpen) ? fetched : null;
+    }
+    const others = allOpen.filter(s => s.id !== AGORA_SALON_ID);
+
+    // Cron: cap at Agora + 2 other salons (rotating by least-recently-active) to avoid timeout
+    // User stim: process all (force=true, faster per salon)
+    const MAX_OTHER = isCron ? 2 : others.length;
+    const sorted = [...others].sort((a, b) => {
+      const lastA = a.messages[a.messages.length - 1]?.timestamp ?? 0;
+      const lastB = b.messages[b.messages.length - 1]?.timestamp ?? 0;
+      return lastA - lastB; // least recently active first
+    });
+
+    salonsToProcess = [
+      ...(agora && agora.isOpen ? [agora] : []),
+      ...sorted.slice(0, MAX_OTHER),
+    ].filter((s): s is Salon => s !== null);
   }
 
   if (salonsToProcess.length === 0) {

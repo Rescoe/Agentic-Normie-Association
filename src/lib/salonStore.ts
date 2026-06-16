@@ -404,7 +404,8 @@ export async function checkRateLimit(
   salonId: string, tokenId: number
 ): Promise<{ allowed: boolean; retryAfterMs?: number }> {
   const salon = await getSalon(salonId);
-  if (!salon) return { allowed: false };
+  // Permissive if salon not found (cold start / Neon miss) — better to allow than silence all Normies
+  if (!salon) return { allowed: true };
   const oneHourAgo  = Date.now() - 3_600_000;
   const recentCount = salon.messages.filter(
     m => m.tokenId === tokenId && m.timestamp > oneHourAgo && m.isLlm

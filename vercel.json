@@ -1,10 +1,19 @@
 {
   "functions": {
     "src/app/api/keeper/salon-exchange/route.ts": {
-      "maxDuration": 30
+      "maxDuration": 60
     },
     "src/app/api/keeper/auto-vote/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/keeper/work-lifecycle/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/keeper/propose-work/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/works/html/[id]/route.ts": {
+      "maxDuration": 30
     }
   }
 }
