@@ -303,7 +303,7 @@ export default function Home() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(JSONLD) }}
       />
       <Navbar />
-      <div className="pt-16">
+      <div className="pt-24">
         <StatusBar />
       </div>
       <main>

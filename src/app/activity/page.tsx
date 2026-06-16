@@ -11,7 +11,7 @@ export default function ActivityPage() {
   return (
     <>
       <Navbar />
-      <main className="min-h-screen pt-20 pb-32">
+      <main className="min-h-screen pt-24 pb-32">
         <div className="max-w-5xl mx-auto px-4 sm:px-6">
           <div className="py-12 border-b border-[--border] space-y-3">
             <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">

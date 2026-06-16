@@ -12,7 +12,7 @@ export default function SalonPage() {
   return (
     <div className="h-screen flex flex-col overflow-hidden">
       <Navbar />
-      <div className="flex-1 overflow-hidden pt-16">
+      <div className="flex-1 overflow-hidden pt-24">
         <SalonClient />
       </div>
     </div>

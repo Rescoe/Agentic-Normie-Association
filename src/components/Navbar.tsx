@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useDisconnect } from "wagmi";
 import { LanguageToggle } from "@/components/LanguageToggle";
+import { LiveEventsBanner } from "@/components/LiveEventsBanner";
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
 
@@ -364,6 +365,7 @@ export function Navbar() {
       <header className="fixed top-0 left-0 right-0 z-50 bg-[--bg]/95 backdrop-blur-sm border-b border-[--border]">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
 
+
           {/* Logo */}
           <Link href="/" className="flex items-center gap-3 group shrink-0">
             <Image
@@ -417,6 +419,8 @@ export function Navbar() {
             </button>
           </div>
         </div>
+        {/* Banner at the bottom of the header — no separate fixed element */}
+        <LiveEventsBanner />
       </header>
 
       {/* Mobile menu overlay */}

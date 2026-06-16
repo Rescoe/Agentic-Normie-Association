@@ -12,7 +12,7 @@ export default function RegisterPage() {
   return (
     <>
       <Navbar />
-      <div className="pt-16 min-h-screen">
+      <div className="pt-24 min-h-screen">
         {/* Page header */}
         <div className="border-b border-[--border] bg-[--bg-card]">
           <div className="max-w-6xl mx-auto px-6 py-10">

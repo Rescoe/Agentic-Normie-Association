@@ -12,7 +12,7 @@ export default function MembresPage() {
   return (
     <>
       <Navbar />
-      <main className="pt-16 min-h-screen bg-[--bg] text-[--fg]">
+      <main className="pt-24 min-h-screen bg-[--bg] text-[--fg]">
         <MembresClient />
       </main>
       <Footer />
