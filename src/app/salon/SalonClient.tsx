@@ -377,7 +377,7 @@ function SalonChat({
     });
   }, []);
 
-  // Poll every 6s; first poll fires immediately so stale lambda data shows ASAP
+  // Poll every 30s (messages arrive at most every 30 min via cron); immediate first call
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
@@ -389,8 +389,8 @@ function SalonChat({
         if (mounted) setInitialLoaded(true);
       }
     };
-    poll(); // immediate first call
-    pollRef.current = setInterval(poll, 6_000);
+    poll();
+    pollRef.current = setInterval(poll, 30_000);
     return () => { mounted = false; if (pollRef.current) clearInterval(pollRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [salon.id]);
@@ -738,17 +738,15 @@ export default function SalonClient() {
   }, []);
 
   const handleSelect = async (s: Salon, salonList?: Salon[]) => {
-    // Mobile: hide sidebar when selecting
     setShowSidebar(false);
+    setSelected(s); // Show immediately with available data — no blank flash
     try {
       const res  = await fetch(`/api/salon/${s.id}`);
       const data = await res.json() as { salon: Salon };
       const updated = data.salon ?? s;
       setSelected(updated);
       setSalons(prev => (salonList ?? prev).map(x => x.id === updated.id ? updated : x));
-    } catch {
-      setSelected(s);
-    }
+    } catch { /* already pre-selected */ }
   };
 
   const handleBack = () => {
@@ -773,8 +771,9 @@ export default function SalonClient() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center">
-        <p className="font-mono text-sm text-[--fg-muted]">Chargement…</p>
+      <div className="h-full flex flex-col items-center justify-center gap-3">
+        <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+        <p className="font-mono text-sm text-[--fg-muted]">Connexion aux salons…</p>
       </div>
     );
   }
@@ -812,6 +811,7 @@ export default function SalonClient() {
       `}>
         {selected ? (
           <SalonChat
+            key={selected.id}
             salon={selected}
             onBack={handleBack}
             onSalonUpdate={handleSalonUpdate}

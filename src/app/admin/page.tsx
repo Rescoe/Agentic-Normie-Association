@@ -143,6 +143,8 @@ function StatusRow({ label, value, ok }: { label: string; value: React.ReactNode
 
 // ─── WorkRegistrySection ─────────────────────────────────────────────────────
 
+type PipelineStep = "idle" | "tx_pending" | "tx_confirming" | "proposing" | "lifecycle" | "done" | "error";
+
 function WorkRegistrySection({
   isOwner,
   writeContractAsync,
@@ -152,24 +154,70 @@ function WorkRegistrySection({
   writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
   onRefresh: () => void;
 }) {
-  const [txHash,  setTxHash]  = useState<`0x${string}` | null>(null);
-  const [txState, setTxState] = useState<"idle"|"pending"|"confirming"|"done"|"error">("idle");
-  const [txErr,   setTxErr]   = useState<string | null>(null);
+  const [txHash,    setTxHash]    = useState<`0x${string}` | null>(null);
+  const [schedTx,   setSchedTx]   = useState<`0x${string}` | null>(null);
+  const [schedState, setSchedState] = useState<"idle"|"pending"|"confirming"|"done"|"error">("idle");
+  const [schedErr,   setSchedErr]   = useState<string | null>(null);
+
+  // Full pipeline state for "Initier une session"
+  const [pipeStep,    setPipeStep]    = useState<PipelineStep>("idle");
+  const [pipeErr,     setPipeErr]     = useState<string | null>(null);
+  const [pipeWork,    setPipeWork]    = useState<{ title: string; proposedBy: string } | null>(null);
+  const [pipeLC,      setPipeLC]      = useState<{ advanced: number; processed: number } | null>(null);
 
   // Schedule config inputs
-  const [periodDays,   setPeriodDays]   = useState("30");
-  const [nextDateStr,  setNextDateStr]  = useState(""); // ISO date string
+  const [periodDays,     setPeriodDays]     = useState("30");
+  const [nextDateStr,    setNextDateStr]    = useState("");
   const [scheduleActive, setScheduleActive] = useState(true);
 
   const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
+  const { isSuccess: schedConfirmed } = useWaitForTransactionReceipt({ hash: schedTx ?? undefined });
+
+  // Pipeline: after initiateWorkSession tx confirms → propose-work → work-lifecycle
   useEffect(() => {
-    if (txConfirmed && txState === "confirming") {
-      setTxState("done");
+    if (!txConfirmed || pipeStep !== "tx_confirming") return;
+
+    async function runPipeline() {
+      setPipeStep("proposing");
+      try {
+        const r1 = await fetch("/api/keeper/propose-work", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        });
+        const d1 = await r1.json() as { work?: { title: string; proposedBy: string }; error?: string };
+        if (!r1.ok) throw new Error(d1.error ?? `HTTP ${r1.status}`);
+        setPipeWork(d1.work ?? null);
+
+        setPipeStep("lifecycle");
+        const r2 = await fetch("/api/keeper/work-lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        });
+        const d2 = await r2.json() as { advanced?: number; processed?: number; error?: string };
+        if (!r2.ok) throw new Error(d2.error ?? `HTTP ${r2.status}`);
+        setPipeLC({ advanced: d2.advanced ?? 0, processed: d2.processed ?? 0 });
+
+        setPipeStep("done");
+        onRefresh();
+      } catch (e) {
+        setPipeErr(e instanceof Error ? e.message : String(e));
+        setPipeStep("error");
+      }
+    }
+
+    void runPipeline();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txConfirmed]);
+
+  // Schedule tx confirmation
+  useEffect(() => {
+    if (schedConfirmed && schedState === "confirming") {
+      setSchedState("done");
       onRefresh();
-      const t = setTimeout(() => setTxState("idle"), 4000);
+      const t = setTimeout(() => setSchedState("idle"), 3000);
       return () => clearTimeout(t);
     }
-  }, [txConfirmed, txState, onRefresh]);
+  }, [schedConfirmed, schedState, onRefresh]);
 
   const { data: scheduleRaw } = useReadContract({
     address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "getSchedule",
@@ -179,35 +227,63 @@ function WorkRegistrySection({
 
   const { data: sessionCountRaw } = useReadContract({
     address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "sessionCount",
-    query: { enabled: !!WR_ADDR },
+    query: { enabled: !!WR_ADDR, refetchInterval: 5_000 },
   });
   const sessionCount = sessionCountRaw !== undefined ? Number(sessionCountRaw) : 0;
 
-  const exec = async (fn: string, args: unknown[]) => {
-    setTxErr(null);
-    setTxState("pending");
+  const initiate = async () => {
+    setPipeErr(null);
+    setPipeWork(null);
+    setPipeLC(null);
+    setPipeStep("tx_pending");
     try {
       const hash = await writeContractAsync({
-        address: WR_ADDR,
-        abi: WORK_REGISTRY_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
-        functionName: fn as never,
-        args: args as never,
+        address:      WR_ADDR,
+        abi:          WORK_REGISTRY_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
+        functionName: "initiateWorkSession" as never,
+        args:         [] as never,
       });
       setTxHash(hash);
-      setTxState("confirming");
+      setPipeStep("tx_confirming");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setTxErr(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150));
-      setTxState("error");
+      setPipeErr(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150));
+      setPipeStep("error");
     }
   };
 
-  const busy = txState === "pending" || txState === "confirming";
+  const execSchedule = async () => {
+    setSchedErr(null);
+    setSchedState("pending");
+    try {
+      const hash = await writeContractAsync({
+        address:      WR_ADDR,
+        abi:          WORK_REGISTRY_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
+        functionName: "setSchedule" as never,
+        args:         [BigInt(nextTs), BigInt(periodSecs), scheduleActive] as never,
+      });
+      setSchedTx(hash);
+      setSchedState("confirming");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSchedErr(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150));
+      setSchedState("error");
+    }
+  };
 
-  const nextTs = nextDateStr
-    ? Math.floor(new Date(nextDateStr).getTime() / 1000)
-    : Math.floor(Date.now() / 1000);
+  const pipeBusy = pipeStep === "tx_pending" || pipeStep === "tx_confirming" || pipeStep === "proposing" || pipeStep === "lifecycle";
 
+  const PIPE_LABEL: Record<PipelineStep, string> = {
+    idle:          "Initier + proposer →",
+    tx_pending:    "Signature wallet…",
+    tx_confirming: "Confirmation on-chain…",
+    proposing:     "LLM génère la proposition…",
+    lifecycle:     "Ouverture du vote + salon…",
+    done:          "✓ Œuvre proposée et vote ouvert",
+    error:         "Erreur — réessayer",
+  };
+
+  const nextTs    = nextDateStr ? Math.floor(new Date(nextDateStr).getTime() / 1000) : Math.floor(Date.now() / 1000);
   const periodSecs = Math.floor(parseFloat(periodDays) * 86400);
 
   return (
@@ -241,31 +317,86 @@ function WorkRegistrySection({
         />
       </div>
 
-      {/* Initier manuellement */}
-      <div className="border border-[--border] p-5 space-y-3">
+      {/* Initier + pipeline complet */}
+      <div className="border border-[--border] p-5 space-y-4">
         <div>
           <p className="font-bold text-sm">Initier une session de création</p>
           <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
-            Déclenche l'événement <code>WorkSessionInitiated</code> que le pipeline LLM écoute.
-            Accessible à l'owner à tout moment. Quand le calendrier est actif, n'importe qui peut
-            appeler cette fonction une fois la date atteinte.
+            Enregistre la session on-chain, puis un Normie propose automatiquement un sujet via LLM,
+            et le vote est ouvert avec un salon dédié.
           </p>
         </div>
+
+        {/* Steps tracker */}
+        <div className="flex items-center gap-0">
+          {[
+            { key: "tx",      label: "Tx" },
+            { key: "propose", label: "Sujet" },
+            { key: "vote",    label: "Vote + Salon" },
+          ].map((s, i) => {
+            const done = pipeStep === "done" || (i === 0 && ["tx_confirming","proposing","lifecycle","done"].includes(pipeStep))
+                      || (i === 1 && ["lifecycle","done"].includes(pipeStep));
+            const active = (i === 0 && ["tx_pending","tx_confirming"].includes(pipeStep))
+                        || (i === 1 && pipeStep === "proposing")
+                        || (i === 2 && pipeStep === "lifecycle");
+            return (
+              <div key={s.key} className="flex items-center">
+                <div className={`w-5 h-5 rounded-full border flex items-center justify-center font-mono text-[9px] transition-colors ${
+                  done   ? "bg-green-500 border-green-500 text-white" :
+                  active ? "border-[--fg] text-[--fg] animate-pulse" :
+                           "border-[--border] text-[--fg-muted]"
+                }`}>
+                  {done ? "✓" : i + 1}
+                </div>
+                <p className={`font-mono text-[9px] ml-1 mr-3 ${active ? "text-[--fg]" : "text-[--fg-muted]"}`}>{s.label}</p>
+                {i < 2 && <div className={`w-6 h-px mr-3 ${done ? "bg-green-500" : "bg-[--border]"}`} />}
+              </div>
+            );
+          })}
+        </div>
+
         <div className="flex items-center gap-3">
           <button
-            onClick={() => exec("initiateWorkSession", [])}
-            disabled={busy || !isOwner}
-            className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={pipeStep === "done" || pipeStep === "error" ? () => { setPipeStep("idle"); setPipeErr(null); } : initiate}
+            disabled={pipeBusy || !isOwner}
+            className={`font-mono text-xs px-5 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+              pipeStep === "done"
+                ? "bg-green-100 text-green-700 border border-green-300"
+                : pipeStep === "error"
+                ? "border border-red-400 text-red-600 hover:bg-red-50"
+                : "bg-[--fg] text-[--bg] hover:opacity-80"
+            }`}
           >
-            {busy ? "En cours…" : txState === "done" ? "✓ Session initiée" : "Initier →"}
+            {pipeBusy ? (
+              <span className="flex items-center gap-2">
+                <span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin inline-block" />
+                {PIPE_LABEL[pipeStep]}
+              </span>
+            ) : pipeStep === "done" || pipeStep === "error" ? PIPE_LABEL[pipeStep] : PIPE_LABEL["idle"]}
           </button>
-          {txErr && <p className="font-mono text-xs text-red-600">{txErr}</p>}
+          {pipeErr && <p className="font-mono text-xs text-red-600">{pipeErr}</p>}
         </div>
+
         {txHash && (
           <a href={basescanTx(txHash)} target="_blank" rel="noopener noreferrer"
             className="font-mono text-xs text-[--fg-muted] underline">
-            {txHash.slice(0, 16)}… ↗
+            tx: {txHash.slice(0, 16)}… ↗
           </a>
+        )}
+
+        {pipeWork && (
+          <div className="border border-green-300 bg-green-50/10 px-4 py-3 space-y-1">
+            <p className="font-mono text-xs font-bold text-green-700">
+              Œuvre proposée par {pipeWork.proposedBy}
+            </p>
+            <p className="font-mono text-xs text-[--fg-muted]">« {pipeWork.title} »</p>
+          </div>
+        )}
+
+        {pipeLC && (
+          <p className="font-mono text-xs text-[--fg-muted]">
+            Lifecycle : {pipeLC.advanced}/{pipeLC.processed} œuvre(s) avancée(s) — salon ouvert
+          </p>
         )}
       </div>
 
@@ -313,13 +444,22 @@ function WorkRegistrySection({
             </button>
           </div>
         </div>
-        <button
-          onClick={() => exec("setSchedule", [BigInt(nextTs), BigInt(periodSecs), scheduleActive])}
-          disabled={busy || !isOwner}
-          className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {busy ? "En cours…" : "Enregistrer le calendrier →"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={execSchedule}
+            disabled={schedState === "pending" || schedState === "confirming" || !isOwner}
+            className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {schedState === "pending" || schedState === "confirming" ? "En cours…" : schedState === "done" ? "✓ Calendrier enregistré" : "Enregistrer le calendrier →"}
+          </button>
+          {schedErr && <p className="font-mono text-xs text-red-600">{schedErr}</p>}
+        </div>
+        {schedTx && (
+          <a href={basescanTx(schedTx)} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] underline">
+            tx: {schedTx.slice(0, 16)}… ↗
+          </a>
+        )}
       </div>
     </section>
   );
@@ -1149,11 +1289,23 @@ export default function AdminPage() {
                 console.log("[auto-vote] candidacy:", c);
                 const r2 = await fetch("/api/keeper/auto-vote", {
                   method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ phase: "vote", mode: "execute" }),
+                  // Pass candidacies from phase=candidacy to avoid re-running LLM + duplicate messages
+                  body: JSON.stringify({ phase: "vote", mode: "execute", candidacies: c.candidacies }),
                 });
                 const v = await r2.json();
                 console.log("[auto-vote] vote:", v);
-                if (v.failed?.length) throw new Error(`${v.failed.length} votes failed: ${v.failed[0]}`);
+                if (v.failed?.length) {
+                  console.warn("[auto-vote] failed txs:", v.failed);
+                  // Non-fatal: continue to try closing
+                }
+                // Try to auto-close via relayer (works if deadline passed; silent if not)
+                await fetch("/api/keeper/auto-vote", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ phase: "close" }),
+                }).then(r => r.json()).then(d => console.log("[auto-vote] close:", d)).catch(() => null);
+                if ((v.submitted ?? 0) === 0 && v.failed?.length) {
+                  throw new Error(`Aucun vote enregistré on-chain : ${v.failed[0]}`);
+                }
               }}
             />
 

@@ -6,63 +6,164 @@ import Image from "next/image";
 import Link from "next/link";
 import { WORK_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
+import type { ANAWork, WorkState } from "@/lib/workStore";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const WR_ADDR   = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
-const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore as `0x${string}`;
-const deployed  = !!CONTRACT_ADDRESSES.WorkRegistry;
+const WR_ADDR  = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
+const deployed = !!CONTRACT_ADDRESSES.WorkRegistry;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+const ACTIVE_STATES: WorkState[] = [
+  "PROPOSED", "VOTE_OPEN", "VOTE_TALLIED",
+  "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING",
+];
 
-interface Work {
-  id:               bigint;
-  content:          string;
-  authorTokenId:    bigint;
-  curatorTokenId:   bigint;
-  rapporteurTokenId:bigint;
-  publishedAt:      bigint;
-  archived:         boolean;
-}
+const STATE_LABEL: Record<string, string> = {
+  PROPOSED:     "Proposée",
+  VOTE_OPEN:    "Vote en cours",
+  VOTE_TALLIED: "Vote clôturé",
+  BRIEFING:     "Brief en rédaction",
+  CREATING:     "Création en cours",
+  VALIDATING:   "Validation",
+  PUBLISHING:   "Publication on-chain…",
+};
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const STATE_COLOR: Record<string, string> = {
+  PROPOSED:     "text-blue-500 border-blue-500/30",
+  VOTE_OPEN:    "text-yellow-500 border-yellow-500/30",
+  VOTE_TALLIED: "text-orange-500 border-orange-500/30",
+  BRIEFING:     "text-purple-500 border-purple-500/30",
+  CREATING:     "text-indigo-500 border-indigo-500/30",
+  VALIDATING:   "text-cyan-500 border-cyan-500/30",
+  PUBLISHING:   "text-teal-500 border-teal-500/30",
+};
 
-function resolveWorkSource(raw: string): { type: "onchain"; srcDoc: string } | { type: "unknown" } {
-  // Search for the data URI even if garbage bytes precede it (on-chain encoding artefact)
-  const idx = raw.indexOf("data:text/html");
-  if (idx !== -1) {
-    try {
-      const cleaned = raw.slice(idx);
-      const b64 = cleaned.replace(/^data:text\/html;base64,/, "");
-      const html = decodeURIComponent(escape(atob(b64)));
-      return { type: "onchain", srcDoc: html };
-    } catch {
-      return { type: "unknown" };
-    }
-  }
-  return { type: "unknown" };
-}
+// ─── InProgressWorkCard ───────────────────────────────────────────────────────
 
-// ─── WorkCard ─────────────────────────────────────────────────────────────────
+function InProgressWorkCard({ work }: { work: ANAWork }) {
+  const label    = STATE_LABEL[work.state]  ?? work.state;
+  const colorCls = STATE_COLOR[work.state]  ?? "text-[--fg-muted] border-[--border]";
+  const lastStep = work.stateHistory[work.stateHistory.length - 1];
+  const trio = [
+    { label: "Rapporteur", tid: work.rapporteurTokenId, name: work.rapporteurName },
+    { label: "Auteur",     tid: work.authorTokenId,     name: work.authorName },
+    { label: "Curateur",   tid: work.curatorTokenId,    name: work.curatorName },
+  ].filter(r => r.tid != null);
 
-function WorkCard({ work }: { work: Work }) {
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const source = resolveWorkSource(work.content);
-  const date = new Date(Number(work.publishedAt) * 1000);
+  const steps: WorkState[] = ["PROPOSED", "VOTE_OPEN", "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING"];
+  const currentStep = steps.indexOf(work.state === "VOTE_TALLIED" ? "VOTE_OPEN" : work.state as WorkState);
 
   return (
-    <div className={`border flex flex-col ${work.archived ? "opacity-50 border-[--border]" : "border-[--border]"} bg-[--bg]`}>
-      {/* Preview window */}
-      {previewOpen && source.type === "onchain" ? (
+    <div className="border border-[--border] bg-[--bg] flex flex-col gap-4 p-5">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <p className="font-bold text-sm leading-snug">{work.title}</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5">
+            par {work.proposedByName} · {new Date(work.proposedAt).toLocaleDateString("fr-FR")}
+          </p>
+        </div>
+        <span className={`font-mono text-[10px] border px-2 py-0.5 shrink-0 ${colorCls}`}>
+          {label}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="flex gap-1 items-center">
+        {steps.map((s, i) => (
+          <div
+            key={s}
+            className={`h-1 flex-1 rounded-sm transition-colors ${
+              i <= currentStep ? "bg-[--fg]/60" : "bg-[--border]"
+            }`}
+          />
+        ))}
+      </div>
+
+      {/* Proposal */}
+      {work.proposal && (
+        <p className="text-xs text-[--fg-muted] leading-relaxed line-clamp-2 italic border-l-2 border-[--border] pl-2">
+          {work.proposal}
+        </p>
+      )}
+
+      {/* Trio (only after roles assigned) */}
+      {trio.length > 0 && (
+        <div className="flex gap-4">
+          {trio.map(({ label: roleLabel, tid, name }) => (
+            <div key={roleLabel} className="flex items-center gap-1.5">
+              <div className="relative w-6 h-6 overflow-hidden shrink-0">
+                <Image
+                  src={getNormieImageUrl(tid!)}
+                  alt={`#${tid}`}
+                  fill
+                  className="object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                  unoptimized
+                />
+              </div>
+              <div>
+                <p className="font-mono text-[9px] text-[--fg-muted]">{roleLabel}</p>
+                <p className="font-mono text-[10px]">{name ?? `#${tid}`}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Vote results */}
+      {work.yesCount != null && (
+        <div className="flex gap-3 font-mono text-xs">
+          <span className="text-green-500">✓ {work.yesCount} oui</span>
+          <span className="text-red-400">✗ {work.noCount ?? 0} non</span>
+          {(work.absCount ?? 0) > 0 && <span className="text-[--fg-muted]">– {work.absCount} abs</span>}
+        </div>
+      )}
+
+      {/* Salon link */}
+      {work.salonId && work.salonId !== "salon_agora_ana" && (
+        <Link
+          href={`/salon?s=${work.salonId}`}
+          className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors underline-offset-2 hover:underline"
+        >
+          → Salon dédié ↗
+        </Link>
+      )}
+
+      {/* Last step note */}
+      {lastStep?.note && (
+        <p className="font-mono text-[10px] text-[--fg-muted] truncate">
+          ▸ {lastStep.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── WorkCard (Neon data — PUBLISHED) ────────────────────────────────────────
+
+function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
+  const [open, setOpen] = useState(false);
+  const date = work.publishedAt ? new Date(work.publishedAt) : null;
+  const trio = [
+    { label: "Auteur",      tid: work.authorTokenId,      name: work.authorName },
+    { label: "Curateur",    tid: work.curatorTokenId,     name: work.curatorName },
+    { label: "Rapporteur",  tid: work.rapporteurTokenId,  name: work.rapporteurName },
+  ];
+
+  return (
+    <div className="border border-[--border] bg-[--bg] flex flex-col">
+      {/* Preview */}
+      {open ? (
         <div className="relative aspect-video bg-black overflow-hidden">
           <iframe
-            srcDoc={source.srcDoc}
+            src={`/api/works/html/${onChainId}`}
             className="w-full h-full border-0"
             sandbox="allow-scripts"
-            title={`Œuvre #${work.id}`}
+            title={work.title}
           />
           <button
-            onClick={() => setPreviewOpen(false)}
+            onClick={() => setOpen(false)}
             className="absolute top-2 right-2 bg-black/70 text-white font-mono text-xs px-2 py-1 hover:bg-black"
           >
             ✕
@@ -70,12 +171,159 @@ function WorkCard({ work }: { work: Work }) {
         </div>
       ) : (
         <button
-          onClick={() => source.type === "onchain" && setPreviewOpen(true)}
-          className={`relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center ${source.type === "onchain" ? "cursor-pointer" : "cursor-default"}`}
+          onClick={() => setOpen(true)}
+          className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center cursor-pointer w-full"
         >
           <div className="flex gap-3 items-center">
-            {[work.authorTokenId, work.curatorTokenId, work.rapporteurTokenId].map((tid, i) => (
-              <div key={i} className="relative w-12 h-12 overflow-hidden">
+            {trio.map(({ label, tid }) =>
+              tid != null ? (
+                <div key={label} className="relative w-12 h-12 overflow-hidden">
+                  <Image
+                    src={getNormieImageUrl(tid)}
+                    alt={`#${tid}`}
+                    fill
+                    className="object-contain"
+                    style={{ imageRendering: "pixelated" }}
+                    unoptimized
+                  />
+                </div>
+              ) : null
+            )}
+          </div>
+          <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
+              Exécuter ▶
+            </span>
+          </div>
+        </button>
+      )}
+
+      {/* Metadata */}
+      <div className="p-4 space-y-3 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="font-bold text-sm">{work.title}</p>
+            <p className="font-mono text-xs text-[--fg-muted]">
+              {date?.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) ?? "—"}
+            </p>
+          </div>
+          <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">
+            #{onChainId}
+          </span>
+        </div>
+
+        {work.artworkText && (
+          <p className="text-xs text-[--fg-muted] leading-relaxed line-clamp-3 italic border-l-2 border-[--border] pl-2">
+            {work.artworkText.slice(0, 200)}{work.artworkText.length > 200 ? "…" : ""}
+          </p>
+        )}
+
+        {/* Trio */}
+        <div className="grid grid-cols-3 gap-2 text-center">
+          {trio.map(({ label, tid, name }) => (
+            <div key={label} className="space-y-1">
+              {tid != null ? (
+                <div className="relative w-8 h-8 mx-auto overflow-hidden">
+                  <Image
+                    src={getNormieImageUrl(tid)}
+                    alt={`#${tid}`}
+                    fill
+                    className="object-contain"
+                    style={{ imageRendering: "pixelated" }}
+                    unoptimized
+                  />
+                </div>
+              ) : (
+                <div className="w-8 h-8 mx-auto bg-[--border]" />
+              )}
+              <p className="font-mono text-[10px] text-[--fg-muted]">{label}</p>
+              <p className="font-mono text-[10px]">{name ?? (tid != null ? `#${tid}` : "—")}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between pt-1 border-t border-[--border]">
+          <p className="font-mono text-xs text-[--fg-muted]">✓ on-chain · exécutable</p>
+          {work.txHash && (
+            <a
+              href={`https://basescan.org/tx/${work.txHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+            >
+              tx ↗
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── OnChainWorkCard — fallback when work is not in Neon ─────────────────────
+
+function OnChainWorkCard({ workId }: { workId: number }) {
+  const [open, setOpen] = useState(false);
+
+  const { data, isLoading } = useReadContract({
+    address:      WR_ADDR,
+    abi:          WORK_REGISTRY_ABI,
+    functionName: "getWork",
+    args:         [BigInt(workId)],
+    query:        { enabled: deployed },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="border border-[--border] bg-[--bg-card] aspect-video flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="border border-[--border] bg-[--bg-card] aspect-video flex items-center justify-center">
+        <p className="font-mono text-xs text-[--fg-muted]">Œuvre #{workId} introuvable</p>
+      </div>
+    );
+  }
+
+  const w = data as unknown as {
+    authorTokenId: bigint; curatorTokenId: bigint; rapporteurTokenId: bigint; publishedAt: bigint;
+  };
+  const date = new Date(Number(w.publishedAt) * 1000);
+  const trio = [
+    { label: "Auteur",     tid: w.authorTokenId },
+    { label: "Curateur",   tid: w.curatorTokenId },
+    { label: "Rapporteur", tid: w.rapporteurTokenId },
+  ];
+
+  return (
+    <div className="border border-[--border] bg-[--bg] flex flex-col">
+      {open ? (
+        <div className="relative aspect-video bg-black overflow-hidden">
+          <iframe
+            src={`/api/works/html/${workId}`}
+            className="w-full h-full border-0"
+            sandbox="allow-scripts"
+            title={`Œuvre #${workId}`}
+          />
+          <button
+            onClick={() => setOpen(false)}
+            className="absolute top-2 right-2 bg-black/70 text-white font-mono text-xs px-2 py-1 hover:bg-black"
+          >
+            ✕
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setOpen(true)}
+          className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center cursor-pointer w-full"
+        >
+          <div className="flex gap-3 items-center">
+            {trio.map(({ label, tid }) => (
+              <div key={label} className="relative w-12 h-12 overflow-hidden">
                 <Image
                   src={getNormieImageUrl(Number(tid))}
                   alt={`#${tid}`}
@@ -87,46 +335,24 @@ function WorkCard({ work }: { work: Work }) {
               </div>
             ))}
           </div>
-          {source.type === "onchain" ? (
-            <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-              <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
-                Exécuter ▶
-              </span>
-            </div>
-          ) : (
-            <div className="absolute bottom-2 left-0 right-0 flex justify-center">
-              <span className="font-mono text-[10px] bg-[--bg]/80 text-[--fg-muted] border border-[--border] px-2 py-0.5 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse inline-block" />
-                Récupération depuis la blockchain…
-              </span>
-            </div>
-          )}
+          <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
+              Exécuter ▶
+            </span>
+          </div>
         </button>
       )}
 
-      {/* Info */}
       <div className="p-4 space-y-3 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <p className="font-bold text-sm">Œuvre #{String(work.id)}</p>
-            <p className="font-mono text-xs text-[--fg-muted]">
-              {date.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
-            </p>
-          </div>
-          {work.archived && (
-            <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted]">
-              archivée
-            </span>
-          )}
+        <div>
+          <p className="font-bold text-sm">Œuvre #{workId}</p>
+          <p className="font-mono text-xs text-[--fg-muted]">
+            {date.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
+          </p>
         </div>
 
-        {/* Trio */}
         <div className="grid grid-cols-3 gap-2 text-center">
-          {[
-            { label: "Auteur",    tid: work.authorTokenId },
-            { label: "Curateur", tid: work.curatorTokenId },
-            { label: "Rapporteur", tid: work.rapporteurTokenId },
-          ].map(({ label, tid }) => (
+          {trio.map(({ label, tid }) => (
             <div key={label} className="space-y-1">
               <div className="relative w-8 h-8 mx-auto overflow-hidden">
                 <Image
@@ -138,112 +364,65 @@ function WorkCard({ work }: { work: Work }) {
                   unoptimized
                 />
               </div>
-              <p className="font-mono text-xs text-[--fg-muted]">{label}</p>
-              <p className="font-mono text-xs">#{String(tid)}</p>
+              <p className="font-mono text-[10px] text-[--fg-muted]">{label}</p>
+              <p className="font-mono text-[10px]">#{String(tid)}</p>
             </div>
           ))}
         </div>
 
-        {/* Source */}
-        <div className="flex items-center justify-between pt-1 border-t border-[--border]">
-          <p className="font-mono text-xs text-[--fg-muted]">
-            {source.type === "onchain" ? "✓ on-chain · exécutable" : "⏳ décodage…"}
-          </p>
-          <span className="font-mono text-xs text-[--fg-muted]">
-            #{String(work.id)}
-          </span>
+        <div className="pt-1 border-t border-[--border]">
+          <p className="font-mono text-xs text-[--fg-muted]">✓ on-chain · exécutable</p>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── WorkList ─────────────────────────────────────────────────────────────────
+// ─── WorkList (published on-chain) ───────────────────────────────────────────
 
-function WorkList({ count }: { count: number }) {
-  // Read all works (count is small for now)
-  const contracts = Array.from({ length: count }, (_, i) => ({
-    address:      WR_ADDR,
-    abi:          WORK_REGISTRY_ABI,
-    functionName: "getWork" as const,
-    args:         [BigInt(i + 1)] as [bigint],
-  }));
+function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] }) {
+  const neonMap = new Map(
+    neonWorks
+      .filter(w => w.onChainWorkId != null)
+      .map(w => [w.onChainWorkId!, w])
+  );
 
-  const { data } = useReadContract({
-    address:      WR_ADDR,
-    abi:          WORK_REGISTRY_ABI,
-    functionName: "getWorkCount",
-    query: { enabled: deployed, refetchInterval: 15_000 },
-  });
-
-  // For multiple reads, we'll just display work by work
-  // In a real app this would use useReadContracts
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-      {Array.from({ length: count }, (_, i) => (
-        <WorkCardLoader key={i + 1} workId={i + 1} />
-      ))}
+      {Array.from({ length: count }, (_, i) => {
+        const id       = i + 1;
+        const neonWork = neonMap.get(id);
+        return neonWork
+          ? <WorkCard key={id} work={neonWork} onChainId={id} />
+          : <OnChainWorkCard key={id} workId={id} />;
+      })}
     </div>
   );
-}
-
-function WorkCardLoader({ workId }: { workId: number }) {
-  const [apiContent, setApiContent] = useState<string | null>(null);
-  const [apiLoading, setApiLoading] = useState(false);
-
-  const { data, isLoading } = useReadContract({
-    address:      WR_ADDR,
-    abi:          WORK_REGISTRY_ABI,
-    functionName: "getWork",
-    args:         [BigInt(workId)],
-    query: { enabled: deployed },
-  });
-
-  const work = data ? (data as unknown as Work) : null;
-
-  // When contract content doesn't parse client-side, fetch via server-side API
-  useEffect(() => {
-    if (!work) return;
-    const source = resolveWorkSource(work.content);
-    if (source.type !== "unknown") return; // already parsed OK
-    if (apiContent !== null || apiLoading) return;
-    console.log(`[WorkCard #${workId}] client content unparseable ("${work.content.slice(0,40)}") — calling API`);
-    setApiLoading(true);
-    fetch(`/api/works/content/${workId}`)
-      .then(r => r.json())
-      .then((d: { content?: string; error?: string; source?: string }) => {
-        console.log(`[WorkCard #${workId}] API response: source=${d.source} contentLength=${d.content?.length}`);
-        if (d.content) setApiContent(d.content);
-      })
-      .catch(e => console.error(`[WorkCard #${workId}] API error:`, e))
-      .finally(() => setApiLoading(false));
-  }, [work, workId, apiContent, apiLoading]);
-
-  if (isLoading) {
-    return (
-      <div className="border border-[--border] bg-[--bg-card] aspect-video flex items-center justify-center">
-        <div className="w-5 h-5 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
-      </div>
-    );
-  }
-  if (!work) return null;
-
-  // Merge API content if available
-  const merged = apiContent ? { ...work, content: apiContent } : work;
-  return <WorkCard work={merged} />;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function WorksClient() {
+  const [allWorks, setAllWorks] = useState<ANAWork[]>([]);
+
   const { data: countRaw, isLoading } = useReadContract({
     address:      WR_ADDR,
     abi:          WORK_REGISTRY_ABI,
     functionName: "getWorkCount",
-    query: { enabled: deployed, refetchInterval: 15_000 },
+    query:        { enabled: deployed, refetchInterval: 15_000 },
   });
 
   const count = Number(countRaw ?? 0);
+
+  useEffect(() => {
+    fetch("/api/works")
+      .then(r => r.json())
+      .then((works: ANAWork[]) => setAllWorks(works))
+      .catch(() => null);
+  }, []);
+
+  const publishedWorks = allWorks.filter(w => w.state === "PUBLISHED");
+  const activeWorks    = allWorks.filter(w => ACTIVE_STATES.includes(w.state));
 
   if (!deployed) {
     return (
@@ -253,7 +432,7 @@ export function WorksClient() {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && allWorks.length === 0) {
     return (
       <div className="flex items-center justify-center py-24 gap-4">
         <div className="w-6 h-6 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
@@ -262,7 +441,9 @@ export function WorksClient() {
     );
   }
 
-  if (count === 0) {
+  const isEmpty = count === 0 && activeWorks.length === 0;
+
+  if (isEmpty) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-6 text-center">
         <div className="border border-[--border] bg-[--bg-card] p-10 max-w-lg space-y-4">
@@ -286,19 +467,56 @@ export function WorksClient() {
   }
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <p className="font-mono text-xs text-[--fg-muted]">
-          {count} œuvre{count > 1 ? "s" : ""} publiée{count > 1 ? "s" : ""}
-        </p>
-        <Link
-          href="/publish"
-          className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80"
-        >
-          + Nouvelle œuvre
-        </Link>
-      </div>
-      <WorkList count={count} />
+    <div className="space-y-16">
+
+      {/* ── Créations en cours ── */}
+      {activeWorks.length > 0 && (
+        <section className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
+                Création en cours
+              </p>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                {activeWorks.length} œuvre{activeWorks.length > 1 ? "s" : ""} dans le pipeline
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[--fg]/60 animate-pulse" />
+              <span className="font-mono text-xs text-[--fg-muted]">Live</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {activeWorks.map(w => (
+              <InProgressWorkCard key={w.id} work={w} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Galerie on-chain ── */}
+      {count > 0 && (
+        <section className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
+                Galerie
+              </p>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                {count} œuvre{count > 1 ? "s" : ""} publiée{count > 1 ? "s" : ""} on-chain
+              </p>
+            </div>
+            <Link
+              href="/publish"
+              className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80"
+            >
+              + Nouvelle œuvre
+            </Link>
+          </div>
+          <WorkList count={count} neonWorks={publishedWorks} />
+        </section>
+      )}
+
     </div>
   );
 }

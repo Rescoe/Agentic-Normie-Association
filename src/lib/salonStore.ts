@@ -167,14 +167,17 @@ async function getStore(): Promise<SalonStore> {
     && now - global.__anaSalonStoreLoadedAt > CACHE_TTL_MS;
 
   if (!global.__anaSalonStore || isStale) {
-    const fallback = global.__anaSalonStore ?? { salons: {}, names: {} };
-    const s = neon ? ((await neonLoad()) ?? fallback) : fileLoad();
+    const memFallback = global.__anaSalonStore ?? { salons: {}, names: {} };
+    // Priority: 1. Neon (live), 2. static file (demo/backup), 3. in-memory cache
+    const fromNeon = neon ? await neonLoad() : null;
+    const s = fromNeon ?? fileLoad() ?? memFallback;
     ensureAgora(s);
+    const msgCount = s.salons[AGORA_SALON_ID]?.messages.length ?? 0;
+    const src = fromNeon ? "neon" : (msgCount > 0 ? "file" : "empty");
     global.__anaSalonStore        = s;
     global.__anaSalonStoreLoadedAt = now;
     console.log(
-      `[salonStore] ${isStale ? "refresh" : "init"} (${neon ? "neon" : "file"}) — ` +
-      `${s.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`
+      `[salonStore] ${isStale ? "refresh" : "init"} (${src}) — ${msgCount} agora msgs`
     );
   }
   return global.__anaSalonStore!;

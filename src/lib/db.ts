@@ -10,8 +10,22 @@
 
 import { neon } from "@neondatabase/serverless";
 
-const connStr = process.env.NEON_DB_ANA ?? "";
+// Vercel Neon integration creates NEON_DB_ANA_POSTGRES_URL (prefix = integration name).
+// Manual override: NEON_DB_ANA (bare, without suffix).
+const connStr =
+  process.env.NEON_DB_ANA_POSTGRES_URL ??   // Vercel Neon integration (auto-generated)
+  process.env.NEON_DB_ANA_DATABASE_URL ??   // alternative Vercel name
+  process.env.NEON_DB_ANA ??               // manual / legacy
+  "";
+
 export const USE_NEON = !!connStr;
+
+if (!USE_NEON) {
+  console.warn("[db] No Neon connection string found (NEON_DB_ANA_POSTGRES_URL / NEON_DB_ANA_DATABASE_URL / NEON_DB_ANA) — falling back to local file. Messages will NOT persist across Lambda instances.");
+} else {
+  const masked = connStr.replace(/:[^:@]+@/, ":***@");
+  console.log(`[db] Neon connected via ${masked.slice(0, 40)}…`);
+}
 
 let _sql: ReturnType<typeof neon> | null = null;
 function sql() {
@@ -19,7 +33,6 @@ function sql() {
   return _sql;
 }
 
-// Per-lambda cache: table is created at most once per process lifetime.
 let _tableReady = false;
 
 async function ensureTable() {
@@ -32,12 +45,15 @@ async function ensureTable() {
     )
   `;
   _tableReady = true;
+  console.log("[db] kv_store table ready");
 }
 
 export async function kvGet(key: string): Promise<string | null> {
   await ensureTable();
   const rows = await sql()`SELECT value FROM kv_store WHERE key = ${key}` as { value: string }[];
-  return rows[0]?.value ?? null;
+  const found = rows[0]?.value ?? null;
+  console.log(`[db] kvGet(${key}) → ${found ? `${found.length} chars` : "null"}`);
+  return found;
 }
 
 export async function kvSet(key: string, value: string): Promise<void> {
@@ -48,4 +64,5 @@ export async function kvSet(key: string, value: string): Promise<void> {
     ON CONFLICT (key) DO UPDATE
       SET value = EXCLUDED.value, updated_at = NOW()
   `;
+  console.log(`[db] kvSet(${key}) → ${value.length} chars written`);
 }
