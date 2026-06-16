@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
-// ─── Default language is EN (translated). User can switch to FR (original). ───
-// Storage key: absent or "en" → auto-translate to EN.
-//              "fr"           → stay in French (original).
+// Strategy: the page is served in French (lang="fr").
+// Modern browsers (Chrome, Edge, Safari) auto-offer their native translation bar.
+// This button is a manual fallback for users whose browser didn't auto-translate,
+// or who want to force EN via Google Translate.
 
 const LANG_KEY = "ana-lang";
 
@@ -21,38 +22,38 @@ function triggerGT(lang: string, attempts = 20) {
 }
 
 interface Props {
-  /** Tighter padding for the mobile header slot */
   compact?: boolean;
 }
 
 export function LanguageToggle({ compact = false }: Props) {
-  // true  = page is in French (user chose original)
-  // false = page is translated to English (default)
-  const [isFR, setIsFR]   = useState(false);
-  const applied           = useRef(false);
+  // null = unresolved (avoid hydration mismatch), true = user chose EN via GT
+  const [isEN, setIsEN] = useState<boolean | null>(null);
 
   useEffect(() => {
     try {
       const pref = localStorage.getItem(LANG_KEY);
-      if (!applied.current) {
-        applied.current = true;
-        if (pref === "fr") {
-          // User explicitly chose French — actively reset GT to original
-          setIsFR(true);
-          setTimeout(() => triggerGT(""), 1200);
-        } else {
-          // Default (no pref or "en") → auto-translate to English
-          setIsFR(false);
-          setTimeout(() => triggerGT("en"), 1200);
-        }
+      if (pref === "en") {
+        // User previously chose to manually translate — re-apply GT
+        setIsEN(true);
+        triggerGT("en");
+      } else {
+        // Default: stay in French, let the browser's native translation handle it
+        setIsEN(false);
       }
-    } catch {}
+    } catch {
+      setIsEN(false);
+    }
   }, []);
 
+  const switchToEN = () => {
+    try { localStorage.setItem(LANG_KEY, "en"); } catch {}
+    setIsEN(true);
+    triggerGT("en");
+  };
+
   const switchToFR = () => {
-    try { localStorage.setItem(LANG_KEY, "fr"); } catch {}
-    setIsFR(true);
-    // Reset Google Translate to original language
+    try { localStorage.removeItem(LANG_KEY); } catch {}
+    setIsEN(false);
     triggerGT("");
     setTimeout(() => {
       const combo = document.querySelector<HTMLSelectElement>(".goog-te-combo");
@@ -63,12 +64,6 @@ export function LanguageToggle({ compact = false }: Props) {
     }, 300);
   };
 
-  const switchToEN = () => {
-    try { localStorage.removeItem(LANG_KEY); } catch {}
-    setIsFR(false);
-    triggerGT("en");
-  };
-
   const cls = [
     "font-mono border transition-colors leading-none tracking-wide",
     compact
@@ -76,19 +71,20 @@ export function LanguageToggle({ compact = false }: Props) {
       : "text-[11px] px-2 py-1.5 border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg]",
   ].join(" ");
 
-  if (isFR) {
-    // Currently in French → offer to switch to English
+  // Avoid rendering wrong state during SSR/hydration
+  if (isEN === null) return null;
+
+  if (isEN) {
     return (
-      <button onClick={switchToEN} title="Switch to English" className={cls}>
-        EN
+      <button onClick={switchToFR} title="Voir en français" className={cls}>
+        FR
       </button>
     );
   }
 
-  // Currently in English (translated) → offer to revert to French
   return (
-    <button onClick={switchToFR} title="Voir en français" className={cls}>
-      FR
+    <button onClick={switchToEN} title="Switch to English" className={cls}>
+      EN
     </button>
   );
 }

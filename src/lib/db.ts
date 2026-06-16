@@ -13,13 +13,16 @@ import { neon } from "@neondatabase/serverless";
 const connStr = process.env.NEON_DB_ANA ?? "";
 export const USE_NEON = !!connStr;
 
+if (!USE_NEON) {
+  console.warn("[db] NEON_DB_ANA is not set — falling back to local file storage. Messages will NOT persist across Lambda instances.");
+}
+
 let _sql: ReturnType<typeof neon> | null = null;
 function sql() {
   if (!_sql) _sql = neon(connStr);
   return _sql;
 }
 
-// Per-lambda cache: table is created at most once per process lifetime.
 let _tableReady = false;
 
 async function ensureTable() {
@@ -32,12 +35,15 @@ async function ensureTable() {
     )
   `;
   _tableReady = true;
+  console.log("[db] kv_store table ready");
 }
 
 export async function kvGet(key: string): Promise<string | null> {
   await ensureTable();
   const rows = await sql()`SELECT value FROM kv_store WHERE key = ${key}` as { value: string }[];
-  return rows[0]?.value ?? null;
+  const found = rows[0]?.value ?? null;
+  console.log(`[db] kvGet(${key}) → ${found ? `${found.length} chars` : "null"}`);
+  return found;
 }
 
 export async function kvSet(key: string, value: string): Promise<void> {
@@ -48,4 +54,5 @@ export async function kvSet(key: string, value: string): Promise<void> {
     ON CONFLICT (key) DO UPDATE
       SET value = EXCLUDED.value, updated_at = NOW()
   `;
+  console.log(`[db] kvSet(${key}) → ${value.length} chars written`);
 }
