@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createPublicClient, http, parseAbiItem, type Log } from "viem";
 import { base } from "viem/chains";
 import Image from "next/image";
-import { CONTRACT_ADDRESSES, ROLE_LABELS } from "@/lib/contracts";
+import { CONTRACT_ADDRESSES, CONSTITUENT_ASSEMBLY_ABI, ROLE_LABELS, ROLES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 
 // ─── Chain client (client-side — public RPC) ──────────────────────────────────
@@ -188,6 +188,102 @@ function ActivityRow({ ev }: { ev: ActivityEvent }) {
   );
 }
 
+// ─── Elected Roles (read from getLeader — no log scan needed) ────────────────
+
+const CA_ELECTED = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined;
+
+const ROLE_ORDER = [
+  { hash: ROLES.PRESIDENT,      label: "Président",                  group: "Institutionnel" },
+  { hash: ROLES.VICE_PRESIDENT, label: "Vice-Président / Trésorier", group: "Institutionnel" },
+  { hash: ROLES.SECRETARY,      label: "Secrétaire",                 group: "Institutionnel" },
+  { hash: ROLES.AUTHOR,         label: "Auteur",                     group: "Créatif" },
+  { hash: ROLES.CURATOR,        label: "Curateur",                   group: "Créatif" },
+  { hash: ROLES.RAPPORTEUR,     label: "Rapporteur",                 group: "Créatif" },
+] as const;
+
+function ElectedRolesPanel() {
+  const [elected, setElected] = useState<Array<{ tokenId: number; count: number }>>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!CA_ELECTED) { setLoading(false); return; }
+    Promise.all(
+      ROLE_ORDER.map(r =>
+        rpcClient.readContract({
+          address:      CA_ELECTED!,
+          abi:          CONSTITUENT_ASSEMBLY_ABI,
+          functionName: "getLeader",
+          args:         [r.hash as `0x${string}`],
+        }).then(res => {
+          const t = res as [bigint, bigint];
+          return { tokenId: Number(t[0]), count: Number(t[1]) };
+        }).catch(() => ({ tokenId: 0, count: 0 }))
+      )
+    ).then(results => {
+      setElected(results);
+      setLoading(false);
+    });
+  }, []);
+
+  const hasAny = elected.some(e => e.tokenId > 0);
+  if (loading) {
+    return (
+      <div className="border border-[--border] p-5 space-y-3 animate-pulse">
+        <div className="h-3 bg-[--border] rounded w-32" />
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+          {ROLE_ORDER.map(r => (
+            <div key={r.hash} className="space-y-1">
+              <div className="w-12 h-12 bg-[--border] rounded mx-auto" />
+              <div className="h-2 bg-[--border] rounded w-16 mx-auto" />
+              <div className="h-2 bg-[--border] rounded w-12 mx-auto" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (!hasAny) return null;
+
+  return (
+    <div className="border border-[--border] p-5 space-y-4">
+      <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
+        Élus actuels — Assemblée Constitutive
+      </p>
+      <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+        {ROLE_ORDER.map((r, i) => {
+          const e = elected[i];
+          if (!e || e.tokenId === 0) {
+            return (
+              <div key={r.hash} className="text-center space-y-1.5 opacity-40">
+                <div className="w-12 h-12 mx-auto border border-dashed border-[--border] flex items-center justify-center">
+                  <span className="font-mono text-xs text-[--fg-muted]">—</span>
+                </div>
+                <p className="font-mono text-xs text-[--fg-muted]">{r.label}</p>
+              </div>
+            );
+          }
+          return (
+            <div key={r.hash} className="text-center space-y-1.5">
+              <div className="relative w-12 h-12 mx-auto overflow-hidden ring-2 ring-[--fg]">
+                <Image
+                  src={getNormieImageUrl(e.tokenId)}
+                  alt={`#${e.tokenId}`}
+                  fill
+                  className="object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                  unoptimized
+                />
+              </div>
+              <p className="font-mono text-xs font-bold">#{e.tokenId}</p>
+              <p className="font-mono text-[10px] text-[--fg-muted] leading-tight">{r.label}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Normie Activity Summary ──────────────────────────────────────────────────
 
 function NormieSummary({ events }: { events: ActivityEvent[] }) {
@@ -313,6 +409,9 @@ export function ActivityClient() {
 
   return (
     <div className="space-y-8">
+      {/* Elected roles — reads from getLeader() directly, no log scan */}
+      {CA_ELECTED && <ElectedRolesPanel />}
+
       {/* Normie summary */}
       <NormieSummary events={events} />
 
