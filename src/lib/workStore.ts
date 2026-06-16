@@ -109,10 +109,9 @@ interface WorkStore {
 
 export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
 
-const BLOB_PATH     = "work/store.json";
-const DATA_FILE     = path.join(process.cwd(), "data", "works.json");
-const USE_BLOB      = !!process.env.BLOB_READ_WRITE_TOKEN;
-const CACHE_TTL_MS  = 60_000;
+const NEON_KEY    = "work-store";
+const DATA_FILE   = path.join(process.cwd(), "data", "works.json");
+const CACHE_TTL_MS = 60_000;
 
 // ─── Global cache ─────────────────────────────────────────────────────────────
 
@@ -123,39 +122,35 @@ declare global {
   var __anaWorkStoreLoadedAt: number | undefined;
 }
 
-// ─── Blob I/O ─────────────────────────────────────────────────────────────────
+// ─── Neon I/O ─────────────────────────────────────────────────────────────────
 
-async function blobLoad(): Promise<WorkStore | null> {
+async function neonLoad(): Promise<WorkStore | null> {
   try {
-    const { list } = await import("@vercel/blob");
-    const { blobs } = await list({ prefix: BLOB_PATH });
-    if (blobs.length === 0) return null;
-    const res = await fetch(blobs[0].url, {
-      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-      cache: "no-store",
-    });
-    if (!res.ok) {
-      console.error(`[workStore] blobLoad ${res.status}`);
-      return null;
-    }
-    return await res.json() as WorkStore;
+    const { kvGet, USE_NEON } = await import("./db");
+    if (!USE_NEON) return null;
+    const raw = await kvGet(NEON_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as WorkStore;
+    if (!s.works) s.works = {};
+    return s;
   } catch (e) {
-    console.error("[workStore] blobLoad error:", e);
+    console.error("[workStore] neonLoad error:", e);
     return null;
   }
 }
 
-async function blobSave(store: WorkStore): Promise<void> {
+async function neonSave(store: WorkStore): Promise<void> {
   try {
-    const { put } = await import("@vercel/blob");
-    await put(BLOB_PATH, JSON.stringify(store), {
-      access: "private", addRandomSuffix: false, allowOverwrite: true, contentType: "application/json",
-    });
-    console.log(`[workStore] saved — ${Object.keys(store.works).length} works`);
+    const { kvSet, USE_NEON } = await import("./db");
+    if (!USE_NEON) return;
+    await kvSet(NEON_KEY, JSON.stringify(store));
+    console.log(`[workStore] saved to Neon — ${Object.keys(store.works).length} works`);
   } catch (e) {
-    console.error("[workStore] blobSave error:", e);
+    console.error("[workStore] neonSave error:", e);
   }
 }
+
+// ─── Local file I/O (dev fallback when NEON_DB_ANA is not set) ───────────────
 
 function fileLoad(): WorkStore {
   try {
@@ -177,20 +172,28 @@ function fileSave(store: WorkStore): void {
   } catch (e) { console.error("[workStore] fileSave error:", e); }
 }
 
+// ─── Store access ─────────────────────────────────────────────────────────────
+
+async function useNeon(): Promise<boolean> {
+  const { USE_NEON } = await import("./db");
+  return USE_NEON;
+}
+
 async function getStore(): Promise<WorkStore> {
-  const now = Date.now();
-  const isStale = USE_BLOB
+  const neon = await useNeon();
+  const now  = Date.now();
+  const isStale = neon
     && global.__anaWorkStore
     && global.__anaWorkStoreLoadedAt !== undefined
     && now - global.__anaWorkStoreLoadedAt > CACHE_TTL_MS;
 
   if (!global.__anaWorkStore || isStale) {
     const fallback = global.__anaWorkStore ?? { works: {} };
-    const s = USE_BLOB ? ((await blobLoad()) ?? fallback) : fileLoad();
+    const s = neon ? ((await neonLoad()) ?? fallback) : fileLoad();
     if (!s.works) s.works = {};
-    global.__anaWorkStore     = s;
+    global.__anaWorkStore        = s;
     global.__anaWorkStoreLoadedAt = now;
-    console.log(`[workStore] ${isStale ? "refresh" : "init"} — ${Object.keys(s.works).length} works`);
+    console.log(`[workStore] ${isStale ? "refresh" : "init"} (${neon ? "neon" : "file"}) — ${Object.keys(s.works).length} works`);
   }
   return global.__anaWorkStore!;
 }
@@ -198,8 +201,8 @@ async function getStore(): Promise<WorkStore> {
 async function mutate(fn: (s: WorkStore) => void): Promise<void> {
   const store = await getStore();
   fn(store);
-  if (USE_BLOB) {
-    await blobSave(store);
+  if (await useNeon()) {
+    await neonSave(store);
     global.__anaWorkStoreLoadedAt = Date.now();
   } else {
     fileSave(store);
