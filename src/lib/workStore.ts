@@ -188,12 +188,15 @@ async function getStore(): Promise<WorkStore> {
     && now - global.__anaWorkStoreLoadedAt > CACHE_TTL_MS;
 
   if (!global.__anaWorkStore || isStale) {
-    const fallback = global.__anaWorkStore ?? { works: {} };
-    const s = neon ? ((await neonLoad()) ?? fallback) : fileLoad();
+    const memFallback = global.__anaWorkStore ?? { works: {} };
+    // Priority: 1. Neon (live), 2. static file (demo/backup), 3. in-memory cache
+    const fromNeon = neon ? await neonLoad() : null;
+    const s = fromNeon ?? fileLoad() ?? memFallback;
     if (!s.works) s.works = {};
+    const src = fromNeon ? "neon" : (Object.keys(s.works).length > 0 ? "file" : "empty");
     global.__anaWorkStore        = s;
     global.__anaWorkStoreLoadedAt = now;
-    console.log(`[workStore] ${isStale ? "refresh" : "init"} (${neon ? "neon" : "file"}) — ${Object.keys(s.works).length} works`);
+    console.log(`[workStore] ${isStale ? "refresh" : "init"} (${src}) — ${Object.keys(s.works).length} works`);
   }
   return global.__anaWorkStore!;
 }
