@@ -144,14 +144,19 @@ async function getOrCreateVoteSalon(sessionId: number): Promise<string> {
   return salon.id;
 }
 
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; failed: string[] }> {
   const key = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
   if (!key) throw new Error("RELAYER_PRIVATE_KEY not configured");
-  const wallet = createWalletClient({ account: privateKeyToAccount(key), chain: CHAIN, transport: http(RPC_URL) });
+  const account = privateKeyToAccount(key);
+  const wallet  = createWalletClient({ account, chain: CHAIN, transport: http(RPC_URL, { timeout: 20_000 }) });
+
+  // Read pending nonce once upfront so sequential txs don't clash
+  let nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
 
   let ok = 0; const failed: string[] = [];
   for (const d of decisions) {
-    // Defensive: skip malformed decisions before hitting viem
     if (!Number.isFinite(d.voterTokenId) || d.voterTokenId <= 0) {
       failed.push(`invalid voterTokenId ${d.voterTokenId}`); continue;
     }
@@ -161,23 +166,34 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
     if (!d.role || d.role.length !== 66) {
       failed.push(`#${d.voterTokenId}→${d.roleLabel}: invalid role hash`); continue;
     }
-    try {
-      const voted = await pub.readContract({
-        address: CA, abi: CONSTITUENT_ASSEMBLY_ABI,
-        functionName: "hasVoted", args: [BigInt(d.voterTokenId), d.role as `0x${string}`],
-      }) as boolean;
-      if (voted) { ok++; continue; }
-      await wallet.writeContract({
-        address: CA, abi: CONSTITUENT_ASSEMBLY_ABI,
-        functionName: "castVoteAsRelayer",
-        args: [BigInt(d.voterTokenId), d.role as `0x${string}`, BigInt(d.candidateTokenId)],
-      });
-      ok++;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("AlreadyVotedForRole")) { ok++; continue; }
-      failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 120)}`);
+
+    let attempt = 0;
+    while (attempt < 2) {
+      try {
+        await wallet.writeContract({
+          address: CA, abi: CONSTITUENT_ASSEMBLY_ABI,
+          functionName: "castVoteAsRelayer",
+          args:    [BigInt(d.voterTokenId), d.role as `0x${string}`, BigInt(d.candidateTokenId)],
+          nonce,
+        });
+        nonce++;
+        ok++;
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("AlreadyVotedForRole")) { ok++; nonce++; break; }
+        attempt++;
+        if (attempt >= 2) {
+          failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 120)}`);
+        } else {
+          // Refresh nonce from chain on retry (handles nonce desync)
+          await sleep(1_200);
+          nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
+        }
+      }
     }
+
+    await sleep(300); // rate-limit buffer between each broadcast
   }
   return { ok, failed };
 }
