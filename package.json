@@ -18,6 +18,7 @@
     "clean": "hardhat clean && rm -rf .next"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@openzeppelin/contracts": "^5.1.0",
     "@rainbow-me/rainbowkit": "^2.2.3",
     "@tanstack/react-query": "^5.65.1",

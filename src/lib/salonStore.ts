@@ -57,7 +57,7 @@ interface SalonStore {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const AGORA_SALON_ID       = "salon_agora_ana";
-const BLOB_PATH                   = "salon/store.json";
+const NEON_KEY                    = "salon-store";
 const DATA_FILE                   = path.join(process.cwd(), "data", "salon.json");
 const MAX_MESSAGES_PER_HOUR       = 4;
 const MAX_MESSAGES_PER_SALON      = 500;
@@ -68,15 +68,6 @@ export const SYNTHESIS_MIN_MSGS   = 40;
 // 30 days between syntheses
 export const SYNTHESIS_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 
-const USE_BLOB = !!process.env.BLOB_READ_WRITE_TOKEN;
-
-console.log(`[salonStore] mode: ${USE_BLOB ? "Vercel Blob" : `local file (${DATA_FILE})`}`);
-
-// ─── Global in-process cache ──────────────────────────────────────────────────
-
-// Cache the store for at most this many ms before forcing a blob reload.
-// Keeps different Lambda instances in sync without polling on every request.
-// Budget: ~1 Advanced Op per instance per 60s ≈ <300 ops/month for normal usage.
 const CACHE_TTL_MS = 60_000;
 
 declare global {
@@ -86,58 +77,40 @@ declare global {
   var __anaSalonStoreLoadedAt: number | undefined;
 }
 
-// ─── Vercel Blob I/O ─────────────────────────────────────────────────────────
+// ─── Neon I/O ─────────────────────────────────────────────────────────────────
 
-async function blobLoad(): Promise<SalonStore | null> {
+async function neonLoad(): Promise<SalonStore | null> {
   try {
-    const { list } = await import("@vercel/blob");
-    const { blobs } = await list({ prefix: BLOB_PATH });
-    if (blobs.length === 0) {
-      console.log("[salonStore] blob list empty — starting fresh");
-      return null;
-    }
-    // Use blob.url (canonical URL) with Bearer auth.
-    // blob.downloadUrl can be undefined for private blobs — never use it.
-    const blobUrl = blobs[0].url;
-    const res = await fetch(blobUrl, {
-      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-      cache: "no-store",
-    });
-    if (!res.ok) {
-      console.error(`[salonStore] blob fetch ${res.status} from ${blobUrl.slice(0, 60)}`);
-      return null;
-    }
-    const parsed = await res.json() as SalonStore;
+    const { kvGet, USE_NEON } = await import("./db");
+    if (!USE_NEON) return null;
+    const raw = await kvGet(NEON_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SalonStore;
     if (!parsed.names)  parsed.names  = {};
     if (!parsed.salons) parsed.salons = {};
-    // Migrate: add summaries array to salons that predate this field
     for (const salon of Object.values(parsed.salons)) {
       if (!salon.summaries) salon.summaries = [];
     }
-    console.log(`[salonStore] blob loaded — ${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
+    console.log(`[salonStore] neon loaded — ${parsed.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
     return parsed;
   } catch (e) {
-    console.error("[salonStore] blob load error:", e);
+    console.error("[salonStore] neonLoad error:", e);
     return null;
   }
 }
 
-async function blobSave(store: SalonStore): Promise<void> {
+async function neonSave(store: SalonStore): Promise<void> {
   try {
-    const { put } = await import("@vercel/blob");
-    await put(BLOB_PATH, JSON.stringify(store), {
-      access:           "private",
-      addRandomSuffix:  false,
-      allowOverwrite:   true,
-      contentType:      "application/json",
-    });
-    console.log(`[salonStore] blob saved — ${store.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
+    const { kvSet, USE_NEON } = await import("./db");
+    if (!USE_NEON) return;
+    await kvSet(NEON_KEY, JSON.stringify(store));
+    console.log(`[salonStore] neon saved — ${store.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
   } catch (e) {
-    console.error("[salonStore] blob save error:", e);
+    console.error("[salonStore] neonSave error:", e);
   }
 }
 
-// ─── Local file I/O (dev fallback) ───────────────────────────────────────────
+// ─── Local file I/O (dev fallback when NEON_DB_ANA is not set) ───────────────
 
 function fileLoad(): SalonStore {
   try {
@@ -180,38 +153,38 @@ function ensureAgora(s: SalonStore): void {
   if (!s.salons[AGORA_SALON_ID]) s.salons[AGORA_SALON_ID] = makeAgora();
 }
 
+async function useNeon(): Promise<boolean> {
+  const { USE_NEON } = await import("./db");
+  return USE_NEON;
+}
+
 async function getStore(): Promise<SalonStore> {
-  const now     = Date.now();
-  const isStale = USE_BLOB
+  const neon = await useNeon();
+  const now  = Date.now();
+  const isStale = neon
     && global.__anaSalonStore
     && global.__anaSalonStoreLoadedAt !== undefined
     && now - global.__anaSalonStoreLoadedAt > CACHE_TTL_MS;
 
   if (!global.__anaSalonStore || isStale) {
-    // On stale reload, fall back to existing global if blob load fails (don't lose data)
     const fallback = global.__anaSalonStore ?? { salons: {}, names: {} };
-    const s = USE_BLOB
-      ? ((await blobLoad()) ?? fallback)
-      : fileLoad();
+    const s = neon ? ((await neonLoad()) ?? fallback) : fileLoad();
     ensureAgora(s);
-    global.__anaSalonStore    = s;
+    global.__anaSalonStore        = s;
     global.__anaSalonStoreLoadedAt = now;
     console.log(
-      `[salonStore] ${isStale ? "refresh" : "init"} (${USE_BLOB ? "blob" : "file"}) — ` +
+      `[salonStore] ${isStale ? "refresh" : "init"} (${neon ? "neon" : "file"}) — ` +
       `${s.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`
     );
   }
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   return global.__anaSalonStore!;
 }
 
 async function mutate(fn: (s: SalonStore) => void): Promise<void> {
   const store = await getStore();
   fn(store);
-  if (USE_BLOB) {
-    await blobSave(store);
-    // Reset TTL so the next getStore() call on THIS instance uses the fresh global
-    // (not needed for correctness but keeps loadedAt accurate after a write)
+  if (await useNeon()) {
+    await neonSave(store);
     global.__anaSalonStoreLoadedAt = Date.now();
   } else {
     fileSave(store);
@@ -224,7 +197,7 @@ export async function getDebugInfo() {
   const store = await getStore();
   const agora = store.salons[AGORA_SALON_ID];
   return {
-    mode:              USE_BLOB ? "vercel-blob" : "local-file",
+    mode:              process.env.NEON_DB_ANA ? "neon-postgres" : "local-file",
     globalLoaded:      !!global.__anaSalonStore,
     salonCount:        Object.keys(store.salons).length,
     nameCount:         Object.keys(store.names).length,
