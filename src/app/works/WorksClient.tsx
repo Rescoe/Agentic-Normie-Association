@@ -303,7 +303,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
       {/* ── Artwork zone — always shown first ── */}
       {isHtmlWork ? (
         /* HTML/generative — iframe runs immediately */
-        <div className="relative aspect-video bg-black overflow-hidden">
+        <div className="relative bg-black overflow-hidden" style={{ aspectRatio: "4/3" }}>
           <iframe
             src={certUrl}
             className="w-full h-full border-0"
@@ -314,7 +314,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
             href={certUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="absolute bottom-2 right-2 bg-black/60 text-white font-mono text-[10px] px-2 py-1 hover:bg-black/80 transition-colors"
+            className="absolute top-2 right-2 bg-black/70 text-white font-mono text-[10px] px-2.5 py-1 hover:bg-black transition-colors border border-white/20"
           >
             ⤢ fullscreen
           </a>
@@ -400,32 +400,44 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
         )}
 
         {/* Footer actions */}
-        <div className="flex items-center justify-between pt-1 border-t border-[--border]">
-          {isHtmlWork ? (
-            <button
-              onClick={() => setShowReport(r => !r)}
-              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
-            >
-              {showReport ? "↑ Hide process" : "↓ How it was made"}
-            </button>
-          ) : work.artworkText ? (
-            <button
-              onClick={() => setShowPoem(true)}
-              className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
-            >
-              <span>◈</span> Open immutable certificate
-            </button>
-          ) : null}
-          {work.txHash && (
+        <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
+          <div className="flex items-center gap-3">
+            {isHtmlWork ? (
+              <button
+                onClick={() => setShowReport(r => !r)}
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                {showReport ? "↑ Hide process" : "↓ How it was made"}
+              </button>
+            ) : work.artworkText ? (
+              <button
+                onClick={() => setShowPoem(true)}
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                Read full work →
+              </button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-3">
             <a
-              href={`https://basescan.org/tx/${work.txHash}`}
+              href={certUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+              className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
             >
-              tx ↗
+              <span>◈</span> Certificate
             </a>
-          )}
+            {work.txHash && (
+              <a
+                href={`https://basescan.org/tx/${work.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                tx ↗
+              </a>
+            )}
+          </div>
         </div>
       </div>
 
