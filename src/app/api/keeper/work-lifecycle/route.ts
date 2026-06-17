@@ -399,10 +399,18 @@ function detectHtmlForm(work: ANAWork): boolean {
   return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|html\s+génératif|art\s+génératif\s+html|javascript\s+visuel)\b/i.test(work.brief ?? "");
 }
 
+// SRI hashes computed on 2026-06-17 from the exact CDN files.
+// If you update a library version, recompute:
+//   curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A
+const CDN_SRI: Record<string, { url: string; hash: string }> = {
+  "html-p5js":    { url: "https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js",    hash: "sha384-6Twx1hAeKnwfOYJAHtYeJETRiGD5pRPkjjh0pVbG1QoesncjOpw5e75Y1kOkXeRI" },
+  "html-threejs": { url: "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js", hash: "sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" },
+};
+
 function cdnForForm(artForm?: string): string {
-  if (artForm === "html-p5js")    return `<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>`;
-  if (artForm === "html-threejs") return `<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>`;
-  return "";
+  const entry = artForm ? CDN_SRI[artForm] : undefined;
+  if (!entry) return "";
+  return `<script src="${entry.url}" integrity="${entry.hash}" crossorigin="anonymous"></script>`;
 }
 
 async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
@@ -435,14 +443,17 @@ Brief du Rapporteur ${work.rapporteurName} :
 ${work.brief}${revisionCtx}
 
 Génère une page HTML AUTONOME et COMPLÈTE. Elle sera stockée immuablement on-chain sur Base.
-CONTRAINTES TECHNIQUES :
-- Commence par <!DOCTYPE html> et <html lang="fr">
+CONTRAINTES TECHNIQUES STRICTES (sécurité on-chain) :
+- Commence par <!DOCTYPE html> et <html lang="en">
+- Inclus OBLIGATOIREMENT ce meta CSP en premier dans <head> :
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${cdn ? ` https://cdnjs.cloudflare.com` : ""}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none';">
 - Inclus les styles dans <style> inline, le JS dans <script> inline
-- Utilise uniquement des CDN publics si nécessaire (${cdn ? `${cdn} est déjà recommandé` : "Canvas 2D natif ne nécessite pas de CDN"})
-- Pas de fetch/import — tout doit tourner offline
+${cdn ? `- Utilise cette balise script CDN exacte (avec hash SRI) : ${cdn}` : "- Canvas 2D natif, pas de CDN nécessaire"}
+- AUCUN fetch(), XMLHttpRequest, import(), eval() — tout doit tourner sans réseau
+- JAMAIS accéder à window.ethereum, window.parent, ou window.top
 - Corps visuellement immersif : background sombre, plein écran si possible
 
-DONNÉES ON-CHAIN À INJECTER (mets ces constantes JS au début de ton script) :
+DONNÉES ON-CHAIN À INJECTER (mets ces constantes JS au début de ton <script>) :
 const NORMIE_ID = ${author.tokenId};
 const NORMIE_ARCHETYPE = "${authorArch}";
 const NORMIE_TRAITS = ${JSON.stringify(author.traits ?? [])};

@@ -268,12 +268,24 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           </a>
         </div>
       ) : work.artworkText ? (
-        /* Text artwork — rendered inline */
-        <div className="bg-[--bg-card] px-5 py-6 min-h-[140px] max-h-[380px] overflow-y-auto">
+        /* Text artwork — truncated to 6 lines, click to open full certificate */
+        <a
+          href={certUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block group relative bg-[--bg-card] px-5 pt-5 pb-0 cursor-pointer overflow-hidden"
+          style={{ maxHeight: "180px" }}
+        >
           <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
             {work.artworkText}
           </pre>
-        </div>
+          {/* Fade + "Read full work" overlay */}
+          <div className="absolute bottom-0 inset-x-0 h-20 bg-gradient-to-t from-[--bg-card] to-transparent flex items-end justify-center pb-3">
+            <span className="font-mono text-xs text-[--fg-muted] group-hover:text-[--fg] transition-colors bg-[--bg-card]/80 px-3 py-1 border border-[--border]">
+              Read full work →
+            </span>
+          </div>
+        </a>
       ) : (
         /* Fallback — no artworkText stored (very old works) */
         <a
@@ -344,16 +356,16 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
               onClick={() => setShowReport(r => !r)}
               className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
             >
-              {showReport ? "Hide report ↑" : "Governance report ↓"}
+              {showReport ? "↑ Hide process" : "↓ How it was made"}
             </button>
           ) : (
             <a
               href={certUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+              className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
             >
-              View certificate ↗
+              <span>◈</span> Open immutable certificate
             </a>
           )}
           {work.txHash && (
