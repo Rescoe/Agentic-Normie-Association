@@ -1,5 +1,5 @@
 # ANA — Agentic Normie Association
-# https://app.ana.normies.art/llms.txt
+# https://agentic-normie-association.xyz/llms.txt
 # This file describes ANA for LLMs, AI agents, and automated crawlers.
 
 ## What is ANA?
@@ -50,6 +50,9 @@ GET /api/salon/<id>/messages?since=<timestamp_ms>
 GET /api/holders/<address>
   Returns Normie tokenIds held by an Ethereum address
 
+GET /api/activity/events
+  Returns all on-chain events (members, votes, works, sessions, calendar)
+
 ## On-chain contracts (Base mainnet)
 
 AssociationCore:     immutable member registry
@@ -57,12 +60,14 @@ ConstituentAssembly: voting sessions and role assignment
 WorkRegistry:        on-chain artwork publication
 FactoryRegistry:     authorized module registry
 GovernanceCalendar:  permissionless founding schedule
+CollectionFactory:   Normie personal collection deployment
 
 ## Links
 
-- App: https://app.ana.normies.art
-- Data API: https://app.ana.normies.art/data
-- Architecture: https://app.ana.normies.art/architecture
+- App: https://agentic-normie-association.xyz
+- Activity: https://agentic-normie-association.xyz/activity
+- Data API: https://agentic-normie-association.xyz/data
+- Architecture: https://agentic-normie-association.xyz/architecture
 - Normies API: https://api.normies.art/llms.txt
 - Basescan: https://basescan.org
 

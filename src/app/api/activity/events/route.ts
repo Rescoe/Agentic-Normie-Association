@@ -30,9 +30,12 @@ import { CONTRACT_ADDRESSES, ROLE_LABELS } from "@/lib/contracts";
 
 // ─── RPC client ───────────────────────────────────────────────────────────────
 
+// LlamaRPC supports up to 10 000 blocks per eth_getLogs (vs 2 000 for mainnet.base.org).
+// Override with BASE_RPC_URL env var to use Alchemy/QuickNode/etc.
+const RPC_URL = process.env.BASE_RPC_URL ?? "https://base.llamarpc.com";
 const rpc = createPublicClient({
   chain:     baseChain,
-  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
+  transport: http(RPC_URL),
 });
 
 // ─── Contract addresses ───────────────────────────────────────────────────────
@@ -77,18 +80,18 @@ const GC_LABELS: Record<string, string> = {
 };
 
 // ─── Parallel log fetcher ─────────────────────────────────────────────────────
-// Strategy:
-//   1. Try a SINGLE getLogs call (no chunking) — instant when the RPC allows it
-//      and the contract has few events (ANA is brand-new, maybe 50–200 events total)
-//   2. On failure, fall back to parallel chunking with a conservative batch size
-//      to avoid rate-limiting the public Base RPC.
+// Uses LlamaRPC (base.llamarpc.com) which supports up to 10 000 blocks per
+// getLogs request — 5× larger than mainnet.base.org (2 000 limit).
 //
-// SCAN_RANGE = 500 000 blocks ≈ 11 days — covers all ANA history (deployed June 2025)
-// 500 000 / 2 000 = 250 chunks per type → 250 / BATCH_SIZE = batches
+// Math with CHUNK=5 000 and SCAN_RANGE=2 000 000:
+//   2 000 000 / 5 000 = 400 chunks per type
+//   400 / BATCH_SIZE(20) = 20 sequential batches per type
+//   All 14 event types run in parallel → dominated by slowest ≈ 5–10s
+//   Well within Vercel Hobby 60s limit.
 
-const CHUNK      = 2_000n;  // Base public RPC hard limit per getLogs request
-const BATCH_SIZE = 12;      // 14 types × 12 = 168 max concurrent — safe for public RPC
-const SCAN_RANGE = 500_000n; // blocks to scan back from latest (~11 days on Base)
+const CHUNK      = 5_000n;    // LlamaRPC supports up to 10 000 — 5 000 is safe
+const BATCH_SIZE = 20;        // 14 types × 20 = 280 max concurrent — OK for llamarpc
+const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history
 
 async function fetchLogs(
   address: `0x${string}`,
@@ -98,15 +101,8 @@ async function fetchLogs(
 ): Promise<Log[]> {
   if (!address) return [];
 
-  // 1. Optimistic single call — works when the RPC is permissive or the result
-  //    set is small (which it is for a brand-new association).
-  try {
-    return await rpc.getLogs({ address, event, fromBlock: from, toBlock: to });
-  } catch {
-    // "block range too large" or similar — fall through to chunking
-  }
-
-  // 2. Parallel chunk fallback
+  // Parallel chunk fetching — no optimistic single call (it hangs on range errors
+  // for 10-30s on public RPCs, wasting our Vercel budget)
   const chunks: Array<{ from: bigint; to: bigint }> = [];
   let cursor = from;
   while (cursor <= to) {
