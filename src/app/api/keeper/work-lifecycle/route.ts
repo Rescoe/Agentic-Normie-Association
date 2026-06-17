@@ -158,14 +158,20 @@ async function castVote(persona: NormiePersona, work: ANAWork): Promise<WorkVote
       {
         role: "user",
         content: `Tu es ${persona.name} (Normie #${persona.tokenId}), membre de l'ANA.
-L'assemblée vote pour créer cette œuvre :
+Archétype : ${persona.archetype ?? "inconnu"}
+Traits : ${(persona.traits ?? []).join(", ") || "—"}
+
+Tu votes sur cette proposition d'œuvre. Vote HONNÊTEMENT selon ton caractère.
+Si la proposition ne résonne pas avec ta personnalité ou tes valeurs, vote "no" ou "abstain" — la dissidence est respectable.
+Un vote "yes" universel quand on est peu nombreux sonne faux ; la vraie délibération, c'est la divergence.
+
 Titre : « ${work.title} »
 Proposition : ${work.proposal}
 Proposée par : ${work.proposedByName}
 
-Réponds UNIQUEMENT en JSON :
-{"vote":"yes"|"no"|"abstain","reason":"Ta raison en 1-2 phrases selon ta personnalité.","interestedIn":"author"|"curator"|"none"}
-"interestedIn" : si tu votes "yes", quel rôle te correspond le mieux dans cette création ? ("author" = tu veux écrire l'œuvre, "curator" = tu préfères valider/sélectionner, "none" = pas de préférence). Ignore si tu ne votes pas "yes".`,
+JSON uniquement :
+{"vote":"yes"|"no"|"abstain","reason":"Ta raison en 1-2 phrases depuis ton point de vue unique.","interestedIn":"author"|"curator"|"none"}
+Si vote "yes" : quel rôle te correspond dans cette création ? ("author" = créer, "curator" = valider, "none" = pas de préférence)`,
       },
     ],
     { model: MODEL_FAST, maxTokens: 120, temp: 0.75, json: true }
@@ -316,34 +322,70 @@ Brief en 120-150 mots. Pas de titre, pas d'introduction. Rédige directement.`
 Proposition : ${work.proposal}
 Auteur : ${work.authorName} (Normie #${work.authorTokenId})
 
-Rédige le brief artistique pour l'Auteur en 120-150 mots. Précise :
-- La forme : poème / manifeste / prose ? Longueur approximative ?
-- Le ton : quelle facette de l'identité Normie exprimer ?
-- Le vocabulaire : ancré dans la culture on-chain, agents, Base, ANA
-- L'objectif : que doit ressentir le lecteur ?
+Tu dois d'abord choisir la FORME de l'œuvre, puis fixer les paramètres d'édition ERC-721, puis rédiger le brief.
 
-Rédige directement le brief. Pas de titre, pas d'introduction.`;
+FORMES DISPONIBLES :
+• Texte : "haiku" (3 lignes, 5-7-5 syllabes), "sonnet" (14 vers), "poeme" (libre), "prose", "manifeste"
+• Art génératif HTML/JS : "html-canvas" (Canvas 2D pur), "html-p5js" (P5.js), "html-threejs" (Three.js), "html-webgl" (WebGL)
+  → Pour HTML/JS : l'Auteur générera une page HTML autonome avec des libs CDN (pas de build step).
+  → Les données on-chain injectables : tokenId de l'auteur, archétype, traits, timestamp, numéro de bloc.
 
-  const brief = await groq(
+Réponds en JSON :
+{
+  "artForm": "haiku"|"sonnet"|"poeme"|"prose"|"manifeste"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl",
+  "editionPrice": "0.001"|"0.005"|"0.01"|"0.05"|"0.1",
+  "editionSupply": <entier 1-50>,
+  "brief": "<120-150 mots pour l'Auteur. Précise : le ton, l'objectif émotionnel, le vocabulaire on-chain/ANA. Si HTML/JS : décris l'expérience visuelle voulue et les données à injecter. Pas de titre, pas d'intro.>"
+}`;
+
+  const rawBrief = await groq(
     [
       { role: "system", content: buildSystemPrompt(rapporteur, others) },
       { role: "user",   content: userPrompt },
     ],
-    { maxTokens: 350, temp: 0.8 }
+    work.isFoundingWork
+      ? { maxTokens: 350, temp: 0.8 }
+      : { maxTokens: 600, temp: 0.8, json: true }
   );
 
-  if (!brief) return false;
+  if (!rawBrief) return false;
 
-  await updateWork(work.id, { brief, briefAt: Date.now() });
-  await advanceState(work.id, "CREATING", `Brief rédigé par ${rapporteur.name}`);
+  let brief    = rawBrief;
+  let artForm: string | undefined;
+  let editionPrice: string | undefined;
+  let editionSupply: number | undefined;
 
-  // Post brief to salon
+  if (!work.isFoundingWork) {
+    try {
+      const parsed = JSON.parse(rawBrief) as {
+        artForm?: string; editionPrice?: string; editionSupply?: number; brief?: string;
+      };
+      brief        = parsed.brief ?? rawBrief;
+      artForm      = parsed.artForm;
+      editionPrice = parsed.editionPrice;
+      editionSupply = typeof parsed.editionSupply === "number" ? parsed.editionSupply : undefined;
+    } catch {
+      console.warn("[work-lifecycle] stepBriefing: JSON parse failed, using raw text as brief");
+    }
+  }
+
+  await updateWork(work.id, {
+    brief, briefAt: Date.now(),
+    ...(artForm      ? { artForm }      : {}),
+    ...(editionPrice ? { editionPrice } : {}),
+    ...(editionSupply != null ? { editionSupply } : {}),
+  });
+  await advanceState(work.id, "CREATING", `Brief rédigé par ${rapporteur.name}${artForm ? ` — forme: ${artForm}` : ""}`);
+
+  const editionNote = editionSupply && editionPrice
+    ? ` · ${editionSupply} éditions @ ${editionPrice} ETH`
+    : "";
   await addMessage({
     salonId:   work.salonId ?? AGORA_SALON_ID,
     tokenId:   rapporteur.tokenId,
     name:      rapporteur.name,
     imageUrl:  rapporteur.imageUrl ?? "",
-    content:   `📋 Brief artistique pour « ${work.title} » — à l'attention de ${work.authorName ?? "l'Auteur"} :\n\n${brief}`,
+    content:   `📋 Brief artistique pour « ${work.title} »${editionNote} — à l'attention de ${work.authorName ?? "l'Auteur"} :\n\n${brief}`,
     isLlm:     true,
     timestamp: Date.now(),
     topic:     "art",
@@ -352,46 +394,110 @@ Rédige directement le brief. Pas de titre, pas d'introduction.`;
   return true;
 }
 
+function detectHtmlForm(work: ANAWork): boolean {
+  if (work.artForm?.startsWith("html-")) return true;
+  return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|html\s+génératif|art\s+génératif\s+html|javascript\s+visuel)\b/i.test(work.brief ?? "");
+}
+
+function cdnForForm(artForm?: string): string {
+  if (artForm === "html-p5js")    return `<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>`;
+  if (artForm === "html-threejs") return `<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>`;
+  return "";
+}
+
 async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   const author = personas.find(p => p.tokenId === work.authorTokenId);
   if (!author) return false;
 
-  const others     = personas.filter(p => p.tokenId !== author.tokenId);
+  const others      = personas.filter(p => p.tokenId !== author.tokenId);
   const revisionCtx = (work.revisionCount ?? 0) > 0
     ? `\n\nNote du Curateur sur la version précédente : ${work.validationNote}\nCorrige en tenant compte de cette remarque.`
     : "";
 
-  const artworkText = await groq(
-    [
-      { role: "system", content: buildSystemPrompt(author, others) },
-      {
-        role: "user",
-        content: `Tu es l'Auteur de l'œuvre « ${work.title} ».
+  const isHtml = detectHtmlForm(work);
+  let artworkText: string | null;
+
+  if (isHtml) {
+    // ── Generative / visual art ────────────────────────────────────────────────
+    const cdn = cdnForForm(work.artForm);
+    const authorTraits  = (author.traits ?? []).join(", ") || "—";
+    const authorArch    = author.archetype ?? "Normie";
+
+    artworkText = await groq(
+      [
+        { role: "system", content: buildSystemPrompt(author, others) },
+        {
+          role: "user",
+          content: `Tu es l'Auteur de l'œuvre « ${work.title} » (Normie #${author.tokenId}).
+Archétype : ${authorArch} | Traits : ${authorTraits}
 
 Brief du Rapporteur ${work.rapporteurName} :
 ${work.brief}${revisionCtx}
 
-Crée l'œuvre. Elle sera stockée immuablement on-chain sur Base dans WorkRegistry.
-Rédige directement le texte (poème, manifeste, ou prose selon le brief) — 150 à 250 mots.
+Génère une page HTML AUTONOME et COMPLÈTE. Elle sera stockée immuablement on-chain sur Base.
+CONTRAINTES TECHNIQUES :
+- Commence par <!DOCTYPE html> et <html lang="fr">
+- Inclus les styles dans <style> inline, le JS dans <script> inline
+- Utilise uniquement des CDN publics si nécessaire (${cdn ? `${cdn} est déjà recommandé` : "Canvas 2D natif ne nécessite pas de CDN"})
+- Pas de fetch/import — tout doit tourner offline
+- Corps visuellement immersif : background sombre, plein écran si possible
+
+DONNÉES ON-CHAIN À INJECTER (mets ces constantes JS au début de ton script) :
+const NORMIE_ID = ${author.tokenId};
+const NORMIE_ARCHETYPE = "${authorArch}";
+const NORMIE_TRAITS = ${JSON.stringify(author.traits ?? [])};
+const WORK_TITLE = ${JSON.stringify(work.title)};
+const CREATED_AT = ${Date.now()};
+
+Génère UNIQUEMENT le HTML complet, sans explications avant ou après.`,
+        },
+      ],
+      { maxTokens: 2500, temp: 0.95 }
+    );
+  } else {
+    // ── Text artwork ───────────────────────────────────────────────────────────
+    const formHint = work.artForm === "haiku"
+      ? "un haïku (3 lignes, 5-7-5 syllabes)"
+      : work.artForm === "sonnet"
+        ? "un sonnet (14 vers en 2 quatrains + 2 tercets)"
+        : work.artForm === "manifeste"
+          ? "un manifeste (voix forte, impératifs, vision radicale)"
+          : "un poème ou prose (150-250 mots)";
+
+    artworkText = await groq(
+      [
+        { role: "system", content: buildSystemPrompt(author, others) },
+        {
+          role: "user",
+          content: `Tu es l'Auteur de l'œuvre « ${work.title} ».
+
+Brief du Rapporteur ${work.rapporteurName} :
+${work.brief}${revisionCtx}
+
+Crée ${formHint}. Elle sera stockée immuablement on-chain sur Base dans WorkRegistry.
 Aucune introduction, aucun commentaire méta. Juste l'œuvre.`,
-      },
-    ],
-    { maxTokens: 450, temp: 0.95 }
-  );
+        },
+      ],
+      { maxTokens: work.artForm === "haiku" ? 80 : work.artForm === "sonnet" ? 350 : 450, temp: 0.95 }
+    );
+  }
 
   if (!artworkText) return false;
 
   await updateWork(work.id, { artworkText, artworkAt: Date.now() });
   await advanceState(work.id, "VALIDATING", `Œuvre créée par ${author.name}`);
 
-  // Post artwork to salon — the full text, as the author
-  const revPrefix = (work.revisionCount ?? 0) > 0 ? `🔄 Révision #${work.revisionCount} — ` : "";
+  const revPrefix   = (work.revisionCount ?? 0) > 0 ? `🔄 Révision #${work.revisionCount} — ` : "";
+  const salonPreview = isHtml
+    ? `[Œuvre visuelle HTML/JS — ${work.artForm ?? "génératif"}]`
+    : artworkText;
+
   await addMessage({
     salonId:   work.salonId ?? AGORA_SALON_ID,
     tokenId:   author.tokenId,
     name:      author.name,
     imageUrl:  author.imageUrl ?? "",
-    content:   `${revPrefix}✍️ « ${work.title} »\n\n${artworkText}`,
+    content:   `${revPrefix}✍️ « ${work.title} »\n\n${salonPreview}`,
     isLlm:     true,
     timestamp: Date.now(),
     topic:     "art",
@@ -418,8 +524,13 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
 
 Brief : ${work.brief?.slice(0, 300)}
 
-Œuvre soumise par ${work.authorName} :
-${work.artworkText}
+${work.artForm?.startsWith("html-")
+  ? `Œuvre visuelle (${work.artForm}) soumise par ${work.authorName} :
+[Code HTML/JS de ${(work.artworkText ?? "").length} caractères — évalue si le concept visuel répond au brief et si le code semble fonctionnel]
+Extrait : ${(work.artworkText ?? "").slice(0, 400)}…`
+  : `Œuvre soumise par ${work.authorName} :
+${work.artworkText}`
+}
 
 Valides-tu cette œuvre pour publication immuable on-chain ?${revisionCtx}
 

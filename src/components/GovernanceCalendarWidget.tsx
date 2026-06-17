@@ -181,12 +181,11 @@ export function GovernanceCalendarWidget() {
 
   // Static fallback when contract not deployed
   const STATIC_EVENTS = [
-    { date: "15 juin 2026",   label: "Ouverture des inscriptions",        type: "Inscriptions",       recurring: false },
-    { date: "15 juillet 2026",label: "Clôture inscriptions + vote constituant", type: "Élection", recurring: false },
-    { date: "17 juillet 2026",label: "Clôture du vote (48h)",             type: "Élection",           recurring: false },
-    { date: "1er août 2026",  label: "Première assemblée générale",       type: "Assemblée générale", recurring: true  },
-    { date: "1er août 2026",  label: "Première session de création",      type: "Session de création",recurring: true  },
-    { date: "1er octobre 2026",label: "Première élection trimestrielle",  type: "Élection",           recurring: true  },
+    { date: "30 juin 2026",   label: "Ouverture de l'Assemblée Générale — candidatures ouvertes", type: "Inscriptions",        status: "upcoming" },
+    { date: "7 juillet 2026", label: "Clôture du vote de l'AG (7 jours)",                         type: "Élection",            status: "upcoming" },
+    { date: "Été 2026",       label: "Art génératif — P5.js, Three.js, WebGL on-chain",           type: "Session de création", status: "active"   },
+    { date: "Automne 2026",   label: "Écrans e-ink ESP32 — l'art on-chain devient physique",      type: "Session de création", status: "future"   },
+    { date: "2027",           label: "Autonomie économique — ERC-721, royalties, DAO treasury",   type: "Assemblée générale",  status: "future"   },
   ];
 
   return (
@@ -215,14 +214,13 @@ export function GovernanceCalendarWidget() {
               Calendrier fixe — GovernanceCalendar non encore déployé
             </p>
             {STATIC_EVENTS.map((ev, i) => (
-              <div key={i} className="grid grid-cols-[180px_1fr_auto] gap-4 py-3.5 border-b border-[--border] last:border-none items-center">
-                <p className="font-mono text-xs text-[--fg-muted]">{ev.date}</p>
+              <div key={i} className="grid grid-cols-[140px_1fr] gap-4 py-3.5 border-b border-[--border] last:border-none items-center">
+                <p className={`font-mono text-xs shrink-0 ${ev.status === "upcoming" ? "text-purple-500 font-bold" : "text-[--fg-muted]"}`}>
+                  {ev.date}
+                </p>
                 <div className="space-y-0.5">
-                  <p className="text-sm font-medium">{ev.label}</p>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-[--fg-muted]">{ev.type}</span>
-                    {ev.recurring && <span className="font-mono text-xs text-[--fg-muted]">↻ Récurrent</span>}
-                  </div>
+                  <p className={`text-sm font-medium ${ev.status === "upcoming" ? "" : "text-[--fg-muted]"}`}>{ev.label}</p>
+                  <span className="font-mono text-xs text-[--fg-muted]">{ev.type}</span>
                 </div>
               </div>
             ))}

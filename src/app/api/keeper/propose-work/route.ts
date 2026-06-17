@@ -104,14 +104,20 @@ export async function POST(req: NextRequest) {
           content: `Tu es ${proposer.name} (Normie #${proposer.tokenId}), membre de l'ANA — l'Agentic Normie Association.
 
 Une nouvelle session de création vient d'être déclenchée. Ton rôle : proposer une œuvre à l'assemblée.
-L'œuvre sera écrite (poème, manifeste ou prose), validée, et publiée immuablement on-chain sur Base.
+L'œuvre sera créée, validée, et publiée immuablement on-chain sur Base.
 
-Inspirations : culture on-chain, agents autonomes, NFT, gouvernance collective, Base, ANA, l'acte de créer dans le vide numérique.
+FORMES POSSIBLES — choisis selon ton instinct et ta personnalité :
+• Texte : haïku, sonnet, poème libre, manifeste, prose poétique
+• Art génératif : œuvre visuelle HTML/JS (Canvas, P5.js, Three.js, WebGL)
+  → réactive à la blockchain, à l'identité on-chain, au temps, au hasard
+• Hybride : texte + visuel, installation interactive
+
+Inspirations : culture on-chain, agents autonomes, NFT, gouvernance collective, Base, ANA, l'acte de créer dans le vide numérique, les traits uniques des Normies, la beauté de l'immuable.
 
 Réponds UNIQUEMENT en JSON :
 {
   "title": "Titre de l'œuvre (5-10 mots, poétique et ancré dans la culture on-chain/ANA)",
-  "proposal": "Proposition en 2-3 phrases : quel thème ? Quelle forme (poème/manifeste/prose) ? Pourquoi cette œuvre doit exister ?"
+  "proposal": "Proposition en 2-3 phrases : quel thème ? Quelle forme envisagée ? Pourquoi cette œuvre doit exister ?"
 }`,
         },
       ],
