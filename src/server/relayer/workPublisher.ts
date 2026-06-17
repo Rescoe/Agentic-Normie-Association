@@ -82,13 +82,21 @@ export async function publishWork(
     console.log(`[workPublisher] tx submitted: ${hash}`);
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
-    // Derive workId from WorkPublished event (topics[1] = indexed workId)
+    // Derive workId from WorkPublished event — filter by contract address first,
+    // then decode via ABI (robust: ignores unrelated events from other contracts)
     let onChainWorkId: number | undefined;
     for (const log of receipt.logs) {
-      if (log.topics.length >= 2) {
-        onChainWorkId = Number(BigInt(log.topics[1] ?? "0x0"));
+      if (log.address.toLowerCase() !== registryAddr.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({
+          abi:       WORK_REGISTRY_ABI,
+          eventName: "WorkPublished",
+          data:      log.data   as `0x${string}`,
+          topics:    log.topics as [`0x${string}`, ...`0x${string}`[]],
+        });
+        onChainWorkId = Number((decoded.args as { workId: bigint }).workId);
         break;
-      }
+      } catch { /* not the WorkPublished event — skip */ }
     }
 
     console.log(`[workPublisher] confirmed — workId=${onChainWorkId} tx=${hash}`);
