@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useReadContract } from "wagmi";
 import Image from "next/image";
 import Link from "next/link";
@@ -40,14 +40,16 @@ const STATE_COLOR: Record<string, string> = {
 
 // ─── InProgressWorkCard ───────────────────────────────────────────────────────
 
-function InProgressWorkCard({ work }: { work: ANAWork }) {
+type GetName = (tokenId: number | undefined, fallback?: string | null) => string;
+
+function InProgressWorkCard({ work, getName }: { work: ANAWork; getName: GetName }) {
   const label    = STATE_LABEL[work.state]  ?? work.state;
   const colorCls = STATE_COLOR[work.state]  ?? "text-[--fg-muted] border-[--border]";
   const lastStep = work.stateHistory[work.stateHistory.length - 1];
   const trio = [
-    { label: "Rapporteur", tid: work.rapporteurTokenId, name: work.rapporteurName },
-    { label: "Auteur",     tid: work.authorTokenId,     name: work.authorName },
-    { label: "Curateur",   tid: work.curatorTokenId,    name: work.curatorName },
+    { label: "Rapporteur", tid: work.rapporteurTokenId, name: getName(work.rapporteurTokenId, work.rapporteurName) },
+    { label: "Auteur",     tid: work.authorTokenId,     name: getName(work.authorTokenId,     work.authorName) },
+    { label: "Curateur",   tid: work.curatorTokenId,    name: getName(work.curatorTokenId,    work.curatorName) },
   ].filter(r => r.tid != null);
 
   const STEPS: { state: WorkState; short: string }[] = [
@@ -69,7 +71,7 @@ function InProgressWorkCard({ work }: { work: ANAWork }) {
         <div className="flex-1">
           <p className="font-bold text-sm leading-snug">{work.title}</p>
           <p className="font-mono text-xs text-[--fg-muted] mt-0.5">
-            par {work.proposedByName} · {new Date(work.proposedAt).toLocaleDateString("fr-FR")}
+            par {getName(work.proposedBy, work.proposedByName)} · {new Date(work.proposedAt).toLocaleDateString("fr-FR")}
           </p>
         </div>
         <span className={`font-mono text-[10px] border px-2 py-0.5 shrink-0 ${colorCls}`}>
@@ -170,15 +172,15 @@ function InProgressWorkCard({ work }: { work: ANAWork }) {
 
 type WorkTab = "none" | "oeuvre" | "certificat";
 
-function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
+function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: number; getName: GetName }) {
   const [tab, setTab] = useState<WorkTab>("none");
   const [poemState, setPoemState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [poemText, setPoemText]   = useState<string | null>(null);
   const date = work.publishedAt ? new Date(work.publishedAt) : null;
   const trio = [
-    { label: "Auteur",      tid: work.authorTokenId,      name: work.authorName },
-    { label: "Curateur",    tid: work.curatorTokenId,     name: work.curatorName },
-    { label: "Rapporteur",  tid: work.rapporteurTokenId,  name: work.rapporteurName },
+    { label: "Auteur",      tid: work.authorTokenId,      name: getName(work.authorTokenId,     work.authorName) },
+    { label: "Curateur",    tid: work.curatorTokenId,     name: getName(work.curatorTokenId,    work.curatorName) },
+    { label: "Rapporteur",  tid: work.rapporteurTokenId,  name: getName(work.rapporteurTokenId, work.rapporteurName) },
   ];
 
   const certUrl = `/api/works/html/${onChainId}`;
@@ -353,7 +355,7 @@ function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
                 <div className="w-8 h-8 mx-auto bg-[--border]" />
               )}
               <p className="font-mono text-[10px] text-[--fg-muted]">{label}</p>
-              <p className="font-mono text-[10px]">{name ?? (tid != null ? `#${tid}` : "—")}</p>
+              <p className="font-mono text-[10px]">{name}</p>
             </div>
           ))}
         </div>
@@ -496,7 +498,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
 // ─── WorkList (published on-chain) ───────────────────────────────────────────
 
-function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] }) {
+function WorkList({ count, neonWorks, getName }: { count: number; neonWorks: ANAWork[]; getName: GetName }) {
   const neonMap = new Map(
     neonWorks
       .filter(w => w.onChainWorkId != null)
@@ -506,11 +508,10 @@ function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] })
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
       {Array.from({ length: count }, (_, i) => {
-        // WorkRegistry stores works 0-indexed (first work = ID 0)
         const id       = i;
         const neonWork = neonMap.get(id);
         return neonWork
-          ? <WorkCard key={id} work={neonWork} onChainId={id} />
+          ? <WorkCard key={id} work={neonWork} onChainId={id} getName={getName} />
           : <OnChainWorkCard key={id} workId={id} />;
       })}
     </div>
@@ -520,7 +521,8 @@ function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] })
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function WorksClient() {
-  const [allWorks, setAllWorks] = useState<ANAWork[]>([]);
+  const [allWorks,  setAllWorks]  = useState<ANAWork[]>([]);
+  const [nameMap,   setNameMap]   = useState<Map<number, string>>(new Map());
 
   const { data: countRaw, isLoading } = useReadContract({
     address:      WR_ADDR,
@@ -537,6 +539,42 @@ export function WorksClient() {
       .then((works: ANAWork[]) => setAllWorks(works))
       .catch(() => null);
   }, []);
+
+  // Batch-resolve real Normie names (stored names may be stale "Normie #XXXX")
+  const allTokenIds = useMemo(() => {
+    const ids = new Set<number>();
+    allWorks.forEach(w => {
+      if (w.proposedBy)        ids.add(w.proposedBy);
+      if (w.authorTokenId)     ids.add(w.authorTokenId);
+      if (w.curatorTokenId)    ids.add(w.curatorTokenId);
+      if (w.rapporteurTokenId) ids.add(w.rapporteurTokenId);
+    });
+    return [...ids];
+  }, [allWorks]);
+
+  useEffect(() => {
+    const toFetch = allTokenIds.filter(id => !nameMap.has(id));
+    if (!toFetch.length) return;
+    fetch(`/api/normies/persona?tokenIds=${toFetch.join(",")}`)
+      .then(r => r.json())
+      .then(d => {
+        const resolved = new Map<number, string>();
+        (d.personas ?? []).forEach((p: { tokenId: number; name: string }) => {
+          if (p.name && !p.name.startsWith("Normie #")) resolved.set(p.tokenId, p.name);
+        });
+        if (resolved.size) setNameMap(prev => new Map([...prev, ...resolved]));
+      })
+      .catch(() => null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTokenIds]);
+
+  const getName = useCallback<GetName>((tokenId, fallback) => {
+    if (!tokenId) return fallback && !fallback.startsWith("Normie #") ? fallback : "—";
+    const resolved = nameMap.get(tokenId);
+    if (resolved) return resolved;
+    if (fallback && !fallback.startsWith("Normie #")) return fallback;
+    return `#${tokenId}`;
+  }, [nameMap]);
 
   const publishedWorks = allWorks.filter(w => w.state === "PUBLISHED");
   const activeWorks    = allWorks.filter(w => ACTIVE_STATES.includes(w.state));
@@ -605,7 +643,7 @@ export function WorksClient() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {activeWorks.map(w => (
-              <InProgressWorkCard key={w.id} work={w} />
+              <InProgressWorkCard key={w.id} work={w} getName={getName} />
             ))}
           </div>
         </section>
@@ -630,7 +668,7 @@ export function WorksClient() {
               + Nouvelle œuvre
             </Link>
           </div>
-          <WorkList count={count} neonWorks={publishedWorks} />
+          <WorkList count={count} neonWorks={publishedWorks} getName={getName} />
         </section>
       )}
 

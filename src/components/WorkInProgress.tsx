@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 
@@ -57,8 +57,9 @@ const STATE_STEPS: WorkState[] = [
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function WorkInProgress() {
-  const [work, setWork] = useState<ActiveWork | null>(null);
+  const [work,    setWork]    = useState<ActiveWork | null>(null);
   const [loading, setLoading] = useState(true);
+  const [nameMap, setNameMap] = useState<Map<number, string>>(new Map());
 
   useEffect(() => {
     let mounted = true;
@@ -66,7 +67,6 @@ export function WorkInProgress() {
       try {
         const res  = await fetch("/api/works");
         const all  = await res.json() as ActiveWork[];
-        // Find the most advanced active work
         const active = all
           .filter(w => ACTIVE_STATES.includes(w.state))
           .sort((a, b) => STATE_STEPS.indexOf(b.state) - STATE_STEPS.indexOf(a.state));
@@ -78,6 +78,32 @@ export function WorkInProgress() {
     const id = setInterval(load, 30_000);
     return () => { mounted = false; clearInterval(id); };
   }, []);
+
+  // Batch-resolve real Normie names when work loads
+  useEffect(() => {
+    if (!work) return;
+    const ids = [work.proposedBy, work.authorTokenId, work.rapporteurTokenId, work.curatorTokenId]
+      .filter((id): id is number => !!id && !nameMap.has(id));
+    if (!ids.length) return;
+    fetch(`/api/normies/persona?tokenIds=${ids.join(",")}`)
+      .then(r => r.json())
+      .then(d => {
+        const resolved = new Map<number, string>();
+        (d.personas ?? []).forEach((p: { tokenId: number; name: string }) => {
+          if (p.name && !p.name.startsWith("Normie #")) resolved.set(p.tokenId, p.name);
+        });
+        if (resolved.size) setNameMap(prev => new Map([...prev, ...resolved]));
+      })
+      .catch(() => null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [work]);
+
+  const getName = useCallback((id: number, fallback?: string) => {
+    const resolved = nameMap.get(id);
+    if (resolved) return resolved;
+    if (fallback && !fallback.startsWith("Normie #")) return fallback;
+    return `#${id}`;
+  }, [nameMap]);
 
   if (loading) return null;
   if (!work) return null;
@@ -145,15 +171,15 @@ export function WorkInProgress() {
 
             {/* People */}
             <div className="flex flex-wrap gap-4">
-              <RolePill label="Proposant" tokenId={work.proposedBy} name={work.proposedByName} />
+              <RolePill label="Proposant"  tokenId={work.proposedBy}        name={getName(work.proposedBy, work.proposedByName)} />
               {work.rapporteurTokenId && (
-                <RolePill label="Rapporteur" tokenId={work.rapporteurTokenId} name={work.rapporteurName ?? ""} />
+                <RolePill label="Rapporteur" tokenId={work.rapporteurTokenId} name={getName(work.rapporteurTokenId, work.rapporteurName)} />
               )}
               {work.authorTokenId && (
-                <RolePill label="Auteur" tokenId={work.authorTokenId} name={work.authorName ?? ""} />
+                <RolePill label="Auteur"     tokenId={work.authorTokenId}     name={getName(work.authorTokenId, work.authorName)} />
               )}
               {work.curatorTokenId && (
-                <RolePill label="Curateur" tokenId={work.curatorTokenId} name={work.curatorName ?? ""} />
+                <RolePill label="Curateur"   tokenId={work.curatorTokenId}    name={getName(work.curatorTokenId, work.curatorName)} />
               )}
             </div>
 
@@ -217,7 +243,7 @@ function RolePill({ label, tokenId, name }: { label: string; tokenId: number; na
         <p className="font-mono text-[9px] text-[--fg-muted] uppercase tracking-widest leading-none">
           {label}
         </p>
-        <p className="font-mono text-xs text-[--fg] leading-tight">{name || `#${tokenId}`}</p>
+        <p className="font-mono text-xs text-[--fg] leading-tight">{name}</p>
       </div>
     </div>
   );
