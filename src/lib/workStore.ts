@@ -340,18 +340,18 @@ export function buildWorkHtml(work: ANAWork): string {
   }).join("\n");
 
   const stateLog = (work.stateHistory ?? []).map(h => {
-    const d = new Date(h.at).toLocaleDateString("fr-FR", {
+    const d = new Date(h.at).toLocaleDateString("en-GB", {
       day: "2-digit", month: "short", year: "numeric",
       hour: "2-digit", minute: "2-digit",
     });
     return `<div class="entry">▸ <strong>${h.state}</strong> — ${d}${h.note ? ` — ${escapeHtml(h.note)}` : ""}</div>`;
   }).join("\n");
 
-  const proposedDate = new Date(work.proposedAt).toLocaleDateString("fr-FR", {
+  const proposedDate = new Date(work.proposedAt).toLocaleDateString("en-GB", {
     day: "numeric", month: "long", year: "numeric",
   });
   const publishedDate = work.publishedAt
-    ? new Date(work.publishedAt).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })
+    ? new Date(work.publishedAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : "—";
 
   const artwork  = escapeHtml(work.artworkText ?? "");
@@ -359,11 +359,15 @@ export function buildWorkHtml(work: ANAWork): string {
   const proposal = escapeHtml(work.proposal ?? "");
 
   const burnNote = work.isBurnMemorial && work.burnedTokenId != null
-    ? `<p class="meta" style="color:var(--n);margin-top:.5rem">⬛ Œuvre mémoriale — Normie #${work.burnedTokenId} brûlé</p>`
+    ? `<p class="meta" style="color:var(--n);margin-top:.5rem">⬛ Memorial work — Normie #${work.burnedTokenId} burned</p>`
+    : "";
+
+  const editionNote = work.editionSupply && work.editionPrice
+    ? `<p class="meta" style="color:#a78bfa;margin-top:.3rem">◈ ${work.editionSupply} ERC-721 editions · ${work.editionPrice} ETH each</p>`
     : "";
 
   return `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -400,57 +404,59 @@ footer{border-top:1px solid var(--b);padding-top:1rem;margin-top:2rem}
 <header>
   <p class="sub">ANA — Agentic Normie Association · Base</p>
   <h1>${escapeHtml(work.title)}</h1>
-  <p class="meta">Proposée le ${proposedDate} par ${escapeHtml(work.proposedByName)} · Publiée le ${publishedDate}</p>
+  <p class="meta">Proposed on ${proposedDate} by ${escapeHtml(work.proposedByName)} · Published on ${publishedDate}</p>
   ${burnNote}
+  ${editionNote}
 </header>
 
 <section>
-<p class="lbl">Proposition initiale</p>
+<p class="lbl">Initial Proposal</p>
 <div class="block">${proposal}</div>
 </section>
 
 <section>
-<p class="lbl">Vote de l'assemblée — ${work.voteResult === "passed" ? "✓ Approuvé" : "✗ Rejeté"} · ${yesPct}% oui</p>
+<p class="lbl">Assembly Vote — ${work.voteResult === "passed" ? "✓ Approved" : "✗ Rejected"} · ${yesPct}% yes</p>
 <div class="vwrap">
 <canvas id="vc" width="320" height="170"></canvas>
 <div class="vleg">
-  <div class="y">✓ Oui&nbsp;: ${yes}</div>
-  <div class="n">✗ Non&nbsp;: ${no}</div>
-  <div class="a">– Abstention&nbsp;: ${abs}</div>
-  <div style="margin-top:.5rem;color:var(--b);color:#475569">${total} membre${total > 1 ? "s" : ""} ANA</div>
+  <div class="y">✓ Yes&nbsp;: ${yes}</div>
+  <div class="n">✗ No&nbsp;: ${no}</div>
+  <div class="a">– Abstain&nbsp;: ${abs}</div>
+  <div style="margin-top:.5rem;color:#475569">${total} ANA member${total > 1 ? "s" : ""}</div>
 </div>
 </div>
 <table class="vtab">${voteRows}</table>
 </section>
 
 <section>
-<p class="lbl">Brief artistique — ${escapeHtml(work.rapporteurName ?? "Rapporteur")}</p>
+<p class="lbl">Creative Brief — ${escapeHtml(work.rapporteurName ?? "Rapporteur")}</p>
 <div class="block">${brief}</div>
 </section>
 
 <section>
-<p class="lbl">Œuvre — ${escapeHtml(work.authorName ?? "Auteur")}</p>
+<p class="lbl">Artwork — ${escapeHtml(work.authorName ?? "Author")}</p>
 <div class="block">${artwork}</div>
 </section>
 
 <section>
-<p class="lbl">Équipe de création</p>
+<p class="lbl">Creation Team</p>
 <div class="credits">
 <div class="card"><div class="role">Rapporteur</div><div class="name">${escapeHtml(work.rapporteurName ?? "—")}</div><div class="cid">#${work.rapporteurTokenId ?? "?"}</div></div>
-<div class="card"><div class="role">Auteur</div><div class="name">${escapeHtml(work.authorName ?? "—")}</div><div class="cid">#${work.authorTokenId ?? "?"}</div></div>
-<div class="card"><div class="role">Curateur</div><div class="name">${escapeHtml(work.curatorName ?? "—")}</div><div class="cid">#${work.curatorTokenId ?? "?"}</div></div>
+<div class="card"><div class="role">Author</div><div class="name">${escapeHtml(work.authorName ?? "—")}</div><div class="cid">#${work.authorTokenId ?? "?"}</div></div>
+<div class="card"><div class="role">Curator</div><div class="name">${escapeHtml(work.curatorName ?? "—")}</div><div class="cid">#${work.curatorTokenId ?? "?"}</div></div>
 </div>
 </section>
 
 <section>
-<p class="lbl">Trace du processus</p>
+<p class="lbl">Process Log</p>
 <div class="log">${stateLog}</div>
 </section>
 
 <footer>
-<p class="lbl">Enregistrement on-chain</p>
+<p class="lbl">On-chain Record</p>
 ${work.txHash ? `<p class="tx">Base · WorkRegistry · tx: ${work.txHash}</p>` : ""}
-<p class="meta" style="margin-top:.5rem">Ce document est son propre certificat d'authenticité. Stocké immuablement sur Base. Aucun IPFS.</p>
+<p class="meta" style="margin-top:.5rem">This document is its own certificate of authenticity. Stored immutably on Base. No IPFS.</p>
+<p class="meta" style="margin-top:.3rem">ANA operates under the principles of a French loi 1901 cultural association — governed collectively, with no single point of control.</p>
 </footer>
 
 <script>

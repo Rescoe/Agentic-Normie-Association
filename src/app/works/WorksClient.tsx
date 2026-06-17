@@ -170,159 +170,141 @@ function InProgressWorkCard({ work, getName }: { work: ANAWork; getName: GetName
 
 // ─── WorkCard (Neon data — PUBLISHED) ────────────────────────────────────────
 
-type WorkTab = "none" | "oeuvre" | "certificat";
-
-function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: number; getName: GetName }) {
-  const [tab, setTab] = useState<WorkTab>("none");
-  const [poemState, setPoemState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [poemText, setPoemText]   = useState<string | null>(null);
-  const date = work.publishedAt ? new Date(work.publishedAt) : null;
-  const trio = [
-    { label: "Auteur",      tid: work.authorTokenId,      name: getName(work.authorTokenId,     work.authorName) },
-    { label: "Curateur",    tid: work.curatorTokenId,     name: getName(work.curatorTokenId,    work.curatorName) },
-    { label: "Rapporteur",  tid: work.rapporteurTokenId,  name: getName(work.rapporteurTokenId, work.rapporteurName) },
-  ];
-
-  const certUrl = `/api/works/html/${onChainId}`;
-
-  // Fetch + parse the HTML certificate on-chain to extract the poem text
-  useEffect(() => {
-    if (tab !== "oeuvre" || poemState !== "idle") return;
-    setPoemState("loading");
-    fetch(certUrl)
-      .then(r => r.text())
-      .then(html => {
-        const parser   = new DOMParser();
-        const doc      = parser.parseFromString(html, "text/html");
-        const sections = Array.from(doc.querySelectorAll("section"));
-        for (const section of sections) {
-          const lbl = section.querySelector(".lbl");
-          if (lbl?.textContent?.startsWith("Œuvre")) {
-            const block = section.querySelector(".block");
-            const text  = block?.textContent?.trim() ?? null;
-            setPoemText(text);
-            setPoemState("done");
-            return;
-          }
-        }
-        setPoemState("done"); // section absent = œuvre interactive (JS)
-      })
-      .catch(() => setPoemState("error"));
-  }, [tab, poemState, certUrl]);
-
+function GovernanceReport({ work }: { work: ANAWork }) {
+  const yes = work.yesCount ?? 0;
+  const no  = work.noCount  ?? 0;
+  const abs = work.absCount ?? 0;
   return (
-    <div className="border border-[--border] bg-[--bg] flex flex-col">
-      {/* Preview zone */}
-      {tab === "none" ? (
-        /* Thumbnail — click to open */
-        <button
-          onClick={() => setTab("oeuvre")}
-          className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center cursor-pointer w-full"
-        >
-          <div className="flex gap-3 items-center">
-            {trio.map(({ label, tid }) =>
-              tid != null ? (
-                <div key={label} className="relative w-12 h-12 overflow-hidden">
-                  <Image src={getNormieImageUrl(tid)} alt={`#${tid}`} fill
-                    className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
-                </div>
-              ) : null
-            )}
-          </div>
-          <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
-              Voir l'œuvre ▶
-            </span>
-          </div>
-        </button>
-      ) : (
-        /* Viewer avec onglets */
-        <div className="flex flex-col">
-          {/* Tab bar */}
-          <div className="flex items-center border-b border-[--border] bg-[--bg-card]">
-            <button
-              onClick={() => setTab("oeuvre")}
-              className={`font-mono text-xs px-4 py-2 border-r border-[--border] transition-colors ${
-                tab === "oeuvre" ? "bg-[--bg] text-[--fg]" : "text-[--fg-muted] hover:text-[--fg]"
-              }`}
-            >
-              Œuvre
-            </button>
-            <button
-              onClick={() => setTab("certificat")}
-              className={`font-mono text-xs px-4 py-2 border-r border-[--border] transition-colors ${
-                tab === "certificat" ? "bg-[--bg] text-[--fg]" : "text-[--fg-muted] hover:text-[--fg]"
-              }`}
-            >
-              Certificat
-            </button>
-            <div className="flex-1" />
-            {tab === "certificat" && (
-              <a
-                href={certUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] px-3 py-2 border-l border-[--border] transition-colors"
-                title="Ouvrir en pleine page"
-              >
-                ⤢ pleine page
-              </a>
-            )}
-            <button
-              onClick={() => setTab("none")}
-              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] px-3 py-2 border-l border-[--border] transition-colors"
-            >
-              ✕
-            </button>
-          </div>
+    <div className="border-t border-[--border] bg-[--bg-card] p-4 space-y-4">
+      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">Governance report</p>
 
-          {/* Onglet Œuvre — texte extrait du certificat on-chain */}
-          {tab === "oeuvre" && (
-            <div className="bg-[--bg] px-5 py-6 min-h-[120px] max-h-[420px] overflow-y-auto flex items-start">
-              {poemState === "loading" && (
-                <p className="font-mono text-xs text-[--fg-muted] italic animate-pulse">
-                  Lecture on-chain…
-                </p>
-              )}
-              {poemState === "done" && poemText && (
-                <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg] w-full">
-                  {poemText}
-                </pre>
-              )}
-              {poemState === "done" && !poemText && (
-                <p className="font-mono text-xs text-[--fg-muted] italic">
-                  Œuvre interactive — ouvrez le certificat pour exécuter l'œuvre.
-                </p>
-              )}
-              {poemState === "error" && (
-                <p className="font-mono text-xs text-[--fg-muted] italic">
-                  Erreur de lecture — ouvrez le certificat pour voir l'œuvre.
-                </p>
-              )}
-            </div>
-          )}
+      <div className="space-y-1">
+        <p className="font-mono text-xs font-semibold">Assembly vote</p>
+        <p className="font-mono text-xs">
+          <span className="text-green-500">✓ {yes} yes</span>
+          {" · "}
+          <span className="text-red-400">✗ {no} no</span>
+          {" · "}
+          <span className="text-[--fg-muted]">– {abs} abstain</span>
+        </p>
+        {(work.votes ?? []).map(v => (
+          <p key={v.tokenId} className="font-mono text-[10px] text-[--fg-muted] leading-relaxed pl-2 border-l border-[--border]">
+            {v.vote === "yes" ? "✓" : v.vote === "no" ? "✗" : "–"}{" "}
+            <span className="text-[--fg]">{v.name}</span> — {v.reason}
+          </p>
+        ))}
+      </div>
 
-          {/* Onglet Certificat — exécutable HTML complet */}
-          {tab === "certificat" && (
-            <div className="relative aspect-video bg-black overflow-hidden">
-              <iframe
-                src={certUrl}
-                className="w-full h-full border-0"
-                sandbox="allow-scripts"
-                title={work.title}
-              />
-            </div>
-          )}
+      {work.brief && (
+        <div className="space-y-1">
+          <p className="font-mono text-xs font-semibold">Creative brief</p>
+          <p className="font-mono text-[10px] text-[--fg-muted] leading-relaxed whitespace-pre-wrap">
+            {work.brief}
+          </p>
         </div>
       )}
 
-      {/* Metadata */}
+      <div className="space-y-0.5">
+        <p className="font-mono text-xs font-semibold">Process log</p>
+        {(work.stateHistory ?? []).map((h, i) => (
+          <p key={i} className="font-mono text-[10px] text-[--fg-muted]">
+            ▸ <span className="text-[--fg]">{h.state}</span>{" "}
+            — {new Date(h.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+            {h.note ? ` — ${h.note}` : ""}
+          </p>
+        ))}
+      </div>
+
+      {work.txHash && (
+        <p className="font-mono text-[10px] text-[--fg-muted] break-all">
+          Base · WorkRegistry · tx:{" "}
+          <a
+            href={`https://basescan.org/tx/${work.txHash}`}
+            target="_blank" rel="noopener noreferrer"
+            className="hover:text-[--fg] transition-colors"
+          >
+            {work.txHash}
+          </a>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: number; getName: GetName }) {
+  const [showReport, setShowReport] = useState(false);
+
+  const date = work.publishedAt ? new Date(work.publishedAt) : null;
+  const trio = [
+    { label: "Author",     tid: work.authorTokenId,      name: getName(work.authorTokenId,     work.authorName) },
+    { label: "Curator",    tid: work.curatorTokenId,     name: getName(work.curatorTokenId,    work.curatorName) },
+    { label: "Rapporteur", tid: work.rapporteurTokenId,  name: getName(work.rapporteurTokenId, work.rapporteurName) },
+  ];
+
+  const certUrl   = `/api/works/html/${onChainId}`;
+  const isHtmlWork = work.artForm?.startsWith("html-") ||
+    !!(work.artworkText && /^<!DOCTYPE|^<html/i.test(work.artworkText.trimStart()));
+
+  return (
+    <div className="border border-[--border] bg-[--bg] flex flex-col">
+
+      {/* ── Artwork zone — always shown first ── */}
+      {isHtmlWork ? (
+        /* HTML/generative — iframe runs immediately */
+        <div className="relative aspect-video bg-black overflow-hidden">
+          <iframe
+            src={certUrl}
+            className="w-full h-full border-0"
+            sandbox="allow-scripts"
+            title={work.title}
+          />
+          <a
+            href={certUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="absolute bottom-2 right-2 bg-black/60 text-white font-mono text-[10px] px-2 py-1 hover:bg-black/80 transition-colors"
+          >
+            ⤢ fullscreen
+          </a>
+        </div>
+      ) : work.artworkText ? (
+        /* Text artwork — rendered inline */
+        <div className="bg-[--bg-card] px-5 py-6 min-h-[140px] max-h-[380px] overflow-y-auto">
+          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
+            {work.artworkText}
+          </pre>
+        </div>
+      ) : (
+        /* Fallback — no artworkText stored (very old works) */
+        <a
+          href={certUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center w-full"
+        >
+          <div className="flex gap-3 items-center">
+            {trio.map(({ label, tid }) => tid != null ? (
+              <div key={label} className="relative w-12 h-12 overflow-hidden">
+                <Image src={getNormieImageUrl(tid!)} alt={`#${tid}`} fill
+                  className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
+              </div>
+            ) : null)}
+          </div>
+          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100">
+            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
+              Open ↗
+            </span>
+          </div>
+        </a>
+      )}
+
+      {/* ── Metadata ── */}
       <div className="p-4 space-y-3 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div>
             <p className="font-bold text-sm">{work.title}</p>
             <p className="font-mono text-xs text-[--fg-muted]">
-              {date?.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) ?? "—"}
+              {date?.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) ?? "—"}
             </p>
           </div>
           <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">
@@ -330,26 +312,14 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           </span>
         </div>
 
-        {work.artworkText && (
-          <p className="text-xs text-[--fg-muted] leading-relaxed line-clamp-3 italic border-l-2 border-[--border] pl-2">
-            {work.artworkText.slice(0, 200)}{work.artworkText.length > 200 ? "…" : ""}
-          </p>
-        )}
-
         {/* Trio */}
         <div className="grid grid-cols-3 gap-2 text-center">
           {trio.map(({ label, tid, name }) => (
             <div key={label} className="space-y-1">
               {tid != null ? (
                 <div className="relative w-8 h-8 mx-auto overflow-hidden">
-                  <Image
-                    src={getNormieImageUrl(tid)}
-                    alt={`#${tid}`}
-                    fill
-                    className="object-contain"
-                    style={{ imageRendering: "pixelated" }}
-                    unoptimized
-                  />
+                  <Image src={getNormieImageUrl(tid!)} alt={`#${tid}`} fill
+                    className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
                 </div>
               ) : (
                 <div className="w-8 h-8 mx-auto bg-[--border]" />
@@ -360,8 +330,32 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           ))}
         </div>
 
+        {/* Edition info */}
+        {work.editionSupply && work.editionPrice && (
+          <p className="font-mono text-[10px] text-purple-500 border border-purple-500/20 px-2 py-1">
+            {work.editionSupply} editions · {work.editionPrice} ETH
+          </p>
+        )}
+
+        {/* Footer actions */}
         <div className="flex items-center justify-between pt-1 border-t border-[--border]">
-          <p className="font-mono text-xs text-[--fg-muted]">✓ on-chain · exécutable</p>
+          {isHtmlWork ? (
+            <button
+              onClick={() => setShowReport(r => !r)}
+              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+            >
+              {showReport ? "Hide report ↑" : "Governance report ↓"}
+            </button>
+          ) : (
+            <a
+              href={certUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+            >
+              View certificate ↗
+            </a>
+          )}
           {work.txHash && (
             <a
               href={`https://basescan.org/tx/${work.txHash}`}
@@ -374,6 +368,9 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           )}
         </div>
       </div>
+
+      {/* Inline governance report (HTML works only) */}
+      {showReport && isHtmlWork && <GovernanceReport work={work} />}
     </div>
   );
 }

@@ -88,6 +88,45 @@ function Hero() {
   );
 }
 
+// ─── AG Calendar strip ───────────────────────────────────────────────────────
+
+function AGCalendarStrip() {
+  return (
+    <section className="border-t border-b border-[--border] bg-[--bg-card] py-5 px-6 overflow-x-auto">
+      <div className="max-w-6xl mx-auto flex items-center gap-6 min-w-max sm:min-w-0 sm:flex-wrap">
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] shrink-0">
+          Next AG
+        </p>
+
+        {/* Timeline entries */}
+        <div className="flex items-stretch gap-0">
+          {[
+            { date: "30 June 2026", label: "General Assembly open", color: "border-purple-500 text-purple-500", dot: "bg-purple-500" },
+            { date: "7 July 2026",  label: "Vote closes (7 days)", color: "border-[--fg-muted] text-[--fg-muted]",   dot: "bg-[--fg-muted]" },
+          ].map((ev, i) => (
+            <div key={i} className="flex items-center">
+              {i > 0 && <div className="w-8 h-px bg-[--border] shrink-0" />}
+              <div className={`border px-3 py-2 ${ev.color} shrink-0`}>
+                <p className="font-mono text-[10px] uppercase tracking-widest opacity-70">{ev.date}</p>
+                <p className="font-mono text-xs font-semibold mt-0.5">{ev.label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="hidden sm:block flex-1" />
+
+        <a
+          href="/roadmap"
+          className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors whitespace-nowrap shrink-0"
+        >
+          Full roadmap →
+        </a>
+      </div>
+    </section>
+  );
+}
+
 // ─── 3 sections d'entrée ─────────────────────────────────────────────────────
 
 const ENTRY_CARDS = [
@@ -308,6 +347,7 @@ export default function Home() {
       </div>
       <main>
         <Hero />
+        <AGCalendarStrip />
         <EntryCards />
         <Observatory />
         <CTA />
