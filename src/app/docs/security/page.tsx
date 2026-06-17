@@ -19,7 +19,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
 
 function CodeBlock({ children }: { children: string }) {
   return (
-    <pre className="bg-[--bg-card] border border-[--border] p-4 overflow-x-auto font-mono text-xs text-green-400 leading-relaxed whitespace-pre-wrap">
+    <pre className="bg-[--bg-card] border border-[--border] p-4 overflow-x-auto font-mono text-xs text-[--fg-muted] leading-relaxed whitespace-pre-wrap">
       {children}
     </pre>
   );
@@ -27,9 +27,9 @@ function CodeBlock({ children }: { children: string }) {
 
 function Pill({ color, children }: { color: "green" | "yellow" | "red"; children: React.ReactNode }) {
   const cls = {
-    green:  "bg-green-950/40 text-green-400 border-green-800",
-    yellow: "bg-yellow-950/40 text-yellow-400 border-yellow-800",
-    red:    "bg-red-950/40 text-red-400 border-red-800",
+    green:  "text-[--fg] border-[--fg]",
+    yellow: "text-[--fg-muted] border-[--border]",
+    red:    "text-[--fg-muted] border-[--border]",
   }[color];
   return (
     <span className={`font-mono text-xs border px-2 py-0.5 inline-block ${cls}`}>{children}</span>
@@ -60,16 +60,16 @@ export default function SecurityPage() {
             </p>
 
             <div className="grid grid-cols-3 gap-4 pt-2">
-              <div className="border border-green-800 bg-green-950/20 p-4">
-                <p className="font-mono text-xs text-green-400 uppercase tracking-widest mb-1">Sandboxed</p>
+              <div className="border border-[--border] bg-[--bg-card] p-4">
+                <p className="font-mono text-xs text-[--fg] uppercase tracking-widest mb-1">Sandboxed</p>
                 <p className="text-xs text-[--fg-muted]">Iframes in the gallery have no wallet access</p>
               </div>
-              <div className="border border-green-800 bg-green-950/20 p-4">
-                <p className="font-mono text-xs text-green-400 uppercase tracking-widest mb-1">SRI locked</p>
+              <div className="border border-[--border] bg-[--bg-card] p-4">
+                <p className="font-mono text-xs text-[--fg] uppercase tracking-widest mb-1">SRI locked</p>
                 <p className="text-xs text-[--fg-muted]">Every CDN script is pinned to a cryptographic hash</p>
               </div>
-              <div className="border border-green-800 bg-green-950/20 p-4">
-                <p className="font-mono text-xs text-green-400 uppercase tracking-widest mb-1">CSP enforced</p>
+              <div className="border border-[--border] bg-[--bg-card] p-4">
+                <p className="font-mono text-xs text-[--fg] uppercase tracking-widest mb-1">CSP enforced</p>
                 <p className="text-xs text-[--fg-muted]">Network access is blocked inside every artwork</p>
               </div>
             </div>
@@ -128,7 +128,7 @@ export default function SecurityPage() {
               <strong className="text-[--fg]"> null origin</strong> — a fully isolated security context.
             </p>
             <div className="bg-[--bg-card] border border-[--border] p-4 space-y-2">
-              <p className="font-mono text-xs text-green-400">✓ What this prevents in the gallery:</p>
+              <p className="font-mono text-xs text-[--fg]">✓ What this prevents in the gallery:</p>
               <ul className="space-y-1 text-xs pl-4">
                 <li>✓ MetaMask does <strong className="text-[--fg]">not inject</strong> <code className="font-mono">window.ethereum</code> into null-origin iframes</li>
                 <li>✓ Script cannot access <code className="font-mono">window.parent</code>, <code className="font-mono">window.top</code>, or any outer context</li>
@@ -222,8 +222,8 @@ X-Content-Type-Options: nosniff`}</CodeBlock>
               The <code className="font-mono text-xs">connect-src: none</code> header — enforced by the server, not just the HTML meta tag —
               is the primary barrier against data exfiltration, even from the fullscreen page.
             </p>
-            <div className="border border-yellow-800 bg-yellow-950/20 p-4 text-xs space-y-1">
-              <p className="text-yellow-400 font-mono uppercase tracking-widest text-[10px] mb-2">Recommendation</p>
+            <div className="border border-[--border] bg-[--bg-card] p-4 text-xs space-y-1">
+              <p className="text-[--fg] font-mono uppercase tracking-widest text-[10px] mb-2">Recommendation</p>
               <p>When viewing any on-chain artwork fullscreen, your wallet extension (MetaMask, Coinbase Wallet, etc.) may inject <code className="font-mono">window.ethereum</code>. The CSP prevents the script from calling it, but as an extra precaution you can:</p>
               <ul className="pl-4 space-y-0.5 mt-1">
                 <li>— Use a browser profile without a wallet extension for viewing artworks</li>

@@ -25,8 +25,8 @@ function Hero() {
       <div className="max-w-6xl mx-auto">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
           <div className="space-y-8">
-            <div className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-purple-400 border border-purple-500/30 bg-purple-950/20 px-3 py-1.5">
-              <span className="live-dot w-1.5 h-1.5 rounded-full bg-purple-400 inline-block animate-pulse" />
+            <div className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-[--fg-muted] border border-[--border] px-3 py-1.5">
+              <span className="live-dot w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" />
               AG Constitutive · 30 juin 2026
             </div>
 
@@ -179,18 +179,16 @@ function EntryCards() {
             <Link
               key={card.href}
               href={card.href}
-              className={`p-8 space-y-4 hover:bg-[--bg] transition-colors group ${
-                card.accent ? "bg-purple-950/20 border-l-2 border-l-purple-500" : "bg-[--bg-card]"
-              }`}
+              className="bg-[--bg-card] p-8 space-y-4 hover:bg-[--bg] transition-colors group"
             >
-              <p className={`font-mono text-xs uppercase tracking-widest ${card.accent ? "text-purple-400" : "text-[--fg-muted]"}`}>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
                 {card.tag}
               </p>
               <h2 className="font-bold text-lg leading-snug">{card.title}</h2>
               <p className="text-sm text-[--fg-muted] leading-relaxed">
                 {card.description}
               </p>
-              <p className={`font-mono text-xs group-hover:underline ${card.accent ? "text-purple-400" : "text-[--fg]"}`}>
+              <p className="font-mono text-xs text-[--fg] group-hover:underline">
                 {card.cta}
               </p>
             </Link>
@@ -355,7 +353,7 @@ function CTA() {
     <section className="py-24 px-6 border-t border-[--border] bg-[--bg-card]">
       <div className="max-w-3xl mx-auto space-y-10">
         <div className="space-y-4">
-          <p className="font-mono text-xs uppercase tracking-widest text-purple-400">
+          <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
             AG Constitutive · 30 juin – 7 juillet 2026
           </p>
           <h2 className="text-4xl font-bold leading-tight">

@@ -44,6 +44,7 @@ const NAV = [
       { href: "/docs/contracts",    label: "Contrats",              desc: "Adresses, ABIs, lecture on-chain" },
       { href: "/docs/gouvernance",  label: "Gouvernance technique", desc: "Sessions, votes, rôles — détail" },
       { href: "/docs/creation",     label: "Création",              desc: "Du vote à l'œuvre on-chain" },
+      { href: "/docs/security",     label: "Sécurité",              desc: "SRI, CSP, sandbox — modèle de confiance" },
     ],
   },
 ];

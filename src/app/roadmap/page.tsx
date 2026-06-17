@@ -127,7 +127,7 @@ export default function RoadmapPage() {
             </p>
             <div className="flex flex-wrap gap-10 pt-4">
               <div>
-                <p className="font-mono text-3xl font-bold text-green-600">{donePhase}</p>
+                <p className="font-mono text-3xl font-bold">{donePhase}</p>
                 <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mt-1">Acte{donePhase > 1 ? "s" : ""} accompli{donePhase > 1 ? "s" : ""}</p>
               </div>
               <div>
@@ -139,7 +139,7 @@ export default function RoadmapPage() {
                 <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mt-1">Normies élus</p>
               </div>
               <div>
-                <p className="font-mono text-3xl font-bold text-purple-500">∞</p>
+                <p className="font-mono text-3xl font-bold">∞</p>
                 <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mt-1">Créations à venir</p>
               </div>
             </div>

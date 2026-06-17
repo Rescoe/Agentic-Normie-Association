@@ -231,8 +231,60 @@ function GovernanceReport({ work }: { work: ANAWork }) {
   );
 }
 
+function PoemModal({ work, certUrl, onClose }: { work: ANAWork; certUrl: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative bg-[--bg] border border-[--border] max-w-xl w-full max-h-[80vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4 p-5 border-b border-[--border]">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] mb-1">Artwork</p>
+            <p className="font-bold text-sm">{work.title}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="font-mono text-lg text-[--fg-muted] hover:text-[--fg] transition-colors shrink-0 mt-0.5"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Poem */}
+        <div className="overflow-y-auto p-6 flex-1">
+          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
+            {work.artworkText}
+          </pre>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between p-4 border-t border-[--border]">
+          <p className="font-mono text-[10px] text-[--fg-muted]">
+            {work.artForm ?? "text"} · {work.publishedAt ? new Date(work.publishedAt).getFullYear() : "—"}
+          </p>
+          <a
+            href={certUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors border border-[--border] px-3 py-1.5 flex items-center gap-1"
+          >
+            <span>◈</span> Open immutable certificate
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: number; getName: GetName }) {
   const [showReport, setShowReport] = useState(false);
+  const [showPoem,   setShowPoem]   = useState(false);
 
   const date = work.publishedAt ? new Date(work.publishedAt) : null;
   const trio = [
@@ -268,12 +320,10 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           </a>
         </div>
       ) : work.artworkText ? (
-        /* Text artwork — truncated to 6 lines, click to open full certificate */
-        <a
-          href={certUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block group relative bg-[--bg-card] px-5 pt-5 pb-0 cursor-pointer overflow-hidden"
+        /* Text artwork — truncated, click opens poem modal */
+        <button
+          onClick={() => setShowPoem(true)}
+          className="block group relative bg-[--bg-card] px-5 pt-5 pb-0 cursor-pointer overflow-hidden text-left w-full"
           style={{ maxHeight: "180px" }}
         >
           <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
@@ -285,7 +335,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
               Read full work →
             </span>
           </div>
-        </a>
+        </button>
       ) : (
         /* Fallback — no artworkText stored (very old works) */
         <a
@@ -344,7 +394,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
 
         {/* Edition info */}
         {work.editionSupply && work.editionPrice && (
-          <p className="font-mono text-[10px] text-purple-500 border border-purple-500/20 px-2 py-1">
+          <p className="font-mono text-[10px] text-[--fg-muted] border border-[--border] px-2 py-1">
             {work.editionSupply} editions · {work.editionPrice} ETH
           </p>
         )}
@@ -358,16 +408,14 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
             >
               {showReport ? "↑ Hide process" : "↓ How it was made"}
             </button>
-          ) : (
-            <a
-              href={certUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+          ) : work.artworkText ? (
+            <button
+              onClick={() => setShowPoem(true)}
               className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
             >
               <span>◈</span> Open immutable certificate
-            </a>
-          )}
+            </button>
+          ) : null}
           {work.txHash && (
             <a
               href={`https://basescan.org/tx/${work.txHash}`}
@@ -383,6 +431,11 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
 
       {/* Inline governance report (HTML works only) */}
       {showReport && isHtmlWork && <GovernanceReport work={work} />}
+
+      {/* Poem modal (text works only) */}
+      {showPoem && !isHtmlWork && work.artworkText && (
+        <PoemModal work={work} certUrl={certUrl} onClose={() => setShowPoem(false)} />
+      )}
     </div>
   );
 }
