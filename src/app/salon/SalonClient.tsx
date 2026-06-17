@@ -221,14 +221,14 @@ function AgentCardModal({
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
 function MessageBubble({
-  msg, onAvatarClick,
+  msg, onAvatarClick, resolvedName,
 }: {
   msg: SalonMessage;
   onAvatarClick: (tokenId: number, name: string, imageUrl: string) => void;
+  resolvedName?: string;
 }) {
-  // If name is just the fallback "Normie #X", show only the tokenId to avoid "Normie #42 #42"
-  const isFallback  = !msg.name || msg.name === `Normie #${msg.tokenId}`;
-  const displayName = isFallback ? null : msg.name;
+  const isFallback  = !msg.name || msg.name.startsWith(`Normie #`);
+  const displayName = resolvedName ?? (isFallback ? null : msg.name);
 
   return (
     <div className="flex gap-3 group py-1">
@@ -353,6 +353,9 @@ function SalonChat({
 }) {
   const [messages,      setMessages]      = useState<SalonMessage[]>(salon.messages);
   const [filter,        setFilter]        = useState<MessageFilter>({ search: "", agentId: null, topic: null });
+  // Resolved real names for messages stored with "Normie #X" fallback
+  const [nameMap,       setNameMap]       = useState<Map<number, string>>(new Map());
+  const fetchingIds = useRef<Set<number>>(new Set());
   const [stimulating,   setStimulating]   = useState(false);
   const [stimResult,    setStimResult]    = useState<string | null>(null);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
@@ -397,6 +400,43 @@ function SalonChat({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Batch-resolve real names for messages that still show "Normie #X"
+  useEffect(() => {
+    const toFetch = [...new Set(messages.map(m => m.tokenId))].filter(
+      id => !fetchingIds.current.has(id) && (
+        !nameMap.has(id) && (!personaCache.has(id) || personaCache.get(id)!.name.startsWith("Normie #"))
+      )
+    );
+    if (!toFetch.length) {
+      // Populate from personaCache for any already-resolved ids
+      const fromCache: [number, string][] = [];
+      for (const m of messages) {
+        const cached = personaCache.get(m.tokenId);
+        if (cached && !nameMap.has(m.tokenId) && !cached.name.startsWith("Normie #")) {
+          fromCache.push([m.tokenId, cached.name]);
+        }
+      }
+      if (fromCache.length) setNameMap(prev => new Map([...prev, ...fromCache]));
+      return;
+    }
+    toFetch.forEach(id => fetchingIds.current.add(id));
+    fetch(`/api/normies/persona?tokenIds=${toFetch.join(",")}`)
+      .then(r => r.json())
+      .then(d => {
+        const resolved: [number, string][] = [];
+        for (const p of (d.personas ?? []) as AgentCardData[]) {
+          if (p.name && !p.name.startsWith("Normie #")) {
+            resolved.push([p.tokenId, p.name]);
+            personaCache.set(p.tokenId, p);
+          }
+        }
+        if (resolved.length) setNameMap(prev => new Map([...prev, ...resolved]));
+      })
+      .catch(() => {})
+      .finally(() => toFetch.forEach(id => fetchingIds.current.delete(id)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
   const stimulate = async () => {
@@ -536,7 +576,7 @@ function SalonChat({
         ) : (
           <div className="space-y-1">
             {filteredMessages.map(msg => (
-              <MessageBubble key={msg.id} msg={msg} onAvatarClick={onAvatarClick} />
+              <MessageBubble key={msg.id} msg={msg} onAvatarClick={onAvatarClick} resolvedName={nameMap.get(msg.tokenId)} />
             ))}
           </div>
         )}

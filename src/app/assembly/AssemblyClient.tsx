@@ -635,7 +635,10 @@ function CreativeAssemblySection() {
                   className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
               </div>
               <div>
-                <p className="font-mono text-xs font-bold">#{m.tokenId}</p>
+                <p className="font-mono text-xs font-bold truncate" title={m.persona?.name ?? `#${m.tokenId}`}>
+                  {m.persona?.name ?? `#${m.tokenId}`}
+                </p>
+                <p className="font-mono text-[10px] text-[--fg-muted]/60">#{m.tokenId}</p>
                 <p className="font-mono text-xs text-[--fg-muted] leading-tight">{m.roleLabel}</p>
                 {m.persona?.archetype && (
                   <p className="font-mono text-xs text-[--fg-muted]/70 truncate" title={m.persona.archetype}>{m.persona.archetype}</p>

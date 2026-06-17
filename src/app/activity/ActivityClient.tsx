@@ -125,7 +125,7 @@ function parseLogs(logs: Log[], type: ActivityType): ActivityEvent[] {
 
 // ─── ActivityRow ─────────────────────────────────────────────────────────────
 
-function ActivityRow({ ev }: { ev: ActivityEvent }) {
+function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number) => string }) {
   const cfg = TYPE_CONFIG[ev.type];
 
   return (
@@ -139,7 +139,7 @@ function ActivityRow({ ev }: { ev: ActivityEvent }) {
           <div className="relative w-7 h-7 shrink-0 overflow-hidden">
             <Image
               src={getNormieImageUrl(ev.tokenId)}
-              alt={`#${ev.tokenId}`}
+              alt={getName(ev.tokenId)}
               fill
               className="object-contain"
               style={{ imageRendering: "pixelated" }}
@@ -152,12 +152,12 @@ function ActivityRow({ ev }: { ev: ActivityEvent }) {
       {/* Description */}
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">
-          {ev.type === "MEMBER_REGISTERED" && `Normie #${ev.tokenId} inscrit`}
-          {ev.type === "ROLE_GRANTED"      && `#${ev.tokenId} → ${ROLE_LABELS[ev.role ?? ""] ?? ev.role?.slice(0, 10) + "…"}`}
-          {ev.type === "VOTE_CAST"         && `#${ev.tokenId} vote pour #${ev.candidateId} (${ROLE_LABELS[ev.role ?? ""] ?? "rôle"})`}
+          {ev.type === "MEMBER_REGISTERED" && `${getName(ev.tokenId!)} inscrit`}
+          {ev.type === "ROLE_GRANTED"      && `${getName(ev.tokenId!)} → ${ROLE_LABELS[ev.role ?? ""] ?? ev.role?.slice(0, 10) + "…"}`}
+          {ev.type === "VOTE_CAST"         && `${getName(ev.tokenId!)} vote pour ${getName(ev.candidateId!)} (${ROLE_LABELS[ev.role ?? ""] ?? "rôle"})`}
           {ev.type === "SESSION_OPENED"    && `Session #${ev.sessionId} ouverte`}
           {ev.type === "SESSION_CLOSED"    && `Session #${ev.sessionId} clôturée`}
-          {ev.type === "WORK_PUBLISHED"    && `Œuvre #${ev.workId} publiée par #${ev.tokenId}`}
+          {ev.type === "WORK_PUBLISHED"    && `Œuvre #${ev.workId} publiée par ${getName(ev.tokenId!)}`}
           {ev.type === "WORK_SESSION_INITIATED" && `Session créative #${ev.sessionId} initiée`}
         </p>
         <p className="font-mono text-xs text-[--fg-muted] truncate">
@@ -286,7 +286,7 @@ function ElectedRolesPanel() {
 
 // ─── Normie Activity Summary ──────────────────────────────────────────────────
 
-function NormieSummary({ events }: { events: ActivityEvent[] }) {
+function NormieSummary({ events, getName }: { events: ActivityEvent[]; getName: (id: number) => string }) {
   // Group by tokenId
   const byNormie: Record<number, ActivityEvent[]> = {};
   for (const ev of events) {
@@ -306,22 +306,25 @@ function NormieSummary({ events }: { events: ActivityEvent[] }) {
         Activité par Normie
       </p>
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-        {sorted.map(([id, evs]) => (
-          <div key={id} className="text-center space-y-1.5">
-            <div className="relative w-12 h-12 mx-auto overflow-hidden">
-              <Image
-                src={getNormieImageUrl(Number(id))}
-                alt={`#${id}`}
-                fill
-                className="object-contain"
-                style={{ imageRendering: "pixelated" }}
-                unoptimized
-              />
+        {sorted.map(([id, evs]) => {
+          const name = getName(Number(id));
+          return (
+            <div key={id} className="text-center space-y-1.5">
+              <div className="relative w-12 h-12 mx-auto overflow-hidden">
+                <Image
+                  src={getNormieImageUrl(Number(id))}
+                  alt={name}
+                  fill
+                  className="object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                  unoptimized
+                />
+              </div>
+              <p className="font-mono text-xs font-bold truncate" title={name}>{name}</p>
+              <p className="font-mono text-xs text-[--fg-muted]">{evs.length} actions</p>
             </div>
-            <p className="font-mono text-xs font-bold">#{id}</p>
-            <p className="font-mono text-xs text-[--fg-muted]">{evs.length} actions</p>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -334,6 +337,9 @@ export function ActivityClient() {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [filter,   setFilter]   = useState<ActivityType | "ALL">("ALL");
+  const [nameMap,  setNameMap]  = useState<Map<number, string>>(new Map());
+
+  const getName = useCallback((id: number) => nameMap.get(id) ?? `#${id}`, [nameMap]);
 
   const loadEvents = useCallback(async () => {
     if (!CORE_ADDR) { setError("Contrats non configurés"); return; }
@@ -403,6 +409,23 @@ export function ActivityClient() {
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
+  // Batch-resolve persona names for all tokenIds seen in events
+  useEffect(() => {
+    const ids = [...new Set(events.flatMap(ev => [ev.tokenId, ev.candidateId].filter((id): id is number => !!id && id > 0)))]
+      .filter(id => !nameMap.has(id));
+    if (!ids.length) return;
+    fetch(`/api/normies/persona?tokenIds=${ids.join(",")}`)
+      .then(r => r.json())
+      .then(d => {
+        const resolved: [number, string][] = (d.personas ?? [])
+          .filter((p: { name: string }) => p.name && !p.name.startsWith("Normie #"))
+          .map((p: { tokenId: number; name: string }) => [p.tokenId, p.name] as [number, string]);
+        if (resolved.length) setNameMap(prev => new Map([...prev, ...resolved]));
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events]);
+
   const filtered = filter === "ALL"
     ? events
     : events.filter(e => e.type === filter);
@@ -413,7 +436,7 @@ export function ActivityClient() {
       {CA_ELECTED && <ElectedRolesPanel />}
 
       {/* Normie summary */}
-      <NormieSummary events={events} />
+      <NormieSummary events={events} getName={getName} />
 
       {/* Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -464,7 +487,7 @@ export function ActivityClient() {
             </p>
           </div>
           <div className="px-5">
-            {filtered.map(ev => <ActivityRow key={ev.id} ev={ev} />)}
+            {filtered.map(ev => <ActivityRow key={ev.id} ev={ev} getName={getName} />)}
           </div>
         </div>
       )}

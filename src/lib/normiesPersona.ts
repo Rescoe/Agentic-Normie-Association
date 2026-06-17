@@ -82,7 +82,7 @@ export async function buildPersona(tokenId: number): Promise<NormiePersona> {
 
   return {
     tokenId,
-    name:               meta?.name             ?? agent?.name ?? `Normie #${tokenId}`,
+    name:               agent?.name            ?? meta?.name  ?? `Normie #${tokenId}`,
     imageUrl:           getNormieImageUrl(tokenId),
     description:        agent?.backstory        ?? meta?.description ?? "",
     traits,
