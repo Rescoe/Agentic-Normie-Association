@@ -67,7 +67,8 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const onChainId = Number(params.id);
-  if (!Number.isInteger(onChainId) || onChainId <= 0) {
+  // Allow ID 0 — WorkRegistry stores works 0-indexed (first work = ID 0)
+  if (!Number.isInteger(onChainId) || onChainId < 0) {
     return new NextResponse("Invalid work id", { status: 400 });
   }
 

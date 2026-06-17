@@ -50,8 +50,17 @@ function InProgressWorkCard({ work }: { work: ANAWork }) {
     { label: "Curateur",   tid: work.curatorTokenId,    name: work.curatorName },
   ].filter(r => r.tid != null);
 
-  const steps: WorkState[] = ["PROPOSED", "VOTE_OPEN", "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING"];
-  const currentStep = steps.indexOf(work.state === "VOTE_TALLIED" ? "VOTE_OPEN" : work.state as WorkState);
+  const STEPS: { state: WorkState; short: string }[] = [
+    { state: "PROPOSED",     short: "Proposition" },
+    { state: "VOTE_OPEN",    short: "Vote"         },
+    { state: "BRIEFING",     short: "Brief"        },
+    { state: "CREATING",     short: "Création"     },
+    { state: "VALIDATING",   short: "Validation"   },
+    { state: "PUBLISHING",   short: "Publication"  },
+  ];
+  // VOTE_TALLIED = still in vote phase for progress display
+  const progressState = work.state === "VOTE_TALLIED" ? "VOTE_OPEN" : work.state as WorkState;
+  const currentStep   = STEPS.findIndex(s => s.state === progressState);
 
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col gap-4 p-5">
@@ -68,16 +77,33 @@ function InProgressWorkCard({ work }: { work: ANAWork }) {
         </span>
       </div>
 
-      {/* Progress bar */}
-      <div className="flex gap-1 items-center">
-        {steps.map((s, i) => (
-          <div
-            key={s}
-            className={`h-1 flex-1 rounded-sm transition-colors ${
-              i <= currentStep ? "bg-[--fg]/60" : "bg-[--border]"
-            }`}
-          />
-        ))}
+      {/* Progress steps — named labels */}
+      <div className="flex gap-0.5 items-end">
+        {STEPS.map((s, i) => {
+          const done    = i < currentStep;
+          const active  = i === currentStep;
+          const pending = i > currentStep;
+          return (
+            <div key={s.state} className="flex-1 flex flex-col gap-1 items-center">
+              <div
+                className={`h-1 w-full rounded-sm transition-colors ${
+                  done   ? "bg-[--fg]/80" :
+                  active ? "bg-[--fg]/60 animate-pulse" :
+                           "bg-[--border]"
+                }`}
+              />
+              <span
+                className={`font-mono text-[8px] leading-none hidden sm:block ${
+                  pending ? "text-[--border]" :
+                  active  ? "text-[--fg]"    :
+                            "text-[--fg-muted]"
+                }`}
+              >
+                {s.short}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Proposal */}
@@ -390,7 +416,8 @@ function WorkList({ count, neonWorks }: { count: number; neonWorks: ANAWork[] })
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
       {Array.from({ length: count }, (_, i) => {
-        const id       = i + 1;
+        // WorkRegistry stores works 0-indexed (first work = ID 0)
+        const id       = i;
         const neonWork = neonMap.get(id);
         return neonWork
           ? <WorkCard key={id} work={neonWork} onChainId={id} />
