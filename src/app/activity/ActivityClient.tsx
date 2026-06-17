@@ -307,13 +307,24 @@ export function ActivityClient() {
       {/* Elected roles — reads getLeader() directly (6 calls, always fresh) */}
       {CA_ADDR && <ElectedRolesPanel />}
 
-      {/* Stats */}
-      {events.length > 0 && <StatsBar events={events} />}
+      {/* Stats — show skeleton while loading */}
+      {loading && events.length === 0 ? (
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 animate-pulse">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="border border-[--border] bg-[--bg-card] p-3 text-center">
+              <div className="h-8 bg-[--border] rounded w-8 mx-auto mb-2" />
+              <div className="h-2 bg-[--border] rounded w-16 mx-auto" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        events.length > 0 && <StatsBar events={events} />
+      )}
 
       {/* Normie summary */}
       <NormieSummary events={events} getName={getName} />
 
-      {/* Filter bar */}
+      {/* Filter bar — always visible */}
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={() => setFilter("ALL")}
@@ -349,9 +360,22 @@ export function ActivityClient() {
 
       {/* Events list */}
       {loading && events.length === 0 ? (
-        <div className="flex items-center justify-center py-16 gap-3">
-          <div className="w-5 h-5 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
-          <p className="font-mono text-xs text-[--fg-muted]">Lecture des événements on-chain…</p>
+        <div className="border border-[--border]">
+          <div className="px-5 py-3 bg-[--bg-card] border-b border-[--border]">
+            <p className="font-mono text-xs text-[--fg-muted] animate-pulse">Lecture des événements on-chain…</p>
+          </div>
+          <div className="px-5 divide-y divide-[--border]">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="grid grid-cols-[auto_1fr_auto] gap-4 py-3 animate-pulse">
+                <div className="h-5 w-24 bg-[--border] rounded" />
+                <div className="space-y-1.5">
+                  <div className="h-3 bg-[--border] rounded w-48" />
+                  <div className="h-2 bg-[--border] rounded w-32" />
+                </div>
+                <div className="h-2 w-12 bg-[--border] rounded" />
+              </div>
+            ))}
+          </div>
         </div>
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center">

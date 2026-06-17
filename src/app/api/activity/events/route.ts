@@ -77,11 +77,18 @@ const GC_LABELS: Record<string, string> = {
 };
 
 // ─── Parallel log fetcher ─────────────────────────────────────────────────────
-// Instead of fetching chunks sequentially (= timeout), we batch them in
-// parallel groups. 1 000 chunks × parallel-20 = 50 batches × ~200ms = ~10s.
+// Strategy:
+//   1. Try a SINGLE getLogs call (no chunking) — instant when the RPC allows it
+//      and the contract has few events (ANA is brand-new, maybe 50–200 events total)
+//   2. On failure, fall back to parallel chunking with a conservative batch size
+//      to avoid rate-limiting the public Base RPC.
+//
+// SCAN_RANGE = 500 000 blocks ≈ 11 days — covers all ANA history (deployed June 2025)
+// 500 000 / 2 000 = 250 chunks per type → 250 / BATCH_SIZE = batches
 
-const CHUNK      = 2_000n;  // blocks per request (safe for Base public RPC)
-const BATCH_SIZE = 25;      // concurrent requests per batch
+const CHUNK      = 2_000n;  // Base public RPC hard limit per getLogs request
+const BATCH_SIZE = 12;      // 14 types × 12 = 168 max concurrent — safe for public RPC
+const SCAN_RANGE = 500_000n; // blocks to scan back from latest (~11 days on Base)
 
 async function fetchLogs(
   address: `0x${string}`,
@@ -91,7 +98,15 @@ async function fetchLogs(
 ): Promise<Log[]> {
   if (!address) return [];
 
-  // Build all chunk ranges upfront
+  // 1. Optimistic single call — works when the RPC is permissive or the result
+  //    set is small (which it is for a brand-new association).
+  try {
+    return await rpc.getLogs({ address, event, fromBlock: from, toBlock: to });
+  } catch {
+    // "block range too large" or similar — fall through to chunking
+  }
+
+  // 2. Parallel chunk fallback
   const chunks: Array<{ from: bigint; to: bigint }> = [];
   let cursor = from;
   while (cursor <= to) {
@@ -100,7 +115,6 @@ async function fetchLogs(
     cursor = end + 1n;
   }
 
-  // Fetch in parallel batches
   const allLogs: Log[] = [];
   for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
     const batch = chunks.slice(i, i + BATCH_SIZE);
@@ -149,8 +163,8 @@ function args(log: Log): Record<string, unknown> {
 
 // ─── Cache helpers (Neon KV) ──────────────────────────────────────────────────
 
-const CACHE_KEY    = "activity:events:v2";
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_KEY    = "activity:events:v3";
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 interface CachedPayload {
   events:      ActivityEvent[];
@@ -197,9 +211,10 @@ export async function GET() {
   try {
     const latest = await rpc.getBlockNumber();
 
-    // Cover ~2M blocks (≈46 days on Base at 2s/block).
-    // ANA contracts were deployed in June 2025 — this window covers all history.
-    const from = latest > 2_000_000n ? latest - 2_000_000n : 0n;
+    // Cover SCAN_RANGE blocks (~11 days on Base at 2s/block).
+    // ANA contracts were deployed in June 2025 — 500K blocks is more than enough.
+    // Keeping this tight avoids rate-limiting the public Base RPC.
+    const from = latest > SCAN_RANGE ? latest - SCAN_RANGE : 0n;
 
     console.log(`[activity/events] fetching blocks ${from}–${latest} (${latest - from} blocks)…`);
     const t0 = Date.now();
