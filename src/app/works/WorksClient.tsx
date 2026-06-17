@@ -168,8 +168,10 @@ function InProgressWorkCard({ work }: { work: ANAWork }) {
 
 // ─── WorkCard (Neon data — PUBLISHED) ────────────────────────────────────────
 
+type WorkTab = "none" | "oeuvre" | "certificat";
+
 function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
-  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<WorkTab>("none");
   const date = work.publishedAt ? new Date(work.publishedAt) : null;
   const trio = [
     { label: "Auteur",      tid: work.authorTokenId,      name: work.authorName },
@@ -177,51 +179,101 @@ function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
     { label: "Rapporteur",  tid: work.rapporteurTokenId,  name: work.rapporteurName },
   ];
 
+  const certUrl = `/api/works/html/${onChainId}`;
+
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col">
-      {/* Preview */}
-      {open ? (
-        <div className="relative aspect-video bg-black overflow-hidden">
-          <iframe
-            src={`/api/works/html/${onChainId}`}
-            className="w-full h-full border-0"
-            sandbox="allow-scripts"
-            title={work.title}
-          />
-          <button
-            onClick={() => setOpen(false)}
-            className="absolute top-2 right-2 bg-black/70 text-white font-mono text-xs px-2 py-1 hover:bg-black"
-          >
-            ✕
-          </button>
-        </div>
-      ) : (
+      {/* Preview zone */}
+      {tab === "none" ? (
+        /* Thumbnail — click to open */
         <button
-          onClick={() => setOpen(true)}
+          onClick={() => setTab("oeuvre")}
           className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center cursor-pointer w-full"
         >
           <div className="flex gap-3 items-center">
             {trio.map(({ label, tid }) =>
               tid != null ? (
                 <div key={label} className="relative w-12 h-12 overflow-hidden">
-                  <Image
-                    src={getNormieImageUrl(tid)}
-                    alt={`#${tid}`}
-                    fill
-                    className="object-contain"
-                    style={{ imageRendering: "pixelated" }}
-                    unoptimized
-                  />
+                  <Image src={getNormieImageUrl(tid)} alt={`#${tid}`} fill
+                    className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
                 </div>
               ) : null
             )}
           </div>
           <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
             <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
-              Exécuter ▶
+              Voir l'œuvre ▶
             </span>
           </div>
         </button>
+      ) : (
+        /* Viewer avec onglets */
+        <div className="flex flex-col">
+          {/* Tab bar */}
+          <div className="flex items-center border-b border-[--border] bg-[--bg-card]">
+            <button
+              onClick={() => setTab("oeuvre")}
+              className={`font-mono text-xs px-4 py-2 border-r border-[--border] transition-colors ${
+                tab === "oeuvre" ? "bg-[--bg] text-[--fg]" : "text-[--fg-muted] hover:text-[--fg]"
+              }`}
+            >
+              Œuvre
+            </button>
+            <button
+              onClick={() => setTab("certificat")}
+              className={`font-mono text-xs px-4 py-2 border-r border-[--border] transition-colors ${
+                tab === "certificat" ? "bg-[--bg] text-[--fg]" : "text-[--fg-muted] hover:text-[--fg]"
+              }`}
+            >
+              Certificat
+            </button>
+            <div className="flex-1" />
+            {tab === "certificat" && (
+              <a
+                href={certUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] px-3 py-2 border-l border-[--border] transition-colors"
+                title="Ouvrir en pleine page"
+              >
+                ⤢ pleine page
+              </a>
+            )}
+            <button
+              onClick={() => setTab("none")}
+              className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] px-3 py-2 border-l border-[--border] transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Onglet Œuvre — texte du poème/prose */}
+          {tab === "oeuvre" && (
+            <div className="bg-[--bg] px-5 py-6 max-h-[420px] overflow-y-auto">
+              {work.artworkText ? (
+                <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
+                  {work.artworkText}
+                </pre>
+              ) : (
+                <p className="font-mono text-xs text-[--fg-muted] italic">
+                  Texte non disponible — ouvrez le certificat pour voir l'œuvre complète.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Onglet Certificat — exécutable HTML complet */}
+          {tab === "certificat" && (
+            <div className="relative aspect-video bg-black overflow-hidden">
+              <iframe
+                src={certUrl}
+                className="w-full h-full border-0"
+                sandbox="allow-scripts"
+                title={work.title}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {/* Metadata */}
