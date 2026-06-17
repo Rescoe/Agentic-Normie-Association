@@ -1,72 +1,73 @@
 /**
  * GET /api/activity/events
  *
- * Fetches ALL on-chain events from every ANA contract, server-side.
- * Cached 5 minutes (ISR) — the browser makes one HTTP fetch instead of 1000+ RPC calls.
+ * Fetches ALL on-chain events from every ANA contract.
+ *
+ * Performance strategy:
+ *   1. Neon KV cache (5-minute TTL) — instant on cache hit
+ *   2. On cache miss: fetch from RPC using PARALLEL chunks (not sequential)
+ *      → 14 event types × parallel batches ≈ 5–15s instead of 5 min
  *
  * Contracts covered:
  *   AssociationCore      → MemberRegistered, RoleGranted
- *   ConstituentAssembly  → SessionOpened, SessionClosed, VoteCast, RoleResolved, RolesResolved
+ *   ConstituentAssembly  → SessionOpened/Closed, VoteCast, RoleResolved, RolesResolved
  *   WorkRegistry         → WorkPublished, WorkSessionInitiated, WorkArchived
  *   GovernanceCalendar   → EventScheduled, EventTriggered
  *   FactoryRegistry      → FactoryRegistered
  *   CollectionFactory    → CollectionCreated
  */
 
-export const revalidate = 300; // 5-minute ISR cache
+export const dynamic = "force-dynamic"; // never pre-render at build time
 
-import { NextResponse }                            from "next/server";
-import { createPublicClient, http, parseAbiItem, keccak256, stringToBytes, type Log, type AbiEvent } from "viem";
-import { base as baseChain }                       from "viem/chains";
-import { CONTRACT_ADDRESSES, ROLE_LABELS }         from "@/lib/contracts";
+import { NextResponse }     from "next/server";
+import {
+  createPublicClient, http, parseAbiItem,
+  keccak256, stringToBytes,
+  type Log, type AbiEvent,
+} from "viem";
+import { base as baseChain } from "viem/chains";
+import { CONTRACT_ADDRESSES, ROLE_LABELS } from "@/lib/contracts";
 
-// ─── Client ───────────────────────────────────────────────────────────────────
+// ─── RPC client ───────────────────────────────────────────────────────────────
 
-const client = createPublicClient({
+const rpc = createPublicClient({
   chain:     baseChain,
   transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
 });
 
-// ─── Addresses ────────────────────────────────────────────────────────────────
+// ─── Contract addresses ───────────────────────────────────────────────────────
 
-const CORE     = CONTRACT_ADDRESSES.AssociationCore     as `0x${string}` | undefined;
-const CA       = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined;
-const WR       = CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}` | undefined;
-const GC       = CONTRACT_ADDRESSES.GovernanceCalendar  as `0x${string}` | undefined;
-const FR       = CONTRACT_ADDRESSES.FactoryRegistry     as `0x${string}` | undefined;
-const CF       = CONTRACT_ADDRESSES.CollectionFactory   as `0x${string}` | undefined;
+const ADDR = {
+  CORE: CONTRACT_ADDRESSES.AssociationCore     as `0x${string}` | undefined,
+  CA:   CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined,
+  WR:   CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}` | undefined,
+  GC:   CONTRACT_ADDRESSES.GovernanceCalendar  as `0x${string}` | undefined,
+  FR:   CONTRACT_ADDRESSES.FactoryRegistry     as `0x${string}` | undefined,
+  CF:   CONTRACT_ADDRESSES.CollectionFactory   as `0x${string}` | undefined,
+};
 
 // ─── Event signatures ─────────────────────────────────────────────────────────
 
-// AssociationCore
-const EV_MEMBER_REGISTERED = parseAbiItem("event MemberRegistered(uint256 indexed tokenId, address indexed ownerAddress, uint256 timestamp)");
-const EV_ROLE_GRANTED      = parseAbiItem("event RoleGranted(bytes32 indexed role, uint256 indexed tokenId, address indexed holderAddress)");
-
-// ConstituentAssembly
-const EV_SESSION_OPENED    = parseAbiItem("event SessionOpened(uint256 indexed sessionId, uint256 timestamp)");
-const EV_SESSION_CLOSED    = parseAbiItem("event SessionClosed(uint256 indexed sessionId, uint256 timestamp)");
-const EV_VOTE_CAST         = parseAbiItem("event VoteCast(uint256 indexed sessionId, uint256 indexed voterTokenId, bytes32 indexed role, uint256 candidateTokenId)");
-const EV_ROLE_RESOLVED     = parseAbiItem("event RoleResolved(uint256 indexed sessionId, bytes32 indexed role, uint256 winnerTokenId, uint256 voteCount)");
-const EV_ROLES_RESOLVED    = parseAbiItem("event RolesResolved(uint256 indexed sessionId)");
-
-// WorkRegistry
-const EV_WORK_PUBLISHED    = parseAbiItem("event WorkPublished(uint256 indexed workId, string content, uint256 indexed authorTokenId, uint256 indexed rapporteurTokenId, uint256 timestamp)");
-const EV_WORK_SESSION_INIT = parseAbiItem("event WorkSessionInitiated(uint256 indexed sessionId, uint256 initiatedAt, address indexed initiatedBy)");
-const EV_WORK_ARCHIVED     = parseAbiItem("event WorkArchived(uint256 indexed workId, uint256 archivedAt)");
-
-// GovernanceCalendar
-const EV_GC_SCHEDULED      = parseAbiItem("event EventScheduled(uint256 indexed eventId, bytes32 indexed eventType, uint256 scheduledAt, bool recurring, uint256 periodSeconds)");
-const EV_GC_TRIGGERED      = parseAbiItem("event EventTriggered(uint256 indexed eventId, bytes32 indexed eventType, address indexed triggeredBy, uint256 timestamp)");
-
-// FactoryRegistry
-const EV_FACTORY_REGISTERED = parseAbiItem("event FactoryRegistered(bytes32 indexed factoryType, address indexed factory)");
-
-// CollectionFactory
-const EV_COLLECTION_CREATED = parseAbiItem("event CollectionCreated(uint256 indexed normieTokenId, address indexed collection, string name, string symbol, address minter, uint256 timestamp)");
+const EV = {
+  MEMBER_REGISTERED:    parseAbiItem("event MemberRegistered(uint256 indexed tokenId, address indexed ownerAddress, uint256 timestamp)")   as AbiEvent,
+  ROLE_GRANTED:         parseAbiItem("event RoleGranted(bytes32 indexed role, uint256 indexed tokenId, address indexed holderAddress)")     as AbiEvent,
+  SESSION_OPENED:       parseAbiItem("event SessionOpened(uint256 indexed sessionId, uint256 timestamp)")                                   as AbiEvent,
+  SESSION_CLOSED:       parseAbiItem("event SessionClosed(uint256 indexed sessionId, uint256 timestamp)")                                   as AbiEvent,
+  VOTE_CAST:            parseAbiItem("event VoteCast(uint256 indexed sessionId, uint256 indexed voterTokenId, bytes32 indexed role, uint256 candidateTokenId)") as AbiEvent,
+  ROLE_RESOLVED:        parseAbiItem("event RoleResolved(uint256 indexed sessionId, bytes32 indexed role, uint256 winnerTokenId, uint256 voteCount)") as AbiEvent,
+  ROLES_RESOLVED:       parseAbiItem("event RolesResolved(uint256 indexed sessionId)")                                                      as AbiEvent,
+  WORK_PUBLISHED:       parseAbiItem("event WorkPublished(uint256 indexed workId, string content, uint256 indexed authorTokenId, uint256 indexed rapporteurTokenId, uint256 timestamp)") as AbiEvent,
+  WORK_SESSION_INIT:    parseAbiItem("event WorkSessionInitiated(uint256 indexed sessionId, uint256 initiatedAt, address indexed initiatedBy)") as AbiEvent,
+  WORK_ARCHIVED:        parseAbiItem("event WorkArchived(uint256 indexed workId, uint256 archivedAt)")                                      as AbiEvent,
+  GC_SCHEDULED:         parseAbiItem("event EventScheduled(uint256 indexed eventId, bytes32 indexed eventType, uint256 scheduledAt, bool recurring, uint256 periodSeconds)") as AbiEvent,
+  GC_TRIGGERED:         parseAbiItem("event EventTriggered(uint256 indexed eventId, bytes32 indexed eventType, address indexed triggeredBy, uint256 timestamp)") as AbiEvent,
+  FACTORY_REGISTERED:   parseAbiItem("event FactoryRegistered(bytes32 indexed factoryType, address indexed factory)")                      as AbiEvent,
+  COLLECTION_CREATED:   parseAbiItem("event CollectionCreated(uint256 indexed normieTokenId, address indexed collection, string name, string symbol, address minter, uint256 timestamp)") as AbiEvent,
+};
 
 // ─── GovernanceCalendar event type labels ─────────────────────────────────────
 
-const GC_EVENT_LABELS: Record<string, string> = {
+const GC_LABELS: Record<string, string> = {
   [keccak256(stringToBytes("BURN_CREATION"))]:    "Création par burn",
   [keccak256(stringToBytes("ELECTION"))]:          "Élection",
   [keccak256(stringToBytes("GENERAL_ASSEMBLY"))]:  "Assemblée générale",
@@ -75,287 +76,334 @@ const GC_EVENT_LABELS: Record<string, string> = {
   [keccak256(stringToBytes("WORK_SESSION"))]:      "Session créative",
 };
 
-// ─── Log fetcher with chunked pagination ─────────────────────────────────────
+// ─── Parallel log fetcher ─────────────────────────────────────────────────────
+// Instead of fetching chunks sequentially (= timeout), we batch them in
+// parallel groups. 1 000 chunks × parallel-20 = 50 batches × ~200ms = ~10s.
 
-const CHUNK = 5_000n; // Base mainnet public RPC handles ~5k blocks/request
+const CHUNK      = 2_000n;  // blocks per request (safe for Base public RPC)
+const BATCH_SIZE = 25;      // concurrent requests per batch
 
-async function getLogs(
+async function fetchLogs(
   address: `0x${string}`,
   event:   AbiEvent,
   from:    bigint,
   to:      bigint,
 ): Promise<Log[]> {
-  const results: Log[] = [];
+  if (!address) return [];
+
+  // Build all chunk ranges upfront
+  const chunks: Array<{ from: bigint; to: bigint }> = [];
   let cursor = from;
   while (cursor <= to) {
     const end = cursor + CHUNK - 1n > to ? to : cursor + CHUNK - 1n;
-    try {
-      const chunk = await client.getLogs({ address, event, fromBlock: cursor, toBlock: end });
-      results.push(...chunk);
-    } catch {
-      // If chunk is too large, retry with 2k blocks
-      try {
-        const SMALL = 2_000n;
-        let c2 = cursor;
-        while (c2 <= end) {
-          const e2 = c2 + SMALL - 1n > end ? end : c2 + SMALL - 1n;
-          try {
-            const tiny = await client.getLogs({ address, event, fromBlock: c2, toBlock: e2 });
-            results.push(...tiny);
-          } catch { /* skip failed small chunk */ }
-          c2 = e2 + 1n;
-        }
-      } catch { /* skip entire chunk */ }
-    }
+    chunks.push({ from: cursor, to: end });
     cursor = end + 1n;
   }
-  return results;
+
+  // Fetch in parallel batches
+  const allLogs: Log[] = [];
+  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+    const batch = chunks.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(c =>
+        rpc.getLogs({ address, event, fromBlock: c.from, toBlock: c.to })
+           .catch((): Log[] => [])
+      )
+    );
+    allLogs.push(...results.flat());
+  }
+
+  return allLogs;
 }
 
-// ─── Serialized event type ────────────────────────────────────────────────────
+// ─── Public event type ────────────────────────────────────────────────────────
 
 export interface ActivityEvent {
-  id:          string;
-  type:        string;
-  blockNumber: string;   // string to survive JSON (bigint not serializable)
-  txHash:      string;
-  timestamp?:  number;
-  tokenId?:    number;
+  id:           string;
+  type:         string;
+  blockNumber:  string;
+  txHash:       string;
+  timestamp?:   number;
+  tokenId?:     number;
   candidateId?: number;
-  sessionId?:  number;
-  workId?:     number;
-  role?:       string;
-  roleLabel?:  string;
-  address?:    string;
-  extra?:      Record<string, string | number | boolean>;
+  sessionId?:   number;
+  workId?:      number;
+  role?:        string;
+  roleLabel?:   string;
+  address?:     string;
+  extra?:       Record<string, string | number | boolean>;
 }
 
-function makeEvent(log: Log, type: string, i: number): ActivityEvent {
+function makeEv(log: Log, type: string, i: number): ActivityEvent {
   return {
-    id:          `${type}-${log.blockNumber}-${i}`,
+    id:          `${type}-${String(log.blockNumber)}-${i}`,
     type,
     blockNumber: String(log.blockNumber ?? 0n),
     txHash:      log.transactionHash ?? "0x",
   };
 }
 
+function args(log: Log): Record<string, unknown> {
+  return (log as { args?: Record<string, unknown> }).args ?? {};
+}
+
+// ─── Cache helpers (Neon KV) ──────────────────────────────────────────────────
+
+const CACHE_KEY    = "activity:events:v2";
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface CachedPayload {
+  events:      ActivityEvent[];
+  meta:        { fromBlock: string; toBlock: string; cachedAt: number; cachedUntil: number };
+}
+
+async function readCache(): Promise<CachedPayload | null> {
+  try {
+    const { kvGet, USE_NEON } = await import("@/lib/db");
+    if (!USE_NEON) return null;
+    const raw = await kvGet(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedPayload;
+    if (Date.now() > parsed.meta.cachedUntil) return null; // expired
+    return parsed;
+  } catch { return null; }
+}
+
+async function writeCache(payload: CachedPayload): Promise<void> {
+  try {
+    const { kvSet, USE_NEON } = await import("@/lib/db");
+    if (!USE_NEON) return;
+    await kvSet(CACHE_KEY, JSON.stringify(payload));
+  } catch { /* silent — cache write failure is not fatal */ }
+}
+
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET() {
-  // Safety: require at least AssociationCore to be configured
-  if (!CORE) {
-    return NextResponse.json({ events: [], error: "Contracts not configured" });
+  // ── 1. Try cache first ────────────────────────────────────────────────────
+  const cached = await readCache();
+  if (cached) {
+    console.log(`[activity/events] cache hit — ${cached.events.length} events`);
+    return NextResponse.json(cached, {
+      headers: { "X-Cache": "HIT" },
+    });
+  }
+
+  // ── 2. Fetch from chain ───────────────────────────────────────────────────
+  if (!ADDR.CORE) {
+    return NextResponse.json({ events: [], meta: null, error: "Contracts not configured" });
   }
 
   try {
-    const latest = await client.getBlockNumber();
-    // Cover ~1M blocks (≈23 days on Base at 2s/block) — all ANA history
-    const from   = latest > 1_000_000n ? latest - 1_000_000n : 0n;
+    const latest = await rpc.getBlockNumber();
 
-    // Fetch all event types in parallel
+    // Cover ~2M blocks (≈46 days on Base at 2s/block).
+    // ANA contracts were deployed in June 2025 — this window covers all history.
+    const from = latest > 2_000_000n ? latest - 2_000_000n : 0n;
+
+    console.log(`[activity/events] fetching blocks ${from}–${latest} (${latest - from} blocks)…`);
+    const t0 = Date.now();
+
+    // Fetch ALL event types in parallel
     const [
       memberLogs, roleLogs,
-      sessionOpenLogs, sessionCloseLogs, voteLogs, roleResolvedLogs, rolesResolvedLogs,
-      workLogs, workSessionLogs, workArchivedLogs,
-      gcScheduledLogs, gcTriggeredLogs,
-      factoryLogs,
-      collectionLogs,
+      sessOpenLogs, sessCloseLogs, voteLogs, roleResLogs, rolesResLogs,
+      workPubLogs, workSessLogs, workArcLogs,
+      gcSchedLogs, gcTrigLogs,
+      factoryLogs, collectionLogs,
     ] = await Promise.all([
-      CORE ? getLogs(CORE, EV_MEMBER_REGISTERED, from, latest)  : Promise.resolve([]),
-      CORE ? getLogs(CORE, EV_ROLE_GRANTED,      from, latest)  : Promise.resolve([]),
-      CA   ? getLogs(CA,   EV_SESSION_OPENED,    from, latest)  : Promise.resolve([]),
-      CA   ? getLogs(CA,   EV_SESSION_CLOSED,    from, latest)  : Promise.resolve([]),
-      CA   ? getLogs(CA,   EV_VOTE_CAST,         from, latest)  : Promise.resolve([]),
-      CA   ? getLogs(CA,   EV_ROLE_RESOLVED,     from, latest)  : Promise.resolve([]),
-      CA   ? getLogs(CA,   EV_ROLES_RESOLVED,    from, latest)  : Promise.resolve([]),
-      WR   ? getLogs(WR,   EV_WORK_PUBLISHED,    from, latest)  : Promise.resolve([]),
-      WR   ? getLogs(WR,   EV_WORK_SESSION_INIT, from, latest)  : Promise.resolve([]),
-      WR   ? getLogs(WR,   EV_WORK_ARCHIVED,     from, latest)  : Promise.resolve([]),
-      GC   ? getLogs(GC,   EV_GC_SCHEDULED,      from, latest)  : Promise.resolve([]),
-      GC   ? getLogs(GC,   EV_GC_TRIGGERED,      from, latest)  : Promise.resolve([]),
-      FR   ? getLogs(FR,   EV_FACTORY_REGISTERED,from, latest)  : Promise.resolve([]),
-      CF   ? getLogs(CF,   EV_COLLECTION_CREATED, from, latest) : Promise.resolve([]),
+      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.MEMBER_REGISTERED,  from, latest) : [],
+      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.ROLE_GRANTED,       from, latest) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_OPENED,     from, latest) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_CLOSED,     from, latest) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.VOTE_CAST,          from, latest) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLE_RESOLVED,      from, latest) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLES_RESOLVED,     from, latest) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_PUBLISHED,     from, latest) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_SESSION_INIT,  from, latest) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_ARCHIVED,      from, latest) : [],
+      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_SCHEDULED,       from, latest) : [],
+      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_TRIGGERED,       from, latest) : [],
+      ADDR.FR   ? fetchLogs(ADDR.FR,   EV.FACTORY_REGISTERED, from, latest) : [],
+      ADDR.CF   ? fetchLogs(ADDR.CF,   EV.COLLECTION_CREATED, from, latest) : [],
     ]);
 
+    console.log(`[activity/events] fetch done in ${Date.now() - t0}ms`);
+
+    // ── 3. Parse logs into ActivityEvent ──────────────────────────────────
     const events: ActivityEvent[] = [];
 
-    // AssociationCore — MemberRegistered
     memberLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "MEMBER_REGISTERED", i),
-        tokenId:   Number(a.tokenId ?? 0),
+      const a = args(log);
+      events.push({ ...makeEv(log, "MEMBER_REGISTERED", i),
+        tokenId:   Number(a.tokenId  ?? 0),
         address:   String(a.ownerAddress ?? ""),
         timestamp: Number(a.timestamp ?? 0),
       });
     });
 
-    // AssociationCore — RoleGranted
     roleLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      const roleHash = String(a.role ?? "");
-      events.push({ ...makeEvent(log, "ROLE_GRANTED", i),
-        role:      roleHash,
-        roleLabel: ROLE_LABELS[roleHash],
-        tokenId:   Number(a.tokenId ?? 0),
+      const a = args(log);
+      const rh = String(a.role ?? "");
+      events.push({ ...makeEv(log, "ROLE_GRANTED", i),
+        role:      rh,
+        roleLabel: ROLE_LABELS[rh],
+        tokenId:   Number(a.tokenId  ?? 0),
         address:   String(a.holderAddress ?? ""),
       });
     });
 
-    // ConstituentAssembly — SessionOpened
-    sessionOpenLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "SESSION_OPENED", i),
+    sessOpenLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "SESSION_OPENED", i),
         sessionId: Number(a.sessionId ?? 0),
         timestamp: Number(a.timestamp ?? 0),
       });
     });
 
-    // ConstituentAssembly — SessionClosed
-    sessionCloseLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "SESSION_CLOSED", i),
+    sessCloseLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "SESSION_CLOSED", i),
         sessionId: Number(a.sessionId ?? 0),
         timestamp: Number(a.timestamp ?? 0),
       });
     });
 
-    // ConstituentAssembly — VoteCast
     voteLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      const roleHash = String(a.role ?? "");
-      events.push({ ...makeEvent(log, "VOTE_CAST", i),
-        sessionId:   Number(a.sessionId ?? 0),
-        tokenId:     Number(a.voterTokenId ?? 0),
+      const a = args(log);
+      const rh = String(a.role ?? "");
+      events.push({ ...makeEv(log, "VOTE_CAST", i),
+        sessionId:   Number(a.sessionId     ?? 0),
+        tokenId:     Number(a.voterTokenId  ?? 0),
         candidateId: Number(a.candidateTokenId ?? 0),
-        role:        roleHash,
-        roleLabel:   ROLE_LABELS[roleHash],
+        role:        rh,
+        roleLabel:   ROLE_LABELS[rh],
       });
     });
 
-    // ConstituentAssembly — RoleResolved
-    roleResolvedLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      const roleHash = String(a.role ?? "");
-      events.push({ ...makeEvent(log, "ROLE_RESOLVED", i),
-        sessionId: Number(a.sessionId ?? 0),
+    roleResLogs.forEach((log, i) => {
+      const a = args(log);
+      const rh = String(a.role ?? "");
+      events.push({ ...makeEv(log, "ROLE_RESOLVED", i),
+        sessionId: Number(a.sessionId     ?? 0),
         tokenId:   Number(a.winnerTokenId ?? 0),
-        role:      roleHash,
-        roleLabel: ROLE_LABELS[roleHash],
+        role:      rh,
+        roleLabel: ROLE_LABELS[rh],
         extra:     { voteCount: Number(a.voteCount ?? 0) },
       });
     });
 
-    // ConstituentAssembly — RolesResolved
-    rolesResolvedLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "ROLES_RESOLVED", i),
+    rolesResLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "ROLES_RESOLVED", i),
         sessionId: Number(a.sessionId ?? 0),
       });
     });
 
-    // WorkRegistry — WorkPublished
-    workLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "WORK_PUBLISHED", i),
-        workId:    Number(a.workId ?? 0),
+    workPubLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "WORK_PUBLISHED", i),
+        workId:    Number(a.workId        ?? 0),
         tokenId:   Number(a.authorTokenId ?? 0),
-        timestamp: Number(a.timestamp ?? 0),
+        timestamp: Number(a.timestamp     ?? 0),
         extra:     { rapporteurTokenId: Number(a.rapporteurTokenId ?? 0) },
       });
     });
 
-    // WorkRegistry — WorkSessionInitiated
-    workSessionLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "WORK_SESSION_INITIATED", i),
-        sessionId: Number(a.sessionId ?? 0),
+    workSessLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "WORK_SESSION_INITIATED", i),
+        sessionId: Number(a.sessionId   ?? 0),
         address:   String(a.initiatedBy ?? ""),
         timestamp: Number(a.initiatedAt ?? 0),
       });
     });
 
-    // WorkRegistry — WorkArchived
-    workArchivedLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "WORK_ARCHIVED", i),
-        workId:    Number(a.workId ?? 0),
+    workArcLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "WORK_ARCHIVED", i),
+        workId:    Number(a.workId     ?? 0),
         timestamp: Number(a.archivedAt ?? 0),
       });
     });
 
-    // GovernanceCalendar — EventScheduled
-    gcScheduledLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      const evType = String(a.eventType ?? "");
-      events.push({ ...makeEvent(log, "GC_SCHEDULED", i),
+    gcSchedLogs.forEach((log, i) => {
+      const a = args(log);
+      const et = String(a.eventType ?? "");
+      events.push({ ...makeEv(log, "GC_SCHEDULED", i),
         extra: {
-          eventId:       Number(a.eventId ?? 0),
-          eventType:     evType,
-          eventTypeLabel: GC_EVENT_LABELS[evType] ?? evType.slice(0, 10),
-          scheduledAt:   Number(a.scheduledAt ?? 0),
-          recurring:     Boolean(a.recurring),
+          eventId:        Number(a.eventId    ?? 0),
+          eventType:      et,
+          eventTypeLabel: GC_LABELS[et] ?? "Événement",
+          scheduledAt:    Number(a.scheduledAt ?? 0),
+          recurring:      Boolean(a.recurring),
         },
       });
     });
 
-    // GovernanceCalendar — EventTriggered
-    gcTriggeredLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      const evType = String(a.eventType ?? "");
-      events.push({ ...makeEvent(log, "GC_TRIGGERED", i),
+    gcTrigLogs.forEach((log, i) => {
+      const a = args(log);
+      const et = String(a.eventType ?? "");
+      events.push({ ...makeEv(log, "GC_TRIGGERED", i),
         address:   String(a.triggeredBy ?? ""),
-        timestamp: Number(a.timestamp ?? 0),
+        timestamp: Number(a.timestamp   ?? 0),
         extra: {
           eventId:        Number(a.eventId ?? 0),
-          eventType:      evType,
-          eventTypeLabel: GC_EVENT_LABELS[evType] ?? evType.slice(0, 10),
+          eventType:      et,
+          eventTypeLabel: GC_LABELS[et] ?? "Événement",
         },
       });
     });
 
-    // FactoryRegistry — FactoryRegistered
     factoryLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "FACTORY_REGISTERED", i),
-        address: String(a.factory ?? ""),
+      const a = args(log);
+      events.push({ ...makeEv(log, "FACTORY_REGISTERED", i),
+        address: String(a.factory     ?? ""),
         extra:   { factoryType: String(a.factoryType ?? "") },
       });
     });
 
-    // CollectionFactory — CollectionCreated
     collectionLogs.forEach((log, i) => {
-      const a = (log as { args?: Record<string, unknown> }).args ?? {};
-      events.push({ ...makeEvent(log, "COLLECTION_CREATED", i),
+      const a = args(log);
+      events.push({ ...makeEv(log, "COLLECTION_CREATED", i),
         tokenId:   Number(a.normieTokenId ?? 0),
-        address:   String(a.collection ?? ""),
-        timestamp: Number(a.timestamp ?? 0),
+        address:   String(a.collection   ?? ""),
+        timestamp: Number(a.timestamp    ?? 0),
         extra: {
-          name:   String(a.name ?? ""),
+          name:   String(a.name   ?? ""),
           symbol: String(a.symbol ?? ""),
         },
       });
     });
 
-    // Sort by block descending
+    // Sort: most recent first
     events.sort((a, b) => {
       const diff = BigInt(b.blockNumber) - BigInt(a.blockNumber);
       return diff > 0n ? 1 : diff < 0n ? -1 : 0;
     });
 
-    return NextResponse.json({
-      events,
-      meta: {
-        total:       events.length,
-        fromBlock:   String(from),
-        toBlock:     String(latest),
-        cachedUntil: Date.now() + 300_000,
-      },
+    // ── 4. Cache and return ────────────────────────────────────────────────
+    const now  = Date.now();
+    const meta = {
+      fromBlock:   String(from),
+      toBlock:     String(latest),
+      cachedAt:    now,
+      cachedUntil: now + CACHE_TTL_MS,
+    };
+
+    const payload: CachedPayload = { events, meta };
+    await writeCache(payload);
+
+    console.log(`[activity/events] ${events.length} events — cache miss, chain fetched in ${Date.now() - t0}ms`);
+
+    return NextResponse.json(payload, {
+      headers: { "X-Cache": "MISS" },
     });
 
   } catch (err) {
-    console.error("[activity/events]", err);
+    console.error("[activity/events] ERROR:", err);
     return NextResponse.json(
-      { events: [], error: "Chain read failed", detail: String(err) },
+      { events: [], meta: null, error: "Chain read failed", detail: String(err) },
       { status: 500 }
     );
   }
