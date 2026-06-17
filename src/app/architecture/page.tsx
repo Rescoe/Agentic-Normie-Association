@@ -12,17 +12,17 @@ export const metadata = {
 // ─── Contracts ────────────────────────────────────────────────────────────────
 
 const DEPLOYED = {
-  AssociationCore:     "0x218a2C38a16F81DcC944872264d79606b1DB1C40",
-  ConstituentAssembly: "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2",
-  WorkRegistry:        "0x68cBD92b0a1bcB737364945F22522BdD4324EeCE",
-  FactoryRegistry:     "0xCB440879cb709aC4176B1e098B26fd350232e670",
+  AssociationCore:     process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS     ?? "0x218a2C38a16F81DcC944872264d79606b1DB1C40",
+  ConstituentAssembly: process.env.NEXT_PUBLIC_CONSTITUENT_ASSEMBLY_ADDRESS ?? "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2",
+  WorkRegistry:        process.env.NEXT_PUBLIC_WORK_REGISTRY_ADDRESS        ?? "—",
+  FactoryRegistry:     process.env.NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS     ?? "0xCB440879cb709aC4176B1e098B26fd350232e670",
   NormiesERC721:       "0x9Eb6E2025B64f340691e424b7fe7022fFDE12438",
 } as const;
 
-const PENDING = {
-  GovernanceCalendar: "— après redéploiement",
-  TreasuryModule:     "— après redéploiement",
-  CollectionFactory:  "— après redéploiement",
+const DEPLOYED_MODULES = {
+  GovernanceCalendar: process.env.NEXT_PUBLIC_GOVERNANCE_CALENDAR_ADDRESS ?? "—",
+  TreasuryModule:     process.env.NEXT_PUBLIC_TREASURY_MODULE_ADDRESS     ?? "—",
+  CollectionFactory:  process.env.NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS  ?? "—",
 } as const;
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ export default function ArchitecturePage() {
                 <div className="border border-[--border] p-2.5 space-y-1.5">
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono text-[10px] font-bold">GovernanceCalendar</span>
-                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                    <span className="font-mono text-[9px] border border-green-400 text-green-700 px-1 leading-none py-0.5">DÉPLOYÉ</span>
                   </div>
                   <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
                     <li><span className="opacity-50">→</span> 6 types d'events : INSCRIPTION_OPEN,</li>
@@ -222,15 +222,15 @@ export default function ArchitecturePage() {
                     <li><span className="opacity-50">→</span> factories: bytes32 → address</li>
                     <li><span className="opacity-50">→</span> registerFactory(type, addr) — owner</li>
                     <li><span className="opacity-50">→</span> getFactory(type) → address — public</li>
-                    <li><span className="opacity-50">→</span> actuellement vide — CollectionFactory</li>
-                    <li><span className="opacity-50 invisible">→</span> à enregistrer après déploiement</li>
+                    <li><span className="opacity-50">→</span> CollectionFactory enregistré</li>
+                    <li><span className="opacity-50 invisible">→</span> clé : keccak256("NORMIE_COLLECTION")</li>
                   </ul>
                 </div>
 
                 <div className="border border-dashed border-orange-300 p-2.5 space-y-1.5">
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono text-[10px] font-bold">CollectionFactory</span>
-                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                    <span className="font-mono text-[9px] border border-green-400 text-green-700 px-1 leading-none py-0.5">DÉPLOYÉ</span>
                   </div>
                   <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
                     <li><span className="opacity-50">→</span> vérifie core.isMember(tokenId)</li>
@@ -245,7 +245,7 @@ export default function ArchitecturePage() {
                 <div className="border border-dashed border-orange-300 p-2.5 space-y-1.5">
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono text-[10px] font-bold">TreasuryModule</span>
-                    <span className="font-mono text-[9px] border border-orange-400 text-orange-700 px-1 leading-none py-0.5">À DÉPLOYER</span>
+                    <span className="font-mono text-[9px] border border-green-400 text-green-700 px-1 leading-none py-0.5">DÉPLOYÉ</span>
                   </div>
                   <ul className="space-y-0.5 text-[10px] font-mono text-[--fg-muted]">
                     <li><span className="opacity-50">→</span> splits en BPS (basis points, /10 000)</li>
@@ -521,7 +521,7 @@ const { data } = useReadContract({
             <SectionTitle
               tag="Factories"
               title="FactoryRegistry ≠ CollectionFactory."
-              sub="Deux contrats distincts avec deux rôles orthogonaux. FactoryRegistry est déployé. CollectionFactory est écrit — il attend son déploiement."
+              sub="Deux contrats distincts avec deux rôles orthogonaux. FactoryRegistry = annuaire. CollectionFactory = logique de déploiement. Les deux sont déployés et liés."
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
 
@@ -544,17 +544,16 @@ const { data } = useReadContract({
                 </ul>
                 <p className="font-mono text-xs text-[--fg-muted] break-all">{DEPLOYED.FactoryRegistry}</p>
                 <div className="border-t border-[--border] pt-3">
-                  <p className="text-xs text-[--fg-muted] italic">
-                    Actuellement vide — CollectionFactory doit être enregistré après déploiement via
-                    <code className="bg-[--bg-card] px-1 ml-1">registerFactory(keccak256("NORMIE_COLLECTION"), collectionFactoryAddr)</code>
+                  <p className="text-xs text-[--fg-muted] font-mono">
+                    CollectionFactory enregistré ✓ — clé : keccak256("NORMIE_COLLECTION")
                   </p>
                 </div>
               </div>
 
-              <div className="border-2 border-orange-300 bg-[--bg] p-6 space-y-4">
+              <div className="border-2 border-[--border] bg-[--bg] p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <p className="font-bold">CollectionFactory</p>
-                  <span className="font-mono text-xs border border-orange-400 text-orange-700 bg-orange-50 px-2 py-0.5">À DÉPLOYER</span>
+                  <span className="font-mono text-xs border border-green-400 text-green-700 bg-green-50 px-2 py-0.5">DÉPLOYÉ</span>
                 </div>
                 <p className="text-sm text-[--fg-muted] font-semibold">Rôle : logique de déploiement</p>
                 <p className="text-sm text-[--fg-muted] leading-relaxed">
@@ -569,10 +568,8 @@ const { data } = useReadContract({
                   <li className="pl-4 text-xs">déploie <code className="bg-[--bg-card] px-1">new NormieCollection(name, symbol, tokenId, minter)</code></li>
                   <li>→ <code className="bg-[--bg-card] px-1">getCollectionsOf(tokenId) → address[]</code></li>
                 </ul>
-                <div className="border-t border-[--border] pt-3">
-                  <p className="text-xs text-[--fg-muted] italic">
-                    Après déploiement : enregistrer dans FactoryRegistry + ajouter l'adresse dans .env.local
-                  </p>
+                <div className="border-t border-[--border] pt-3 font-mono text-xs text-[--fg-muted] break-all">
+                  {DEPLOYED_MODULES.CollectionFactory}
                 </div>
               </div>
 
@@ -622,19 +619,20 @@ const { data } = useReadContract({
 
             <div className="space-y-2 mt-8">
               <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
-                Écrits, en attente de déploiement — Base mainnet
+                Modules déployés — Base mainnet
               </p>
               {[
-                { name: "GovernanceCalendar", addr: PENDING.GovernanceCalendar, note: "Calendrier de gouvernance — trigger permissionless, récurrence", tag: "GOV" },
-                { name: "TreasuryModule",     addr: PENDING.TreasuryModule,     note: "Trésorerie — splits BPS par rôle, pull payment", tag: "TRÉSO" },
-                { name: "CollectionFactory",  addr: PENDING.CollectionFactory,  note: "Déploie NormieCollection — membres uniquement, via AssociationCore", tag: "FACTORY" },
+                { name: "GovernanceCalendar", addr: DEPLOYED_MODULES.GovernanceCalendar, note: "Calendrier de gouvernance — trigger permissionless, récurrence", tag: "GOV" },
+                { name: "TreasuryModule",     addr: DEPLOYED_MODULES.TreasuryModule,     note: "Trésorerie — splits BPS par rôle, pull payment", tag: "TRÉSO" },
+                { name: "CollectionFactory",  addr: DEPLOYED_MODULES.CollectionFactory,  note: "Déploie NormieCollection — membres uniquement, via AssociationCore", tag: "FACTORY" },
               ].map((c) => (
-                <div key={c.name} className="border border-dashed border-orange-300 p-4 space-y-1">
+                <div key={c.name} className="border border-[--border] p-4 space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-bold text-sm text-[--fg-muted]">{c.name}</p>
-                    <span className="font-mono text-xs border border-orange-300 text-orange-700 px-1.5 py-0.5">{c.tag}</span>
+                    <p className="font-bold text-sm">{c.name}</p>
+                    <span className="font-mono text-xs border border-green-400 text-green-700 px-1.5 py-0.5">DÉPLOYÉ</span>
+                    <span className="font-mono text-xs border border-[--border] text-[--fg-muted] px-1.5 py-0.5">{c.tag}</span>
                   </div>
-                  <p className="font-mono text-xs text-[--fg-muted]">{c.addr}</p>
+                  <p className="font-mono text-xs text-[--fg-muted] break-all">{c.addr}</p>
                   <p className="text-xs text-[--fg-muted]">{c.note}</p>
                 </div>
               ))}
@@ -655,14 +653,13 @@ const { data } = useReadContract({
             </div>
 
             <div className="border border-[--border] bg-[--bg-card] p-6 mt-8 space-y-3">
-              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Étapes post-déploiement Sprint 2</p>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Prochaines étapes</p>
               <ol className="space-y-1.5">
                 {[
-                  "Déployer GovernanceCalendar, TreasuryModule, CollectionFactory",
-                  "Appeler GovernanceCalendar.initializeFoundingSchedule() depuis /admin",
-                  "Appeler FactoryRegistry.registerFactory(keccak256(\"NORMIE_COLLECTION\"), collectionFactoryAddr)",
-                  "Ajouter les 3 adresses NEXT_PUBLIC_* dans .env.local",
-                  "Tester le flow complet depuis /admin → auto-vote simulation",
+                  "Tester le flow complet GovernanceCalendar → initializeFoundingSchedule()",
+                  "Tester CollectionFactory → createCollection() depuis /admin",
+                  "Tester TreasuryModule → withdraw() pour les role holders",
+                  "Minter des éditions ERC-721 NormieCollection via le pipeline de publication",
                 ].map((step, i) => (
                   <li key={i} className="flex items-start gap-3">
                     <span className="font-mono text-xs text-[--fg-muted] shrink-0">{String(i + 1).padStart(2, "0")}</span>

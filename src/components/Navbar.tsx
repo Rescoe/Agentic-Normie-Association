@@ -37,10 +37,13 @@ const NAV = [
   },
   {
     label: "Docs",
-    href:  "/data",
+    href:  "/docs",
     children: [
-      { href: "/data",         label: "API & Données",  desc: "Endpoints et données on-chain" },
-      { href: "/architecture", label: "Architecture",   desc: "Contrats, schémas, sécurité" },
+      { href: "/docs",              label: "Vue d'ensemble",        desc: "Architecture de l'écosystème" },
+      { href: "/docs/api",          label: "API ANA",               desc: "Endpoints, formats, exemples" },
+      { href: "/docs/contracts",    label: "Contrats",              desc: "Adresses, ABIs, lecture on-chain" },
+      { href: "/docs/gouvernance",  label: "Gouvernance technique", desc: "Sessions, votes, rôles — détail" },
+      { href: "/docs/creation",     label: "Création",              desc: "Du vote à l'œuvre on-chain" },
     ],
   },
 ];

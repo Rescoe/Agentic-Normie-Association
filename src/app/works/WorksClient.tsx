@@ -172,6 +172,8 @@ type WorkTab = "none" | "oeuvre" | "certificat";
 
 function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
   const [tab, setTab] = useState<WorkTab>("none");
+  const [poemState, setPoemState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [poemText, setPoemText]   = useState<string | null>(null);
   const date = work.publishedAt ? new Date(work.publishedAt) : null;
   const trio = [
     { label: "Auteur",      tid: work.authorTokenId,      name: work.authorName },
@@ -180,6 +182,31 @@ function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
   ];
 
   const certUrl = `/api/works/html/${onChainId}`;
+
+  // Fetch + parse the HTML certificate on-chain to extract the poem text
+  useEffect(() => {
+    if (tab !== "oeuvre" || poemState !== "idle") return;
+    setPoemState("loading");
+    fetch(certUrl)
+      .then(r => r.text())
+      .then(html => {
+        const parser   = new DOMParser();
+        const doc      = parser.parseFromString(html, "text/html");
+        const sections = Array.from(doc.querySelectorAll("section"));
+        for (const section of sections) {
+          const lbl = section.querySelector(".lbl");
+          if (lbl?.textContent?.startsWith("Œuvre")) {
+            const block = section.querySelector(".block");
+            const text  = block?.textContent?.trim() ?? null;
+            setPoemText(text);
+            setPoemState("done");
+            return;
+          }
+        }
+        setPoemState("done"); // section absent = œuvre interactive (JS)
+      })
+      .catch(() => setPoemState("error"));
+  }, [tab, poemState, certUrl]);
 
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col">
@@ -247,16 +274,27 @@ function WorkCard({ work, onChainId }: { work: ANAWork; onChainId: number }) {
             </button>
           </div>
 
-          {/* Onglet Œuvre — texte du poème/prose */}
+          {/* Onglet Œuvre — texte extrait du certificat on-chain */}
           {tab === "oeuvre" && (
-            <div className="bg-[--bg] px-5 py-6 max-h-[420px] overflow-y-auto">
-              {work.artworkText ? (
-                <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
-                  {work.artworkText}
+            <div className="bg-[--bg] px-5 py-6 min-h-[120px] max-h-[420px] overflow-y-auto flex items-start">
+              {poemState === "loading" && (
+                <p className="font-mono text-xs text-[--fg-muted] italic animate-pulse">
+                  Lecture on-chain…
+                </p>
+              )}
+              {poemState === "done" && poemText && (
+                <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg] w-full">
+                  {poemText}
                 </pre>
-              ) : (
+              )}
+              {poemState === "done" && !poemText && (
                 <p className="font-mono text-xs text-[--fg-muted] italic">
-                  Texte non disponible — ouvrez le certificat pour voir l'œuvre complète.
+                  Œuvre interactive — ouvrez le certificat pour exécuter l'œuvre.
+                </p>
+              )}
+              {poemState === "error" && (
+                <p className="font-mono text-xs text-[--fg-muted] italic">
+                  Erreur de lecture — ouvrez le certificat pour voir l'œuvre.
                 </p>
               )}
             </div>
