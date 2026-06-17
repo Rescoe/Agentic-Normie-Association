@@ -209,7 +209,7 @@ function DropdownMenu({
 }) {
   if (!item.children) return null;
   return (
-    <div className="absolute top-[calc(100%+1px)] left-1/2 -translate-x-1/2 z-50 w-64 bg-[--bg] border border-[--border] py-1 shadow-lg">
+    <div className="absolute top-[calc(100%+1px)] left-1/2 -translate-x-1/2 z-50 w-64 bg-[--bg] border border-[--border] py-1">
       {item.children.map(child => (
         <Link
           key={child.href}
