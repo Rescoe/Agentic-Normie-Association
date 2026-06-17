@@ -271,15 +271,17 @@ const TOPIC_LABELS: Record<string, string> = {
 };
 
 function FilterBar({
-  messages, filter, onChange,
+  messages, filter, onChange, getName,
 }: {
   messages: SalonMessage[];
   filter:   MessageFilter;
   onChange: (f: MessageFilter) => void;
+  getName:  (id: number) => string;
 }) {
   const agents = Array.from(
-    new Map(messages.map(m => [m.tokenId, m.name])).entries()
-  ).sort((a, b) => a[1].localeCompare(b[1]));
+    new Set(messages.map(m => m.tokenId))
+  ).map(id => [id, getName(id)] as [number, string])
+   .sort((a, b) => a[1].localeCompare(b[1]));
 
   // Only show topic chips that have messages
   const topics = Array.from(new Set(messages.map(m => m.topic).filter(Boolean))) as string[];
@@ -303,7 +305,7 @@ function FilterBar({
         >
           <option value="">Tous les agents</option>
           {agents.map(([id, name]) => (
-            <option key={id} value={id}>{name} #{id}</option>
+            <option key={id} value={id}>{name} <span className="text-[--fg-muted]">#{id}</span></option>
           ))}
         </select>
         {hasFilter && (
@@ -356,6 +358,7 @@ function SalonChat({
   // Resolved real names for messages stored with "Normie #X" fallback
   const [nameMap,       setNameMap]       = useState<Map<number, string>>(new Map());
   const fetchingIds = useRef<Set<number>>(new Set());
+  const getName = useCallback((id: number) => nameMap.get(id) ?? `#${id}`, [nameMap]);
   const [stimulating,   setStimulating]   = useState(false);
   const [stimResult,    setStimResult]    = useState<string | null>(null);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
@@ -543,7 +546,7 @@ function SalonChat({
       </div>
 
       {/* Filter bar */}
-      <FilterBar messages={messages} filter={filter} onChange={setFilter} />
+      <FilterBar messages={messages} filter={filter} onChange={setFilter} getName={getName} />
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
@@ -576,7 +579,14 @@ function SalonChat({
         ) : (
           <div className="space-y-1">
             {filteredMessages.map(msg => (
-              <MessageBubble key={msg.id} msg={msg} onAvatarClick={onAvatarClick} resolvedName={nameMap.get(msg.tokenId)} />
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                resolvedName={nameMap.get(msg.tokenId)}
+                onAvatarClick={(tokenId, _fallbackName, imageUrl) =>
+                  onAvatarClick(tokenId, getName(tokenId), imageUrl)
+                }
+              />
             ))}
           </div>
         )}
@@ -733,7 +743,7 @@ function SalonSidebar({
                 </div>
                 {last ? (
                   <p className="font-mono text-[10px] text-[--fg-muted] truncate">
-                    {last.name}: {last.content.slice(0, 45)}{last.content.length > 45 ? "…" : ""}
+                    <span className="text-[--fg]">#{last.tokenId}</span> {last.content.slice(0, 40)}{last.content.length > 40 ? "…" : ""}
                   </p>
                 ) : (
                   <p className="font-mono text-[10px] text-[--fg-muted]">Aucun échange</p>
