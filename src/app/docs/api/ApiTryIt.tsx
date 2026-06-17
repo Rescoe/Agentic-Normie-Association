@@ -2,8 +2,6 @@
 
 import { useState } from "react";
 
-const BASE = "https://agentic-normie-association.xyz";
-
 interface ApiTryItProps {
   path:         string;
   paramName?:   string;
@@ -17,34 +15,27 @@ export function ApiTryIt({ path, paramName, paramDefault = "", paramDesc }: ApiT
   const [loading,    setLoading]    = useState(false);
   const [status,     setStatus]     = useState<number | null>(null);
 
-  const resolvedPath = paramName
-    ? path
-        .replace("[id]",      paramValue || paramDefault)
-        .replace("[address]", paramValue || paramDefault)
-    : paramName === undefined && path.includes("?")
-      ? path.replace(/=<[^>]+>/, `=${paramValue || paramDefault}`)
-      : path.replace(/\?.*/, `?${paramName}=${paramValue || paramDefault}`);
-
-  // Build full URL: handle both path params and query params
-  function buildUrl(): string {
-    if (!paramName) return `${BASE}${path}`;
-    const filled = path
+  // Builds the resolved API path (relative) — works on preview AND prod
+  function buildRelativePath(): string {
+    if (!paramName) return path;
+    return path
       .replace("[id]",      paramValue || paramDefault)
       .replace("[address]", paramValue || paramDefault)
       .replace(/<[^>]+>/g,  paramValue || paramDefault);
-    // Handle query param pattern like ?tokenId=<id>
-    if (filled.includes("?") && !filled.includes("[")) return `${BASE}${filled}`;
-    return `${BASE}${filled}`;
   }
 
-  const url = buildUrl();
+  const relativePath = buildRelativePath();
+  // Absolute URL for the "Ouvrir" button — always uses current origin
+  const absoluteUrl  = typeof window !== "undefined"
+    ? `${window.location.origin}${relativePath}`
+    : relativePath;
 
   const tryIt = async () => {
     setLoading(true);
     setResult(null);
     setStatus(null);
     try {
-      const res  = await fetch(url);
+      const res  = await fetch(relativePath);
       setStatus(res.status);
       const ct = res.headers.get("content-type") ?? "";
       if (ct.includes("text/html")) {
@@ -80,7 +71,7 @@ export function ApiTryIt({ path, paramName, paramDefault = "", paramDesc }: ApiT
         )}
 
         <code className="font-mono text-[10px] text-[--fg-muted] flex-1 truncate hidden sm:block">
-          {url}
+          {relativePath}
         </code>
 
         <div className="flex gap-2 shrink-0">
@@ -92,7 +83,7 @@ export function ApiTryIt({ path, paramName, paramDefault = "", paramDesc }: ApiT
             {loading ? "…" : "▶ Tester"}
           </button>
           <a
-            href={url}
+            href={absoluteUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] px-3 py-1 transition-colors whitespace-nowrap"

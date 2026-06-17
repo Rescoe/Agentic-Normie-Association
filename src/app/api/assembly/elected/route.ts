@@ -30,44 +30,55 @@ const client = createPublicClient({
 const CORE = CONTRACT_ADDRESSES.AssociationCore as `0x${string}`;
 const ZERO = "0x0000000000000000000000000000000000000000";
 
+const EMPTY_ASSIGNMENT = { tokenId: 0n, holderAddress: ZERO, assignedAt: 0n };
+
 export async function GET() {
   if (!CORE) {
-    return NextResponse.json({ error: "AssociationCore not configured" }, { status: 500 });
+    return NextResponse.json({ elected: [], error: "AssociationCore not configured" }, { status: 503 });
   }
 
   const roleEntries = Object.entries(ROLES) as [string, `0x${string}`][];
 
-  const assignments = await Promise.all(
-    roleEntries.map(([, roleHash]) =>
-      client.readContract({
-        address:      CORE,
-        abi:          ASSOCIATION_CORE_ABI,
-        functionName: "getRoleHolder",
-        args:         [roleHash],
-      }) as Promise<{ tokenId: bigint; holderAddress: string; assignedAt: bigint }>
-    )
-  );
+  try {
+    const assignments = await Promise.all(
+      roleEntries.map(([, roleHash]) =>
+        (client.readContract({
+          address:      CORE,
+          abi:          ASSOCIATION_CORE_ABI,
+          functionName: "getRoleHolder",
+          args:         [roleHash],
+        }) as Promise<{ tokenId: bigint; holderAddress: string; assignedAt: bigint }>)
+          .catch(() => EMPTY_ASSIGNMENT)
+      )
+    );
 
-  const elected: ElectedMember[] = await Promise.all(
-    roleEntries.map(async ([roleName, roleHash], i) => {
-      const ra = assignments[i];
-      const isElected = ra.holderAddress !== ZERO && ra.tokenId > 0n;
+    const elected: ElectedMember[] = await Promise.all(
+      roleEntries.map(async ([roleName, roleHash], i) => {
+        const ra = assignments[i];
+        const isElected = ra.holderAddress !== ZERO && Number(ra.tokenId) > 0;
 
-      let persona: NormiePersona | null = null;
-      if (isElected) {
-        persona = await buildPersona(Number(ra.tokenId)).catch(() => null);
-      }
+        let persona: NormiePersona | null = null;
+        if (isElected) {
+          persona = await buildPersona(Number(ra.tokenId)).catch(() => null);
+        }
 
-      return {
-        role:          roleHash,
-        roleLabel:     ROLE_LABELS[roleHash] ?? roleName,
-        tokenId:       Number(ra.tokenId),
-        holderAddress: ra.holderAddress,
-        assignedAt:    Number(ra.assignedAt),
-        persona,
-      };
-    })
-  );
+        return {
+          role:          roleHash,
+          roleLabel:     ROLE_LABELS[roleHash] ?? roleName,
+          tokenId:       Number(ra.tokenId),
+          holderAddress: ra.holderAddress,
+          assignedAt:    Number(ra.assignedAt),
+          persona,
+        };
+      })
+    );
 
-  return NextResponse.json({ elected });
+    return NextResponse.json({ elected });
+  } catch (err) {
+    console.error("[assembly/elected]", err);
+    return NextResponse.json(
+      { elected: [], error: "Chain read failed", detail: String(err) },
+      { status: 500 }
+    );
+  }
 }
