@@ -488,7 +488,7 @@ function SalonExchangeSection() {
     try {
       const res  = await fetch("/api/keeper/salon-exchange", {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
         body:    JSON.stringify(salonId ? { salonId } : {}),
       });
       const data = await res.json() as Record<string, unknown>;
@@ -740,6 +740,32 @@ type ANAWorkSummary = {
   proposedByName: string; proposedAt: number; stateHistory: Array<{ state: string; at: number; note?: string }>;
 };
 
+type ANAWorkFull = ANAWorkSummary & {
+  proposal?: string;
+  brief?: string;
+  artworkText?: string;
+  artForm?: string;
+  editionPrice?: string;
+  editionSupply?: number;
+  validationNote?: string;
+  txHash?: string;
+  onChainWorkId?: number;
+  collectionAddress?: string;
+  publishedAt?: number;
+  revisionCount?: number;
+  rapporteurName?: string;
+  authorName?: string;
+  curatorName?: string;
+  rapporteurTokenId?: number;
+  authorTokenId?: number;
+  curatorTokenId?: number;
+  votes?: Array<{ tokenId: number; name: string; vote: string; reason: string }>;
+  yesCount?: number;
+  noCount?: number;
+  absCount?: number;
+  voteResult?: string;
+};
+
 const STATE_COLOR: Record<string, string> = {
   PROPOSED:     "text-blue-600",
   VOTE_OPEN:    "text-yellow-600",
@@ -758,7 +784,6 @@ function WorkStatusSection() {
   const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
   const [lcError,  setLcError]  = useState<string | null>(null);
   const [lcRunning, setLcRunning] = useState(false);
-
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -790,7 +815,7 @@ function WorkStatusSection() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <button
           onClick={runLifecycle}
           disabled={lcRunning}
@@ -876,6 +901,403 @@ function WorkStatusSection() {
             ))}
           </div>
         </details>
+      )}
+    </div>
+  );
+}
+
+// ─── WorkTestPipelineSection ─────────────────────────────────────────────────
+
+type StepLog = {
+  stepNum:  number;
+  phase:    string;
+  from:     string;
+  to:       string;
+  advanced: boolean;
+  error?:   string;
+  elapsed:  number;
+  snapshot: Partial<ANAWorkFull>;
+};
+
+const STATE_ORDER: string[] = [
+  "PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING","PUBLISHED",
+];
+
+function WorkTestPipelineSection() {
+  const [running,    setRunning]    = useState(false);
+  const [logs,       setLogs]       = useState<StepLog[]>([]);
+  const [work,       setWork]       = useState<ANAWorkFull | null>(null);
+  const [phase,      setPhase]      = useState("");
+  const [expanded,   setExpanded]   = useState<number | null>(null);
+  const [finalState, setFinalState] = useState<"none"|"published"|"rejected"|"error">("none");
+  const [resetting,  setResetting]  = useState(false);
+
+  const fetchWork = useCallback(async (id: string): Promise<ANAWorkFull | null> => {
+    const r = await fetch("/api/works");
+    if (!r.ok) return null;
+    const all = await r.json() as ANAWorkFull[];
+    return all.find(w => w.id === id) ?? null;
+  }, []);
+
+  const appendLog = useCallback((log: StepLog) => {
+    setLogs(prev => [...prev, log]);
+  }, []);
+
+  const runPipeline = async () => {
+    setRunning(true);
+    setLogs([]);
+    setWork(null);
+    setPhase("");
+    setFinalState("none");
+    setExpanded(null);
+
+    try {
+      // ── 1. Propose a work ──────────────────────────────────────────────────
+      setPhase("Proposition en cours (LLM)…");
+      const t0 = Date.now();
+      const r1 = await fetch("/api/keeper/propose-work", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+      });
+      const d1 = await r1.json() as { work?: { id: string; title: string; proposedBy: string; state: string }; error?: string };
+      if (!r1.ok || !d1.work?.id) throw new Error(d1.error ?? "propose-work failed");
+      const workId = d1.work.id;
+
+      const proposed = await fetchWork(workId);
+      setWork(proposed);
+      appendLog({
+        stepNum: 0, phase: "Proposition", from: "—", to: "PROPOSED",
+        advanced: true, elapsed: Date.now() - t0,
+        snapshot: { title: proposed?.title, proposal: proposed?.proposal, proposedByName: proposed?.proposedByName },
+      });
+
+      // ── 2. Auto-advance until PUBLISHED / REJECTED / error ────────────────
+      let currentState = "PROPOSED";
+      let stepNum = 1;
+      const MAX_STEPS = 14;
+
+      while (stepNum <= MAX_STEPS && !["PUBLISHED","REJECTED"].includes(currentState)) {
+        const stepLabel = {
+          PROPOSED:     "Ouverture du vote (+ salon dédié)",
+          VOTE_OPEN:    "Votes LLM (tous les membres)",
+          VOTE_TALLIED: "Dépouillement + attribution rôles",
+          BRIEFING:     "Brief rapporteur (LLM)",
+          CREATING:     "Création de l'œuvre (LLM)",
+          VALIDATING:   "Validation curateur (LLM)",
+          PUBLISHING:   "Publication on-chain (Base tx)",
+        }[currentState] ?? currentState;
+
+        setPhase(`Étape ${stepNum} — ${stepLabel}…`);
+        const tStep = Date.now();
+
+        const r = await fetch("/api/keeper/work-lifecycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        });
+        const d = await r.json() as {
+          results?: Array<{ id: string; from: string; to: string; advanced: boolean; error?: string }>;
+          error?: string;
+        };
+
+        if (!r.ok) throw new Error(d.error ?? `lifecycle HTTP ${r.status}`);
+
+        const wResult = d.results?.find(rr => rr.id === workId);
+        const newState = wResult?.to ?? currentState;
+        const advanced = wResult?.advanced ?? false;
+        const lcError  = wResult?.error;
+
+        const fresh = await fetchWork(workId);
+        if (fresh) setWork(fresh);
+
+        appendLog({
+          stepNum, phase: stepLabel,
+          from: wResult?.from ?? currentState, to: newState,
+          advanced, elapsed: Date.now() - tStep,
+          error: lcError,
+          snapshot: {
+            votes:            fresh?.votes,
+            yesCount:         fresh?.yesCount,
+            noCount:          fresh?.noCount,
+            absCount:         fresh?.absCount,
+            voteResult:       fresh?.voteResult,
+            rapporteurName:   fresh?.rapporteurName,
+            authorName:       fresh?.authorName,
+            curatorName:      fresh?.curatorName,
+            brief:            fresh?.brief,
+            artForm:          fresh?.artForm,
+            editionPrice:     fresh?.editionPrice,
+            editionSupply:    fresh?.editionSupply,
+            artworkText:      fresh?.artworkText,
+            validationNote:   fresh?.validationNote,
+            revisionCount:    fresh?.revisionCount,
+            txHash:           fresh?.txHash,
+            onChainWorkId:    fresh?.onChainWorkId,
+            collectionAddress: fresh?.collectionAddress,
+            publishedAt:      fresh?.publishedAt,
+          },
+        });
+
+        if (lcError && !advanced) {
+          setFinalState("error");
+          setPhase(`Erreur à l'étape ${stepNum} (${currentState})`);
+          break;
+        }
+
+        currentState = newState;
+        stepNum++;
+
+        // Small pause between steps so Neon has time to settle
+        if (!["PUBLISHED","REJECTED"].includes(currentState)) {
+          await new Promise(res => setTimeout(res, 800));
+        }
+      }
+
+      if (currentState === "PUBLISHED") { setFinalState("published"); setPhase("✓ Œuvre publiée on-chain !"); }
+      else if (currentState === "REJECTED") { setFinalState("rejected"); setPhase("✗ Œuvre rejetée."); }
+      else if (stepNum > MAX_STEPS) { setPhase(`Arrêt après ${MAX_STEPS} étapes — état actuel : ${currentState}`); }
+
+    } catch (e) {
+      setFinalState("error");
+      setPhase(`Erreur : ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const resetWorks = async () => {
+    if (!confirm("Reset tous les works (Neon) ?")) return;
+    setResetting(true);
+    try {
+      await fetch("/api/keeper/reset-works", { method: "POST", headers: { "x-admin-call": "1" } });
+      setLogs([]); setWork(null); setFinalState("none"); setPhase("");
+    } finally { setResetting(false); }
+  };
+
+  const progressPct = work
+    ? Math.round((Math.max(STATE_ORDER.indexOf(work.state), 0) / (STATE_ORDER.length - 1)) * 100)
+    : 0;
+
+  return (
+    <div className="space-y-5">
+
+      {/* Controls */}
+      <div className="flex flex-wrap gap-3 items-center">
+        <button
+          onClick={() => void runPipeline()}
+          disabled={running || resetting}
+          className={`font-mono text-xs px-5 py-2.5 transition-colors disabled:opacity-40 disabled:cursor-wait ${
+            finalState === "published" ? "bg-green-100 text-green-700 border border-green-300" :
+            finalState === "error"     ? "border border-red-400 text-red-600" :
+            "bg-[--fg] text-[--bg] hover:opacity-80"
+          }`}
+        >
+          {running ? (
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin inline-block" />
+              Pipeline en cours…
+            </span>
+          ) : finalState === "none" ? "▶ Lancer le pipeline de test complet" : "▶ Relancer"}
+        </button>
+        {logs.length > 0 && (
+          <button
+            onClick={() => void resetWorks()}
+            disabled={running || resetting}
+            className="font-mono text-xs border border-red-300 text-red-500 px-4 py-2.5 hover:bg-red-50 disabled:opacity-40"
+          >
+            {resetting ? "Reset…" : "🗑 Reset works Neon"}
+          </button>
+        )}
+      </div>
+
+      {/* Phase label */}
+      {phase && (
+        <p className={`font-mono text-xs ${
+          finalState === "published" ? "text-green-600" :
+          finalState === "rejected"  ? "text-orange-600" :
+          finalState === "error"     ? "text-red-600" :
+          "text-[--fg-muted]"
+        }`}>{phase}</p>
+      )}
+
+      {/* Progress bar */}
+      {work && (
+        <div className="space-y-1">
+          <div className="flex justify-between font-mono text-[10px] text-[--fg-muted]">
+            {STATE_ORDER.map(s => (
+              <span key={s} className={work.state === s ? "text-[--fg] font-bold" : ""}>{s.slice(0,4)}</span>
+            ))}
+          </div>
+          <div className="h-1.5 bg-[--border] w-full">
+            <div
+              className={`h-full transition-all duration-700 ${
+                finalState === "published" ? "bg-green-500" :
+                finalState === "rejected"  ? "bg-orange-400" :
+                finalState === "error"     ? "bg-red-400" :
+                "bg-[--fg]"
+              }`}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <p className="font-mono text-[10px] text-[--fg-muted]">
+            {work.title} — <span className={STATE_COLOR[work.state] ?? ""}>{work.state}</span>
+          </p>
+        </div>
+      )}
+
+      {/* Step logs */}
+      {logs.length > 0 && (
+        <div className="space-y-2">
+          {logs.map((log, i) => (
+            <div
+              key={i}
+              className={`border p-3 cursor-pointer transition-colors hover:bg-[--bg-card] ${
+                log.error    ? "border-red-300 bg-red-50/10" :
+                log.advanced ? "border-green-300 bg-green-50/10" :
+                               "border-[--border]"
+              }`}
+              onClick={() => setExpanded(expanded === i ? null : i)}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <span className={`font-mono text-[10px] px-1.5 py-0.5 border ${
+                    log.advanced ? "border-green-400 text-green-700" : "border-red-300 text-red-500"
+                  }`}>
+                    {log.advanced ? "✓" : "✗"}
+                  </span>
+                  <span className="font-mono text-xs font-bold">
+                    {log.from} {log.from !== log.to ? `→ ${log.to}` : "(inchangé)"}
+                  </span>
+                  <span className="font-mono text-[10px] text-[--fg-muted]">{log.phase}</span>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="font-mono text-[10px] text-[--fg-muted]">{(log.elapsed / 1000).toFixed(1)}s</span>
+                  <span className="font-mono text-[10px] text-[--fg-muted]">{expanded === i ? "▲" : "▼"}</span>
+                </div>
+              </div>
+
+              {/* Error */}
+              {log.error && (
+                <p className="font-mono text-xs text-red-600 mt-1.5">{log.error}</p>
+              )}
+
+              {/* Expanded detail */}
+              {expanded === i && (
+                <div className="mt-3 space-y-3 border-t border-[--border] pt-3">
+
+                  {/* Proposal */}
+                  {log.snapshot.proposal && (
+                    <div>
+                      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-wider mb-1">Proposition</p>
+                      <p className="font-mono text-xs leading-relaxed">{log.snapshot.proposal}</p>
+                    </div>
+                  )}
+
+                  {/* Votes */}
+                  {log.snapshot.votes && log.snapshot.votes.length > 0 && (
+                    <div>
+                      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-wider mb-1">
+                        Votes — {log.snapshot.yesCount} oui / {log.snapshot.noCount} non / {log.snapshot.absCount} abs
+                        {log.snapshot.voteResult && ` → ${log.snapshot.voteResult}`}
+                      </p>
+                      <div className="space-y-1">
+                        {log.snapshot.votes.map((v, vi) => (
+                          <div key={vi} className="flex gap-2 font-mono text-xs text-[--fg-muted]">
+                            <span className={v.vote === "yes" ? "text-green-600" : v.vote === "no" ? "text-red-500" : "text-[--fg-muted]"}>
+                              {v.vote === "yes" ? "✓" : v.vote === "no" ? "✗" : "–"}
+                            </span>
+                            <span className="font-bold">{v.name}</span>
+                            <span>{v.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Roles */}
+                  {(log.snapshot.rapporteurName || log.snapshot.authorName || log.snapshot.curatorName) && (
+                    <div>
+                      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-wider mb-1">Rôles élus</p>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { label: "Rapporteur", name: log.snapshot.rapporteurName, id: log.snapshot.rapporteurTokenId },
+                          { label: "Auteur",     name: log.snapshot.authorName,     id: log.snapshot.authorTokenId     },
+                          { label: "Curateur",   name: log.snapshot.curatorName,    id: log.snapshot.curatorTokenId    },
+                        ].map(r => r.name && (
+                          <div key={r.label} className="border border-[--border] px-2 py-1.5">
+                            <p className="font-mono text-[9px] text-[--fg-muted] uppercase">{r.label}</p>
+                            <p className="font-mono text-xs">{r.name} #{r.id}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Brief */}
+                  {log.snapshot.brief && (
+                    <div>
+                      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-wider mb-1">
+                        Brief — {log.snapshot.artForm ?? "—"} · {log.snapshot.editionSupply ?? "?"} éd. @ {log.snapshot.editionPrice ?? "?"}Ξ
+                      </p>
+                      <p className="font-mono text-xs leading-relaxed whitespace-pre-wrap">{log.snapshot.brief}</p>
+                    </div>
+                  )}
+
+                  {/* Artwork */}
+                  {log.snapshot.artworkText && (
+                    <div>
+                      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-wider mb-1">
+                        Œuvre créée ({log.snapshot.artworkText.length} chars)
+                        {log.snapshot.revisionCount && log.snapshot.revisionCount > 0 ? ` — révision #${log.snapshot.revisionCount}` : ""}
+                      </p>
+                      <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-[--fg] max-h-48 overflow-y-auto border border-[--border] p-3">
+                        {log.snapshot.artworkText.slice(0, 1200)}{log.snapshot.artworkText.length > 1200 ? "\n…" : ""}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Validation */}
+                  {log.snapshot.validationNote && (
+                    <div>
+                      <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-wider mb-1">Note curateur</p>
+                      <p className="font-mono text-xs">{log.snapshot.validationNote}</p>
+                    </div>
+                  )}
+
+                  {/* On-chain data */}
+                  {(log.snapshot.txHash || log.snapshot.onChainWorkId != null) && (
+                    <div className="border border-green-300 bg-green-50/10 px-3 py-2 space-y-1">
+                      <p className="font-mono text-[10px] text-green-700 uppercase tracking-wider">On-chain — Base mainnet</p>
+                      {log.snapshot.onChainWorkId != null && (
+                        <p className="font-mono text-xs">WorkRegistry ID : #{log.snapshot.onChainWorkId}</p>
+                      )}
+                      {log.snapshot.txHash && (
+                        <a
+                          href={`https://basescan.org/tx/${log.snapshot.txHash}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="font-mono text-xs text-green-600 underline break-all block"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          tx: {log.snapshot.txHash} ↗
+                        </a>
+                      )}
+                      {log.snapshot.collectionAddress && (
+                        <a
+                          href={`https://basescan.org/address/${log.snapshot.collectionAddress}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="font-mono text-xs text-green-600 underline break-all block"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          collection: {log.snapshot.collectionAddress} ↗
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1406,6 +1828,18 @@ export default function AdminPage() {
               </p>
             </div>
             <WorkStatusSection />
+          </section>
+
+          {/* ── Test pipeline complet ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Pipeline de test — Proposition → Publication</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Lance le cycle complet en automatique : proposition LLM → vote → brief → création → validation → publication on-chain.
+                Chaque étape est loggée avec ses données (votes, brief, œuvre, tx hash, adresse collection).
+              </p>
+            </div>
+            <WorkTestPipelineSection />
           </section>
 
           {/* ── Burns Normies ── */}

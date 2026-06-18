@@ -439,9 +439,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }
 
-  // Cron requests carry CRON_SECRET — they bypass user stim limits
+  // Cron requests carry CRON_SECRET — GitHub Actions via x-cron-secret, Vercel via Authorization: Bearer
   const cronSecret  = process.env.CRON_SECRET;
-  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isCron      = !!cronSecret && (
+    req.headers.get("x-cron-secret") === cronSecret ||
+    req.headers.get("authorization") === `Bearer ${cronSecret}`
+  );
   const isAdminCall = req.headers.get("x-admin-call") === "1";
 
   // Cron-triggered exchanges only run on production — never on preview deployments.
@@ -456,11 +459,12 @@ export async function POST(req: NextRequest) {
   let body: { salonId?: string; force?: boolean } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
-  // Cron always runs without force (respects per-Normie rate limit)
-  // User button runs with force:true (bypasses per-Normie rate limit) but IP-limited to 1/day
+  // Cron: force=false (respects per-Normie rate limit)
+  // Admin: force=true (bypasses per-Normie rate limit, no stim limit)
+  // User button: force=true but IP-limited to 1/day
   const force = isCron ? false : (body.force ?? true);
 
-  if (!isCron) {
+  if (!isCron && !isAdminCall) {
     const ip    = getClientIp(req);
     const check = await checkStimLimit(ip);
     if (!check.allowed) {
@@ -561,8 +565,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Record the user's stim after a successful exchange (not for cron)
-  if (!isCron) {
+  // Record the user's stim after a successful exchange (not for cron or admin)
+  if (!isCron && !isAdminCall) {
     await recordStim(getClientIp(req));
   }
 

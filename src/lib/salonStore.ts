@@ -279,9 +279,9 @@ export async function markSynthesisDone(): Promise<void> {
   await mutate(s => { s.lastSynthesisAt = Date.now(); });
 }
 
-// ─── User stim rate limit (1 per IP per 24h, stored in blob) ─────────────────
+// ─── User stim rate limit (1 per IP per 10 min) ──────────────────────────────
 
-const STIM_WINDOW_MS = 24 * 60 * 60 * 1000;
+const STIM_WINDOW_MS = 10 * 60 * 1000;
 
 export async function checkStimLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
   if (!ip || ip === "unknown") return { allowed: true };
@@ -451,10 +451,11 @@ export async function addMessage(msg: Omit<SalonMessage, "id"> & { topic?: strin
 
 // ─── Reset ────────────────────────────────────────────────────────────────────
 
-/** Wipes all messages, syntheses, and topic from the Agora so Normies start fresh. */
+/** Wipes all messages, syntheses, topic, and stimulation records so Normies and users start fresh. */
 export async function resetAgora(): Promise<void> {
   await mutate(s => {
     s.salons[AGORA_SALON_ID] = makeAgora();
+    s.stimulations = {};
   });
-  console.log("[salonStore] Agora reset — all messages and syntheses cleared");
+  console.log("[salonStore] Agora reset — messages, syntheses, and stim limits cleared");
 }

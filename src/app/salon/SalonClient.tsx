@@ -363,11 +363,27 @@ function SalonChat({
   const [stimResult,    setStimResult]    = useState<string | null>(null);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
   const [initialLoaded, setInitialLoaded] = useState(salon.messages.length > 0);
-  // Client-side hint for the 1/day stim limit (real enforcement is server-side via IP+blob)
-  const [stimUsedToday, setStimUsedToday] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("ana_stim_date") === new Date().toDateString();
-  });
+
+  const STIM_WINDOW_MS = 10 * 60 * 1000;
+  const getLastStimTs = () => {
+    if (typeof window === "undefined") return 0;
+    return parseInt(localStorage.getItem("ana_stim_ts") ?? "0", 10);
+  };
+  const [stimCooldownMs, setStimCooldownMs] = useState(() =>
+    Math.max(0, STIM_WINDOW_MS - (Date.now() - getLastStimTs()))
+  );
+  const stimBlocked = stimCooldownMs > 0;
+
+  // Tick the countdown every second while blocked
+  useEffect(() => {
+    if (stimCooldownMs <= 0) return;
+    const t = setInterval(() => {
+      const remaining = Math.max(0, STIM_WINDOW_MS - (Date.now() - getLastStimTs()));
+      setStimCooldownMs(remaining);
+    }, 1000);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stimCooldownMs > 0]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
   const lastTs    = useRef<number>(salon.messages[salon.messages.length - 1]?.timestamp ?? 0);
@@ -443,7 +459,7 @@ function SalonChat({
   }, [messages]);
 
   const stimulate = async () => {
-    if (stimulating || stimUsedToday) return;
+    if (stimulating || stimBlocked) return;
     setStimulating(true);
     setStimResult(null);
     try {
@@ -458,18 +474,19 @@ function SalonChat({
         retryAfterMs?: number;
       };
       if (res.status === 429) {
-        setStimUsedToday(true);
-        localStorage.setItem("ana_stim_date", new Date().toDateString());
-        setStimResult(data.error ?? "Déjà utilisé aujourd'hui");
+        const retryMs = data.retryAfterMs ?? STIM_WINDOW_MS;
+        localStorage.setItem("ana_stim_ts", String(Date.now() - (STIM_WINDOW_MS - retryMs)));
+        setStimCooldownMs(retryMs);
+        setStimResult(`Disponible dans ${Math.ceil(retryMs / 60_000)} min`);
         return;
       }
       if (!res.ok || data.error || data.message) {
         setStimResult(data.error ?? data.message ?? "Erreur");
         return;
       }
-      // Mark as used for today
-      setStimUsedToday(true);
-      localStorage.setItem("ana_stim_date", new Date().toDateString());
+      // Record timestamp and start cooldown
+      localStorage.setItem("ana_stim_ts", String(Date.now()));
+      setStimCooldownMs(STIM_WINDOW_MS);
 
       if (data.generatedMessages?.length) {
         mergeMessages(data.generatedMessages);
@@ -535,11 +552,15 @@ function SalonChat({
           {salon.isOpen && (
             <button
               onClick={stimulate}
-              disabled={stimulating || stimUsedToday}
+              disabled={stimulating || stimBlocked}
               className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2.5 py-1.5 disabled:opacity-40 transition-colors"
-              title={stimUsedToday ? "Stimulation déjà utilisée aujourd'hui (recharge à minuit)" : "Déclencher un échange — 1 fois par jour"}
+              title={stimBlocked ? `Disponible dans ${Math.ceil(stimCooldownMs / 60_000)} min` : "Déclencher un échange — 1 fois par 10 min"}
             >
-              {stimulating ? "…" : stimUsedToday ? "⚡ ×0" : "⚡"}
+              {stimulating
+                ? "…"
+                : stimBlocked
+                ? `⚡ ${Math.floor(stimCooldownMs / 60_000)}m${String(Math.floor((stimCooldownMs % 60_000) / 1_000)).padStart(2, "0")}s`
+                : "⚡"}
             </button>
           )}
         </div>

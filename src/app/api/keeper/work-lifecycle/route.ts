@@ -975,9 +975,12 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  // GitHub Actions via x-cron-secret, Vercel cron via Authorization: Bearer
   const cronSecret  = process.env.CRON_SECRET;
-  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
-  // Also allow calls from admin UI (no secret needed in dev/staging)
+  const isCron      = !!cronSecret && (
+    req.headers.get("x-cron-secret") === cronSecret ||
+    req.headers.get("authorization") === `Bearer ${cronSecret}`
+  );
   const isAdminCall = req.headers.get("x-admin-call") === "1";
 
   if (!isCron && !isAdminCall) {

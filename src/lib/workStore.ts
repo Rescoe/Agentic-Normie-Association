@@ -284,6 +284,18 @@ export async function updateNormieSupply(supply: number): Promise<void> {
   await mutate(s => { s.lastNormieSupply = supply; });
 }
 
+export async function resetWorks(): Promise<void> {
+  const empty: WorkStore = { works: {} };
+  if (await useNeon()) {
+    await neonSave(empty);
+  } else {
+    fileSave(empty);
+  }
+  global.__anaWorkStore        = empty;
+  global.__anaWorkStoreLoadedAt = Date.now();
+  console.log("[workStore] reset — all works cleared");
+}
+
 // ─── Vote helpers ─────────────────────────────────────────────────────────────
 
 export function hasVoted(work: ANAWork, tokenId: number): boolean {
