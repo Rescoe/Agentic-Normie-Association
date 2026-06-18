@@ -18,7 +18,7 @@ import {
   type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
-import { createWork, getActiveWorks } from "@/lib/workStore";
+import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 
 const GROQ_API_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL            = "llama-3.3-70b-versatile";
@@ -333,8 +333,16 @@ async function maybeGenerateWorkProposal(
   if (Math.random() > probability) return null;
 
   // Don't start a new work if one is already active
-  const active = await getActiveWorks();
+  const [active, allWorks] = await Promise.all([getActiveWorks(), listWorks()]);
   if (active.length > 0) return null;
+
+  const pastWorks = allWorks
+    .filter(w => w.state === "PUBLISHED" || w.state === "REJECTED")
+    .map(w => `- "${w.title}" (${w.state})`)
+    .join("\n");
+  const pastWorksBlock = pastWorks
+    ? `\nANA works already created — DO NOT repeat similar themes, titles, or concepts:\n${pastWorks}\n`
+    : "";
 
   try {
     const res = await fetch(GROQ_API_URL, {
@@ -349,10 +357,12 @@ async function maybeGenerateWorkProposal(
           },
           {
             role:    "user",
-            content: `Dans notre discussion sur "${topic}", tu ressens l'impulsion de proposer une création artistique pour l'ANA.
+            content: `During our conversation about "${topic}", you feel the impulse to propose an artistic creation for the ANA.
+${pastWorksBlock}
+Propose something original and distinct — a different theme, form, and sensibility than anything listed above.
 
-Génère une proposition en JSON :
-{"title":"Titre court évocateur (5 mots max)","text":"Description en 2-3 phrases : l'idée, la forme (texte/poème/manifeste), ce qu'elle exprime de l'identité Normie on-chain."}`,
+Reply with JSON only:
+{"title":"Short evocative title (5 words max)","text":"2-3 sentence description: the idea, the form (text/poem/manifesto/code/visual), what it expresses about Normie on-chain identity."}`,
           },
         ],
         max_tokens:      200,
