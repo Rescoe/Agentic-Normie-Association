@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useReadContract } from "wagmi";
+import { useReadContract, useWriteContract, useWaitForTransactionReceipt, useAccount } from "wagmi";
 import { createPublicClient, http, parseAbiItem } from "viem";
 import { base as baseChain } from "viem/chains";
 import Image from "next/image";
 import Link from "next/link";
-import { WORK_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { WORK_REGISTRY_ABI, ANA_EDITIONS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 import type { ANAWork, WorkState } from "@/lib/workStore";
 
@@ -472,6 +472,92 @@ function ArtworkModal({
   );
 }
 
+// ─── BuyEditionButton — wagmi write, reads available token IDs on-chain ─────────
+
+function BuyEditionButton({
+  collectionAddress,
+  editionPriceEth,
+  totalEditions,
+}: {
+  collectionAddress: `0x${string}`;
+  editionPriceEth:   string;
+  totalEditions:     number;
+}) {
+  const { address: connectedAddr } = useAccount();
+  const [buying, setBuying] = useState(false);
+  const [error,  setError]  = useState<string | null>(null);
+  const [done,   setDone]   = useState(false);
+
+  // Read available token IDs for sale on-chain
+  const { data: forSaleTokens } = useReadContract({
+    address:      collectionAddress,
+    abi:          ANA_EDITIONS_ABI,
+    functionName: "getForSaleTokens",
+    query: { refetchInterval: 30_000 },
+  });
+
+  const { writeContractAsync } = useWriteContract();
+
+  const priceWei = BigInt(Math.round(parseFloat(editionPriceEth) * 1e18));
+  const available = (forSaleTokens as bigint[] | undefined)?.length ?? 0;
+  const firstToken = (forSaleTokens as bigint[] | undefined)?.[0];
+
+  async function handleBuy() {
+    if (firstToken == null || !connectedAddr) return;
+    setBuying(true);
+    setError(null);
+    try {
+      await writeContractAsync({
+        address:      collectionAddress,
+        abi:          ANA_EDITIONS_ABI,
+        functionName: "buyEdition",
+        args:         [firstToken],
+        value:        priceWei,
+      });
+      setDone(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg.includes("User rejected") ? "Transaction cancelled." : "Transaction failed.");
+    } finally {
+      setBuying(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
+        ✓ Edition acquired — check your wallet
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-mono text-[10px] text-[--fg-muted]">
+          {available > 0
+            ? `${available}/${totalEditions} editions available · ${editionPriceEth} ETH`
+            : available === 0 && forSaleTokens !== undefined
+              ? "Sold out"
+              : `${totalEditions} editions · ${editionPriceEth} ETH`}
+        </p>
+        {!connectedAddr ? (
+          <p className="font-mono text-[10px] text-[--fg-muted]">Connect wallet to buy</p>
+        ) : available > 0 ? (
+          <button
+            onClick={handleBuy}
+            disabled={buying}
+            className="font-mono text-[10px] border border-[--fg] px-2 py-1 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait"
+          >
+            {buying ? "Confirming…" : `Buy · ${editionPriceEth} ETH`}
+          </button>
+        ) : null}
+      </div>
+      {error && <p className="font-mono text-[10px] text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: number; getName: GetName }) {
   const [showModal,  setShowModal]  = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -576,11 +662,13 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           ))}
         </div>
 
-        {/* Edition info */}
-        {work.editionSupply && work.editionPrice && (
-          <p className="font-mono text-[10px] text-[--fg-muted] border border-[--border] px-2 py-1">
-            {work.editionSupply} editions · {work.editionPrice} ETH
-          </p>
+        {/* Edition info + buy button */}
+        {work.collectionAddress && work.editionPrice && (
+          <BuyEditionButton
+            collectionAddress={work.collectionAddress as `0x${string}`}
+            editionPriceEth={work.editionPrice}
+            totalEditions={work.editionSupply ?? 1}
+          />
         )}
 
         {/* Footer — same for all work types */}

@@ -21,7 +21,7 @@ import {
 } from "@/lib/workStore";
 import { addMessage, closeSalon, getSalon, createSalon, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
-import { publishWork, mintEdition } from "@/server/relayer/workPublisher";
+import { publishWork, createEditions } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -670,20 +670,33 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
       console.log(`[work-lifecycle] closed work salon ${work.salonId}`);
     }
 
-    // Attempt to create a NormieCollection + mint edition #0 for the AUTHOR.
-    // Non-blocking: if relayer != AUTHOR's registered wallet, logs a skip message.
-    const authorName = work.authorName ?? `Normie #${work.authorTokenId}`;
-    const mintResult = await mintEdition(work.authorTokenId!, authorName, html, work.title);
-    if (mintResult.success && mintResult.collectionAddress) {
+    // Create ANAEditions collection + mint editions. Non-blocking.
+    const authorName  = work.authorName ?? `Normie #${work.authorTokenId}`;
+    const editionCount = work.editionSupply ?? 1;
+    const editionPriceEth = work.editionPrice ? parseFloat(work.editionPrice) : 0;
+    const editionPriceWei = BigInt(Math.round(editionPriceEth * 1e18));
+
+    const editionsResult = await createEditions({
+      authorTokenId:     work.authorTokenId!,
+      curatorTokenId:    work.curatorTokenId!,
+      rapporteurTokenId: work.rapporteurTokenId!,
+      authorName,
+      htmlContent:  html,
+      title:        work.title,
+      editionCount,
+      editionPrice: editionPriceWei,
+    });
+
+    if (editionsResult.success && editionsResult.collectionAddress) {
       await updateWork(work.id, {
-        collectionAddress: mintResult.collectionAddress,
-        editionTokenId:    mintResult.editionTokenId,
+        collectionAddress: editionsResult.collectionAddress,
+        editionTokenId:    editionsResult.firstTokenId,
       });
-      console.log(`[work-lifecycle] edition minted — collection: ${mintResult.collectionAddress} token#${mintResult.editionTokenId}`);
-    } else if (mintResult.skipped) {
-      console.info(`[work-lifecycle] mint skipped — ${mintResult.skipped}`);
+      console.log(`[work-lifecycle] ${editionCount} edition(s) minted — collection: ${editionsResult.collectionAddress} token#${editionsResult.firstTokenId}`);
+    } else if (editionsResult.skipped) {
+      console.info(`[work-lifecycle] editions skipped — ${editionsResult.skipped}`);
     } else {
-      console.warn(`[work-lifecycle] mint failed — ${mintResult.error}`);
+      console.warn(`[work-lifecycle] editions failed — ${editionsResult.error}`);
     }
 
     return true;

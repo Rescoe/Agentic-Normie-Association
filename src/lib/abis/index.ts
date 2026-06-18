@@ -5,3 +5,5 @@ export { FactoryRegistryAbi } from "./FactoryRegistry";
 export { GovernanceCalendarAbi } from "./GovernanceCalendar";
 export { CollectionFactoryAbi } from "./CollectionFactory";
 export { NormieCollectionAbi } from "./NormieCollection";
+export { ANAEditionsAbi } from "./ANAEditions";
+export { ANACollectionFactoryAbi } from "./ANACollectionFactory";

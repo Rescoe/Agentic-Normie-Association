@@ -13,6 +13,7 @@ const config: HardhatUserConfig = {
     settings: {
       optimizer: { enabled: true, runs: 200 },
       evmVersion: "cancun", // required for OpenZeppelin v5 (mcopy opcode)
+      viaIR: true,
     },
   },
   networks: {
