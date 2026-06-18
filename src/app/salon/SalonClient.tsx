@@ -36,8 +36,8 @@ interface MessageFilter {
 function timeAgo(ts: number): string {
   const d = Date.now() - ts;
   if (d < 60_000)     return "à l'instant";
-  if (d < 3_600_000)  return `${Math.floor(d / 60_000)} min`;
-  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} h`;
+  if (d < 3_600_000)  return `il y a ${Math.floor(d / 60_000)} min`;
+  if (d < 86_400_000) return `il y a ${Math.floor(d / 3_600_000)} h`;
   return new Date(ts).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
 
