@@ -2,11 +2,20 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useReadContract } from "wagmi";
+import { createPublicClient, http, parseAbiItem } from "viem";
+import { base as baseChain } from "viem/chains";
 import Image from "next/image";
 import Link from "next/link";
 import { WORK_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 import type { ANAWork, WorkState } from "@/lib/workStore";
+
+// ─── Viem client (on-chain log fetching) ─────────────────────────────────────
+
+const viemClient = createPublicClient({
+  chain: baseChain,
+  transport: http("https://mainnet.base.org"),
+});
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -170,7 +179,145 @@ function InProgressWorkCard({ work, getName }: { work: ANAWork; getName: GetName
 
 // ─── WorkCard (Neon data — PUBLISHED) ────────────────────────────────────────
 
-function GovernanceReport({ work }: { work: ANAWork }) {
+// ─── WorkChainProof — fetches on-chain events for a specific workId ───────────
+
+interface ChainEvent {
+  type:    "PUBLISHED" | "SESSION" | "ARCHIVED";
+  txHash:  string;
+  block:   bigint;
+  ts:      number;
+  extra?:  string;
+}
+
+function WorkChainProof({ onChainId }: { onChainId: number }) {
+  const [events, setEvents] = useState<ChainEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
+
+  useEffect(() => {
+    if (!WR_ADDR) { setLoading(false); return; }
+
+    const EV_PUBLISHED = parseAbiItem(
+      "event WorkPublished(uint256 indexed workId, string content, uint256 indexed authorTokenId, uint256 indexed rapporteurTokenId, uint256 timestamp)"
+    );
+    const EV_ARCHIVED  = parseAbiItem("event WorkArchived(uint256 indexed workId)");
+    const EV_SESSION   = parseAbiItem(
+      "event WorkSessionInitiated(uint256 indexed sessionId, uint256 initiatedAt, address indexed initiatedBy)"
+    );
+
+    (async () => {
+      try {
+        const latest    = await viemClient.getBlockNumber();
+        const fromBlock = latest > 3_000_000n ? latest - 3_000_000n : 0n;
+        const id        = BigInt(onChainId);
+
+        const [pubLogs, archLogs, sessLogs] = await Promise.allSettled([
+          viemClient.getLogs({ address: WR_ADDR, event: EV_PUBLISHED, args: { workId: id }, fromBlock, toBlock: latest }),
+          viemClient.getLogs({ address: WR_ADDR, event: EV_ARCHIVED,  args: { workId: id }, fromBlock, toBlock: latest }),
+          viemClient.getLogs({ address: WR_ADDR, event: EV_SESSION,   fromBlock, toBlock: latest }),
+        ]);
+
+        const result: ChainEvent[] = [];
+
+        if (pubLogs.status === "fulfilled") {
+          for (const log of pubLogs.value) {
+            const block = await viemClient.getBlock({ blockNumber: log.blockNumber! }).catch(() => null);
+            result.push({
+              type:   "PUBLISHED",
+              txHash: log.transactionHash ?? "",
+              block:  log.blockNumber ?? 0n,
+              ts:     block ? Number(block.timestamp) * 1000 : 0,
+            });
+          }
+        }
+        if (archLogs.status === "fulfilled") {
+          for (const log of archLogs.value) {
+            const block = await viemClient.getBlock({ blockNumber: log.blockNumber! }).catch(() => null);
+            result.push({
+              type:   "ARCHIVED",
+              txHash: log.transactionHash ?? "",
+              block:  log.blockNumber ?? 0n,
+              ts:     block ? Number(block.timestamp) * 1000 : 0,
+            });
+          }
+        }
+        if (sessLogs.status === "fulfilled" && sessLogs.value.length > 0) {
+          for (const log of sessLogs.value) {
+            const sessionId = Number((log.args as Record<string, unknown>).sessionId ?? 0n);
+            if (Math.abs(sessionId - onChainId) <= 2) {
+              const block = await viemClient.getBlock({ blockNumber: log.blockNumber! }).catch(() => null);
+              result.push({
+                type:   "SESSION",
+                txHash: log.transactionHash ?? "",
+                block:  log.blockNumber ?? 0n,
+                ts:     block ? Number(block.timestamp) * 1000 : 0,
+                extra:  `Session #${sessionId}`,
+              });
+            }
+          }
+        }
+
+        result.sort((a, b) => Number(a.block) - Number(b.block));
+        setEvents(result);
+      } catch { /* RPC errors are silent */ }
+      setLoading(false);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onChainId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-2">
+        <div className="w-3 h-3 border border-[--border] border-t-[--fg-muted] rounded-full animate-spin" />
+        <p className="font-mono text-[10px] text-[--fg-muted]">Fetching on-chain proof…</p>
+      </div>
+    );
+  }
+
+  if (events.length === 0) {
+    return (
+      <p className="font-mono text-[10px] text-[--fg-muted]">No on-chain events found in recent blocks.</p>
+    );
+  }
+
+  const TYPE_LABEL: Record<string, string> = {
+    PUBLISHED: "◆ WorkPublished",
+    SESSION:   "⬟ WorkSession",
+    ARCHIVED:  "▣ Archived",
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {events.map((ev, i) => (
+        <div key={i} className="flex flex-col gap-0.5 font-mono text-[10px]">
+          <div className="flex items-center gap-2">
+            <span className="text-[--fg]">{TYPE_LABEL[ev.type] ?? ev.type}</span>
+            {ev.extra && <span className="text-[--fg-muted]">· {ev.extra}</span>}
+            <span className="text-[--fg-muted]">block #{String(ev.block)}</span>
+            {ev.ts > 0 && (
+              <span className="text-[--fg-muted]">
+                · {new Date(ev.ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          {ev.txHash && (
+            <a
+              href={`https://basescan.org/tx/${ev.txHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[--fg-muted] hover:text-[--fg] transition-colors break-all"
+            >
+              {ev.txHash}
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GovernanceReport({ work, onChainId }: { work: ANAWork; onChainId?: number }) {
   const yes = work.yesCount ?? 0;
   const no  = work.noCount  ?? 0;
   const abs = work.absCount ?? 0;
@@ -227,11 +374,18 @@ function GovernanceReport({ work }: { work: ANAWork }) {
           </a>
         </p>
       )}
+
+      {onChainId != null && (
+        <div className="space-y-1.5 pt-2 border-t border-[--border]">
+          <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">On-chain proof</p>
+          <WorkChainProof onChainId={onChainId} />
+        </div>
+      )}
     </div>
   );
 }
 
-// ─── ArtworkModal — fullscreen view for both HTML and poem works ──────────────
+// ─── ArtworkModal — floating panel for both HTML and poem works ───────────────
 
 function ArtworkModal({
   work,
@@ -250,59 +404,67 @@ function ArtworkModal({
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  if (isHtml) {
-    /* HTML/generative artwork — fullscreen iframe, no chrome */
-    return (
-      <div className="fixed inset-0 z-50 bg-black flex flex-col">
-        <div className="flex items-center justify-between px-4 py-2 bg-black border-b border-white/10 shrink-0">
-          <p className="font-mono text-xs text-white/50 truncate">{work.title}</p>
-          <button
-            onClick={onClose}
-            className="font-mono text-xs text-white/40 hover:text-white transition-colors ml-4 shrink-0 border border-white/20 px-2 py-0.5"
-          >
-            ✕ close
-          </button>
-        </div>
-        <iframe
-          src={certUrl}
-          className="flex-1 w-full border-0"
-          sandbox="allow-scripts"
-          title={work.title}
-        />
-      </div>
-    );
-  }
-
-  /* Poem/text — full text on black background */
   return (
+    /* Overlay */
     <div
-      className="fixed inset-0 z-50 bg-black overflow-y-auto flex items-start justify-center p-8 pt-16"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8 bg-[--fg]/40"
       onClick={onClose}
     >
+      {/* Panel */}
       <div
-        className="relative w-full max-w-xl"
+        className={`
+          relative flex flex-col bg-[--bg] border border-[--border]
+          w-full shadow-2xl
+          ${isHtml ? "max-w-5xl h-[88vh]" : "max-w-xl max-h-[85vh]"}
+        `}
         onClick={e => e.stopPropagation()}
       >
-        <button
-          onClick={onClose}
-          className="absolute -top-10 right-0 font-mono text-xs text-white/40 hover:text-white/70 transition-colors"
-        >
-          ✕ close
-        </button>
-        <pre className="font-mono text-sm leading-[2.2] whitespace-pre-wrap text-white/90 tracking-wide">
-          {work.artworkText}
-        </pre>
-        <div className="mt-8 pt-4 border-t border-white/10 flex items-center justify-between">
-          <p className="font-mono text-[10px] text-white/30 uppercase tracking-widest">
-            {work.artForm ?? "text"} · ANA · {work.publishedAt ? new Date(work.publishedAt).getFullYear() : "—"}
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-[--border] shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest shrink-0">
+              {isHtml ? "Artwork" : (work.artForm ?? "Poem")}
+            </p>
+            <p className="font-bold text-sm truncate">{work.title}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors ml-4 shrink-0"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Content */}
+        {isHtml ? (
+          <iframe
+            src={certUrl}
+            className="flex-1 w-full border-0 bg-black"
+            sandbox="allow-scripts"
+            title={work.title}
+          />
+        ) : (
+          <div className="overflow-y-auto flex-1 px-8 py-10">
+            <pre className="font-mono text-sm leading-[2.2] whitespace-pre-wrap text-[--fg] tracking-wide">
+              {work.artworkText}
+            </pre>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-[--border] shrink-0">
+          <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">
+            {work.artForm ?? "text"} · ANA · Base
+            {work.publishedAt ? ` · ${new Date(work.publishedAt).getFullYear()}` : ""}
           </p>
           <a
             href={certUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-mono text-[10px] text-white/30 hover:text-white/60 transition-colors flex items-center gap-1"
+            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors flex items-center gap-1 border border-[--border] px-2 py-1 hover:border-[--fg]"
           >
-            ◈ immutable certificate
+            ◈ Certificate immutable
           </a>
         </div>
       </div>
@@ -453,7 +615,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
       </div>
 
       {/* Inline governance report — all work types */}
-      {showReport && <GovernanceReport work={work} />}
+      {showReport && <GovernanceReport work={work} onChainId={onChainId} />}
 
       {/* Fullscreen artwork modal */}
       {showModal && (
