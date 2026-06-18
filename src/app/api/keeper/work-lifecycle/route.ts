@@ -28,6 +28,46 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL        = "llama-3.3-70b-versatile";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
+// Fetch current ETH/USD price from CoinGecko (no API key needed).
+// Returns null on failure — callers degrade gracefully.
+async function fetchEthUsd(): Promise<number | null> {
+  try {
+    const res = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
+      { signal: AbortSignal.timeout(4_000) },
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { ethereum?: { usd?: number } };
+    return data.ethereum?.usd ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Builds a pricing context string to inject into the rapporteur's briefing prompt.
+function buildPricingContext(ethUsd: number | null): string {
+  const price = ethUsd ?? 2500; // conservative fallback
+  const fmt   = (eth: number) => `${eth} ETH ≈ $${Math.round(eth * price)}`;
+
+  return `
+CONTEXTE DE PRIX (1 ETH ≈ $${price}${ethUsd ? "" : " — estimation, prix réel non disponible"}) :
+  • ${fmt(0.0005)} — symbolique, accessible à tous, idéal pour un poème court ou un haïku
+  • ${fmt(0.001)}  — très accessible, bon pour une première œuvre ou un test
+  • ${fmt(0.005)}  — raisonnable, pour une œuvre soignée
+  • ${fmt(0.01)}   — visible, pour une pièce ambitieuse ou une oeuvre visuelle interactive
+  • ${fmt(0.05)}   — premium, réservé à des œuvres exceptionnelles ou très rares
+
+RÉFLEXION SUR LE NOMBRE D'ÉDITIONS :
+  • 1 édition     = pièce unique (1/1), collectionnable, prix peut être plus élevé
+  • 3-10 éditions = tirage rare, communauté de proches
+  • 20-50 éditions = collection standard, large accessibilité
+  • 100+ éditions = œuvre "ouverte", priorité à la diffusion sur le profit
+
+PHILOSOPHIE : L'ANA est une communauté naissante en phase expérimentale. Favorise l'accessibilité
+pour que d'autres Normies puissent collectionner. Un prix trop élevé freine la circulation des œuvres.
+Varie tes choix selon la forme et l'ambition de l'œuvre — ne mets pas toujours la même combinaison.`;
+}
+
 const client = createPublicClient({
   chain:     base,
   transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
@@ -346,6 +386,10 @@ async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<b
 
   const others = personas.filter(p => p.tokenId !== rapporteur.tokenId);
 
+  // Fetch ETH price in parallel with building the prompt
+  const ethUsd       = await fetchEthUsd();
+  const pricingCtx   = buildPricingContext(ethUsd);
+
   const userPrompt = work.isFoundingWork
     ? `Tu es ${rapporteur.name} (Normie #${rapporteur.tokenId}), Rapporteur élu lors de l'Assemblée Générale Constitutive de l'ANA.
 
@@ -365,7 +409,7 @@ Brief en 120-150 mots. Pas de titre, pas d'introduction. Rédige directement.`
 Proposition : ${work.proposal}
 Auteur : ${work.authorName} (Normie #${work.authorTokenId})
 
-Tu dois d'abord choisir la FORME de l'œuvre, puis fixer les paramètres d'édition ERC-721, puis rédiger le brief.
+Tu dois choisir : (1) la FORME, (2) les paramètres d'édition ERC-721, (3) rédiger le brief.
 
 FORMES DISPONIBLES :
 • Texte : "haiku" (3 lignes, 5-7-5 syllabes), "sonnet" (14 vers), "poeme" (libre), "prose", "manifeste"
@@ -373,11 +417,14 @@ FORMES DISPONIBLES :
   → Pour HTML/JS : l'Auteur générera une page HTML autonome avec des libs CDN (pas de build step).
   → Les données on-chain injectables : tokenId de l'auteur, archétype, traits, timestamp, numéro de bloc.
 
+${pricingCtx}
+
 Réponds en JSON :
 {
   "artForm": "haiku"|"sonnet"|"poeme"|"prose"|"manifeste"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl",
-  "editionPrice": "0.001"|"0.005"|"0.01"|"0.05"|"0.1",
-  "editionSupply": <entier 1-50>,
+  "editionPrice": "0.0005"|"0.001"|"0.005"|"0.01"|"0.05",
+  "editionSupply": <entier 1-100>,
+  "priceReasoning": "<1 phrase : pourquoi ce prix et cette quantité compte tenu du contexte ci-dessus>",
   "brief": "<120-150 mots pour l'Auteur. Précise : le ton, l'objectif émotionnel, le vocabulaire on-chain/ANA. Si HTML/JS : décris l'expérience visuelle voulue et les données à injecter. Pas de titre, pas d'intro.>"
 }`;
 
@@ -401,12 +448,16 @@ Réponds en JSON :
   if (!work.isFoundingWork) {
     try {
       const parsed = JSON.parse(rawBrief) as {
-        artForm?: string; editionPrice?: string; editionSupply?: number; brief?: string;
+        artForm?: string; editionPrice?: string; editionSupply?: number;
+        priceReasoning?: string; brief?: string;
       };
-      brief        = parsed.brief ?? rawBrief;
-      artForm      = parsed.artForm;
-      editionPrice = parsed.editionPrice;
+      brief         = parsed.brief ?? rawBrief;
+      artForm       = parsed.artForm;
+      editionPrice  = parsed.editionPrice;
       editionSupply = typeof parsed.editionSupply === "number" ? parsed.editionSupply : undefined;
+      if (parsed.priceReasoning) {
+        console.log(`[work-lifecycle] pricing rationale: ${parsed.priceReasoning}`);
+      }
     } catch {
       console.warn("[work-lifecycle] stepBriefing: JSON parse failed, using raw text as brief");
     }
