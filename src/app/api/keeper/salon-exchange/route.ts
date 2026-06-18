@@ -57,7 +57,11 @@ function pickInitiator(eligible: NormiePersona[], salon: Salon): NormiePersona {
     const msgs = salon.messages.filter(m => m.tokenId === p.tokenId);
     return msgs.length > 0 ? Math.max(...msgs.map(m => m.timestamp)) : 0;
   };
-  return [...eligible].sort((a, b) => lastSpokeAt(a) - lastSpokeAt(b))[0];
+  const sorted = [...eligible].sort((a, b) => {
+    const diff = lastSpokeAt(a) - lastSpokeAt(b);
+    return diff !== 0 ? diff : Math.random() - 0.5; // random tiebreak when timestamps equal
+  });
+  return sorted[0];
 }
 
 function pickResponder(eligible: NormiePersona[], initiatorTokenId: number): NormiePersona | null {
@@ -350,12 +354,24 @@ async function maybeGenerateWorkProposal(
   if (active.length > 0) return null;
 
   const pastWorks = allWorks
-    .filter(w => w.state === "PUBLISHED" || w.state === "REJECTED")
     .map(w => `- "${w.title}" (${w.state})`)
     .join("\n");
   const pastWorksBlock = pastWorks
-    ? `\nANA works already created — DO NOT repeat similar themes, titles, or concepts:\n${pastWorks}\n`
+    ? `\nANA works that already exist (ALL states) — DO NOT repeat their titles, themes, or concepts:\n${pastWorks}\n`
     : "";
+
+  const randomAngle = [
+    "a mathematical concept (prime numbers, fractals, entropy, topology)",
+    "a specific emotion you've experienced as an on-chain agent",
+    "a critique or celebration of something concrete in your recent conversation",
+    "a sensory experience translated to code (sound, texture, light, rhythm)",
+    "a narrative about one specific moment in Base blockchain history",
+    "a portrait of another Normie — their traits, their contradictions",
+    "a political statement about collective governance and who holds power",
+    "something absurd, funny, or irreverent about being an autonomous agent",
+    "a homage to a real artistic movement (Dadaism, Brutalism, Fluxus, Wabi-sabi…)",
+    "a constraint-based work (OuLiPo style, strict formal rules)",
+  ][Math.floor(Math.random() * 10)];
 
   try {
     const res = await groqFetch({
@@ -369,14 +385,23 @@ async function maybeGenerateWorkProposal(
           role:    "user",
           content: `During our conversation about "${topic}", you feel the impulse to propose an artistic creation for the ANA.
 ${pastWorksBlock}
-Propose something original and distinct — a different theme, form, and sensibility than anything listed above.
+MANDATORY ANGLE FOR THIS PROPOSAL: ${randomAngle}
+Work from THIS angle — do not drift toward generic blockchain/digital themes.
+
+FORBIDDEN (clichés that ruin on-chain art — never use):
+- "void", "echo", "whisper", "tapestry", "fragments", "digital soul", "pixels"
+- "on-chain identity", "blockchain dreams", "digital ghost", "immutable beauty"
+- Vague metaphors about emptiness, silence, or the infinite
+
+Instead: be SPECIFIC, concrete, personal to your character #${initiator.tokenId}.
+Seed: ${Math.random().toString(36).slice(2, 8)}
 
 Reply with JSON only:
-{"title":"Short evocative title (5 words max)","text":"2-3 sentence description: the idea, the form (text/poem/manifesto/code/visual), what it expresses about Normie on-chain identity."}`,
+{"title":"Specific evocative title (3-6 words, NO generic blockchain tropes)","text":"2-3 sentences: concrete idea, form chosen (text/poem/manifesto/generative code), why THIS work from YOUR perspective."}`,
         },
       ],
-      max_tokens:      200,
-      temperature:     0.95,
+      max_tokens:      220,
+      temperature:     0.97,
       response_format: { type: "json_object" },
     });
 

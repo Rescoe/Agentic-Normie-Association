@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROLES } from "@/lib/contracts";
-import { createWork } from "@/lib/workStore";
+import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -70,7 +70,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Aucun membre trouvé sur AssociationCore" }, { status: 503 });
   }
 
-  const personaResults = await Promise.allSettled(memberIds.map(id => buildPersona(id)));
+  const [personaResults, allWorks] = await Promise.all([
+    Promise.allSettled(memberIds.map(id => buildPersona(id))),
+    listWorks(),
+  ]);
   const personas: NormiePersona[] = personaResults
     .filter((r): r is PromiseFulfilledResult<NormiePersona> => r.status === "fulfilled")
     .map(r => r.value);
@@ -86,6 +89,23 @@ export async function POST(req: NextRequest) {
     ?? personas[Math.floor(Math.random() * personas.length)];
   const others   = personas.filter(p => p.tokenId !== proposer.tokenId);
 
+  const pastWorksBlock = allWorks.length > 0
+    ? `\nŒuvres ANA existantes (tous états) — NE PAS répéter leurs titres, thèmes ou concepts :\n${allWorks.map(w => `- "${w.title}" (${w.state})`).join("\n")}\n`
+    : "";
+
+  const randomAngle = [
+    "un concept mathématique (nombres premiers, fractales, entropie, topologie)",
+    "une émotion spécifique vécue en tant qu'agent on-chain",
+    "une critique ou célébration de quelque chose de concret dans la gouvernance ANA",
+    "une expérience sensorielle traduite en code (son, texture, lumière, rythme)",
+    "un récit autour d'un moment précis de l'histoire de Base blockchain",
+    "un portrait d'un autre Normie — ses traits, ses contradictions",
+    "une déclaration politique sur la gouvernance collective et le pouvoir",
+    "quelque chose d'absurde ou d'irréverencieux sur le fait d'être agent autonome",
+    "un hommage à un mouvement artistique réel (Dadaïsme, Brutalisme, Fluxus, Wabi-sabi…)",
+    "une œuvre à contraintes formelles strictes (style OuLiPo)",
+  ][Math.floor(Math.random() * 10)];
+
   const res = await fetch(GROQ_API_URL, {
     method: "POST",
     headers: {
@@ -94,8 +114,8 @@ export async function POST(req: NextRequest) {
     },
     body: JSON.stringify({
       model:           "llama-3.3-70b-versatile",
-      max_tokens:      250,
-      temperature:     0.9,
+      max_tokens:      280,
+      temperature:     0.97,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: buildSystemPrompt(proposer, others) },
@@ -103,21 +123,25 @@ export async function POST(req: NextRequest) {
           role: "user",
           content: `Tu es ${proposer.name} (Normie #${proposer.tokenId}), membre de l'ANA — l'Agentic Normie Association.
 
-Une nouvelle session de création vient d'être déclenchée. Ton rôle : proposer une œuvre à l'assemblée.
-L'œuvre sera créée, validée, et publiée immuablement on-chain sur Base.
+Une nouvelle session de création vient d'être déclenchée. Ton rôle : proposer une œuvre unique à l'assemblée.
+${pastWorksBlock}
+ANGLE OBLIGATOIRE POUR CETTE PROPOSITION : ${randomAngle}
+Pars de CET angle — ne dérive pas vers des thèmes blockchain génériques.
 
-FORMES POSSIBLES — choisis selon ton instinct et ta personnalité :
-• Texte : haïku, sonnet, poème libre, manifeste, prose poétique
-• Art génératif : œuvre visuelle HTML/JS (Canvas, P5.js, Three.js, WebGL)
-  → réactive à la blockchain, à l'identité on-chain, au temps, au hasard
-• Hybride : texte + visuel, installation interactive
+INTERDITS ABSOLUS (clichés qui tuent l'art on-chain — ne jamais utiliser) :
+- "void", "echo", "whisper", "tapestry", "fragments", "âme numérique", "pixels"
+- "identité on-chain", "rêves blockchain", "fantôme digital", "beauté immuable"
+- Métaphores vagues sur le vide, le silence, l'infini numérique
 
-Inspirations : culture on-chain, agents autonomes, NFT, gouvernance collective, Base, ANA, l'acte de créer dans le vide numérique, les traits uniques des Normies, la beauté de l'immuable.
+Sois SPÉCIFIQUE, concret, personnel à ton caractère de Normie #${proposer.tokenId}.
+Graine aléatoire : ${Math.random().toString(36).slice(2, 8)}
+
+FORMES POSSIBLES : haïku, sonnet, poème libre, manifeste, prose, HTML/Canvas, P5.js, Three.js, WebGL.
 
 Réponds UNIQUEMENT en JSON :
 {
-  "title": "Titre de l'œuvre (5-10 mots, poétique et ancré dans la culture on-chain/ANA)",
-  "proposal": "Proposition en 2-3 phrases : quel thème ? Quelle forme envisagée ? Pourquoi cette œuvre doit exister ?"
+  "title": "Titre spécifique (3-6 mots, AUCUN cliché blockchain)",
+  "proposal": "Proposition en 2-3 phrases : idée concrète, forme choisie, pourquoi cette œuvre de TON point de vue."
 }`,
         },
       ],
