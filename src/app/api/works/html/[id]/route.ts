@@ -80,7 +80,7 @@ export async function GET(
     );
     if (work) {
       console.log(`[works/html] Neon hit for #${onChainId} — "${work.title}"`);
-      const html = buildWorkHtml(work);
+      const html = await buildWorkHtml(work);
       return new NextResponse(html, { headers: HTML_HEADERS });
     }
     console.warn(`[works/html] Neon miss for #${onChainId} — falling back to contract`);

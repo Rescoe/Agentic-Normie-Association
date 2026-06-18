@@ -122,7 +122,7 @@ export async function GET(
   if (type === "ag-report") {
     html = buildAGReportHtml(DEMO_WORK_AG);
   } else if (type === "short-work") {
-    html = buildWorkHtml(DEMO_WORK_SHORT);
+    html = await buildWorkHtml(DEMO_WORK_SHORT);
   } else {
     return NextResponse.json({ error: "Unknown template type" }, { status: 404 });
   }
