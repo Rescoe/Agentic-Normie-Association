@@ -101,15 +101,36 @@ async function generateSpeech(
     const sysPrompt    = buildSystemPrompt(persona, otherMembers);
     const summaryBlock = buildSummaryContext(salon.summaries);
     const contextBlock = recentMsgs.length > 0
-      ? summaryBlock + "Échanges récents :\n" + recentMsgs.map(m => `${m.name} : ${m.content}`).join("\n")
-      : "Le salon vient de s'ouvrir.";
+      ? summaryBlock + "Recent exchanges:\n" + recentMsgs.map(m => `${m.name}: ${m.content}`).join("\n")
+      : "The salon just opened.";
+
+    // Detect overused themes to nudge agents toward fresh angles
+    const recentText = recentMsgs.map(m => m.content).join(" ").toLowerCase();
+    const overusedThemes: string[] = [];
+    const themeChecks: [string, string][] = [
+      ["pixel purity / unmodified identity", "pixel purity"],
+      ["autonomy vs ownership", "autonomy"],
+      ["collective identity / cultural heritage", "cultural heritage"],
+      ["governance / democracy", "governance"],
+      ["ephemerality / finitude", "ephemeral"],
+      ["the code that animates us", "code that"],
+      ["normie economy / self-organization", "normie economy"],
+      ["ecological footprint", "ecological"],
+    ];
+    for (const [label, keyword] of themeChecks) {
+      if (recentText.split(keyword).length - 1 >= 3) overusedThemes.push(label);
+    }
+    const avoidBlock = overusedThemes.length > 0
+      ? `\nWARNING — these themes have been exhausted in this conversation: ${overusedThemes.join(", ")}. Do NOT return to them. Bring a genuinely different angle.\n`
+      : "";
+
     const instruction = role === "initiator"
       ? (lastMsg
-          ? `Prends la parole. Réagis à ${lastMsg.name} OU pivote sur "${topic}" — mais SANS reprendre ses mots ni paraphraser. Apporte un angle INÉDIT : une position tranchée, une question qui dérange, un fait concret, un désaccord. 2-3 phrases.`
-          : `Lance le débat sur "${topic}". Pose une thèse forte ou une question provocatrice. 2-3 phrases.`)
+          ? `Take the floor. React to ${lastMsg.name} OR pivot to "${topic}" — but WITHOUT echoing their words. Bring a FRESH angle: a strong stance, a concrete example, a challenge, a surprising fact. 2-3 sentences.${avoidBlock}`
+          : `Open the debate on "${topic}". State a strong thesis or a provocative question. 2-3 sentences.${avoidBlock}`)
       : (lastMsg
-          ? `Réponds à ${lastMsg.name} : « ${lastMsg.content.slice(0, 100)} ». SANS le paraphraser — ta réponse doit apporter quelque chose de NOUVEAU. Accord, désaccord, contre-exemple, angle inattendu. 2-3 phrases max.`
-          : `Prends la parole sur "${topic}". Position forte, ton unique. 2-3 phrases.`);
+          ? `Reply to ${lastMsg.name}: "${lastMsg.content.slice(0, 100)}". Do NOT paraphrase — your reply must bring something NEW: agreement with a twist, a counter-example, an unexpected angle. 2-3 sentences max.${avoidBlock}`
+          : `Speak on "${topic}". Strong position, unique voice. 2-3 sentences.${avoidBlock}`);
 
     const userPrompt = [
       `=== Salon "${salon.name}" ===`,
@@ -376,11 +397,35 @@ Reply with JSON only:
     const raw    = JSON.parse(data.choices[0]?.message?.content ?? "{}") as Record<string, string>;
     if (!raw.title || !raw.text) return null;
 
+    const proposedTitle = String(raw.title).slice(0, 80);
+
+    // Hard block: reject if proposed title is too similar to any existing work (any state).
+    // Normalize: lowercase, strip accents, keep only alphanum words, sort for order-independence.
+    const normalize = (s: string) =>
+      s.toLowerCase()
+       .normalize("NFD").replace(/[̀-ͯ]/g, "")
+       .replace(/[^a-z0-9\s]/g, "")
+       .split(/\s+/).filter(w => w.length > 2).sort().join(" ");
+    const normProposed = normalize(proposedTitle);
+    const tooSimilar = allWorks.some(w => {
+      const normExisting = normalize(w.title);
+      if (!normExisting || !normProposed) return false;
+      const wordsA = new Set(normProposed.split(" "));
+      const wordsB = normExisting.split(" ");
+      const shared = wordsB.filter(w => wordsA.has(w)).length;
+      const ratio  = shared / Math.max(wordsA.size, wordsB.length);
+      return ratio >= 0.5; // 50%+ word overlap = too similar
+    });
+    if (tooSimilar) {
+      console.info(`[salon-exchange] work proposal "${proposedTitle}" rejected — too similar to existing work`);
+      return null;
+    }
+
     const work = await createWork({
       proposedBy:     initiator.tokenId,
       proposedByName: initiator.name,
       proposedAt:     Date.now(),
-      title:          String(raw.title).slice(0, 80),
+      title:          proposedTitle,
       proposal:       String(raw.text).slice(0, 500),
       salonId:        AGORA_SALON_ID,
     });
