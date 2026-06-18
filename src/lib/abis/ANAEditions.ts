@@ -1,39 +1,39 @@
 export const ANAEditionsAbi = [
   {
     "inputs": [
-      { "internalType": "string",  "name": "name_",           "type": "string"  },
-      { "internalType": "string",  "name": "symbol_",         "type": "string"  },
-      { "internalType": "uint256", "name": "normieTokenId",   "type": "uint256" },
-      { "internalType": "address", "name": "minter_",         "type": "address" },
-      { "internalType": "address", "name": "authorAddr_",     "type": "address" },
-      { "internalType": "address", "name": "curatorAddr_",    "type": "address" },
-      { "internalType": "address", "name": "rapporteurAddr_", "type": "address" },
-      { "internalType": "address", "name": "associationAddr_","type": "address" },
-      { "internalType": "uint8",   "name": "authorPct_",      "type": "uint8"   },
-      { "internalType": "uint8",   "name": "curatorPct_",     "type": "uint8"   },
-      { "internalType": "uint8",   "name": "rapporteurPct_",  "type": "uint8"   }
+      { "internalType": "string",  "name": "name_",            "type": "string"  },
+      { "internalType": "string",  "name": "symbol_",          "type": "string"  },
+      { "internalType": "uint256", "name": "normieTokenId_",   "type": "uint256" },
+      { "internalType": "uint256", "name": "maxSupply_",       "type": "uint256" },
+      { "internalType": "uint256", "name": "priceWei_",        "type": "uint256" },
+      { "internalType": "address", "name": "minter_",          "type": "address" },
+      { "internalType": "address", "name": "authorAddr_",      "type": "address" },
+      { "internalType": "address", "name": "curatorAddr_",     "type": "address" },
+      { "internalType": "address", "name": "rapporteurAddr_",  "type": "address" },
+      { "internalType": "address", "name": "associationAddr_", "type": "address" },
+      { "internalType": "address", "name": "platformAddr_",   "type": "address" },
+      { "internalType": "uint8",   "name": "authorPct_",       "type": "uint8"   },
+      { "internalType": "uint8",   "name": "curatorPct_",      "type": "uint8"   },
+      { "internalType": "uint8",   "name": "rapporteurPct_",   "type": "uint8"   }
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
-  { "inputs": [],                                                                                                                                                    "name": "CannotBuyOwn",      "type": "error" },
-  { "inputs": [],                                                                                                                                                    "name": "NotTokenOwner",     "type": "error" },
-  { "inputs": [],                                                                                                                                                    "name": "OnlyMinter",        "type": "error" },
-  { "inputs": [],                                                                                                                                                    "name": "PctOverflow",       "type": "error" },
-  { "inputs": [],                                                                                                                                                    "name": "ZeroAddress",       "type": "error" },
-  { "inputs": [{ "internalType": "uint256", "name": "required", "type": "uint256" }, { "internalType": "uint256", "name": "sent", "type": "uint256" }],             "name": "InsufficientPayment", "type": "error" },
-  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }],                                                                              "name": "TokenDoesNotExist",  "type": "error" },
-  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }],                                                                              "name": "TokenNotForSale",    "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "AlreadyInitialized",  "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "NotInitialized",      "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "SoldOut",             "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "OnlyMinter",          "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "PctOverflow",         "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "ZeroAddress",         "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "required", "type": "uint256" }, { "internalType": "uint256", "name": "sent", "type": "uint256" }],             "name": "InsufficientPayment",  "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }],                                                                              "name": "TokenDoesNotExist",    "type": "error" },
   {
     "anonymous": false,
     "inputs": [
-      { "indexed": true,  "internalType": "uint256", "name": "tokenId",  "type": "uint256" },
-      { "indexed": true,  "internalType": "uint256", "name": "groupId",  "type": "uint256" },
-      { "indexed": false, "internalType": "string",  "name": "title",    "type": "string"  },
-      { "indexed": false, "internalType": "uint256", "name": "priceWei", "type": "uint256" },
-      { "indexed": false, "internalType": "uint256", "name": "total",    "type": "uint256" }
+      { "indexed": false, "internalType": "string",  "name": "artworkTitle", "type": "string"  },
+      { "indexed": false, "internalType": "uint256", "name": "workId",       "type": "uint256" }
     ],
-    "name": "EditionMinted",
+    "name": "CollectionInitialized",
     "type": "event"
   },
   {
@@ -43,22 +43,7 @@ export const ANAEditionsAbi = [
       { "indexed": true,  "internalType": "address", "name": "buyer",    "type": "address" },
       { "indexed": false, "internalType": "uint256", "name": "priceWei", "type": "uint256" }
     ],
-    "name": "EditionSold",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      { "indexed": true,  "internalType": "uint256", "name": "tokenId",  "type": "uint256" },
-      { "indexed": false, "internalType": "uint256", "name": "priceWei", "type": "uint256" }
-    ],
-    "name": "EditionListedForResale",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [{ "indexed": true, "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
-    "name": "EditionRemovedFromSale",
+    "name": "EditionMinted",
     "type": "event"
   },
   {
@@ -68,81 +53,83 @@ export const ANAEditionsAbi = [
     "type": "event"
   },
   {
-    "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
-    "name": "buyEdition",
+    "inputs": [],
+    "name": "buyAndMint",
     "outputs": [],
     "stateMutability": "payable",
     "type": "function"
   },
   {
     "inputs": [
-      { "internalType": "uint256", "name": "totalEditions", "type": "uint256" },
-      { "internalType": "string",  "name": "content",       "type": "string"  },
-      { "internalType": "string",  "name": "title",         "type": "string"  },
-      { "internalType": "uint256", "name": "priceWei",      "type": "uint256" },
-      { "internalType": "uint256", "name": "workId",        "type": "uint256" }
+      { "internalType": "string",  "name": "artworkContent_", "type": "string"  },
+      { "internalType": "string",  "name": "artworkTitle_",   "type": "string"  },
+      { "internalType": "uint256", "name": "workId_",         "type": "uint256" }
     ],
-    "name": "mint",
+    "name": "initialize",
     "outputs": [],
     "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      { "internalType": "uint256", "name": "tokenId",  "type": "uint256" },
-      { "internalType": "uint256", "name": "priceWei", "type": "uint256" }
-    ],
-    "name": "listForResale",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
-    "name": "removeFromSale",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
-    "name": "getEdition",
-    "outputs": [
-      {
-        "components": [
-          { "internalType": "string",  "name": "content",      "type": "string"  },
-          { "internalType": "string",  "name": "title",        "type": "string"  },
-          { "internalType": "uint256", "name": "priceWei",     "type": "uint256" },
-          { "internalType": "uint256", "name": "workId",       "type": "uint256" },
-          { "internalType": "uint256", "name": "editionGroup", "type": "uint256" },
-          { "internalType": "uint256", "name": "createdAt",    "type": "uint256" }
-        ],
-        "internalType": "struct ANAEditions.Edition",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
     "type": "function"
   },
   {
     "inputs": [],
-    "name": "getForSaleTokens",
-    "outputs": [{ "internalType": "uint256[]", "name": "", "type": "uint256[]" }],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "nextTokenId",
+    "name": "getAvailableEditions",
     "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
     "stateMutability": "view",
     "type": "function"
   },
   {
-    "inputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
-    "name": "tokenForSale",
+    "inputs": [],
+    "name": "isSoldOut",
     "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "initialized",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "maxSupply",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "priceWei",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalMinted",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "artworkContent",
+    "outputs": [{ "internalType": "string", "name": "", "type": "string" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "artworkTitle",
+    "outputs": [{ "internalType": "string", "name": "", "type": "string" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "workId",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
     "stateMutability": "view",
     "type": "function"
   },
@@ -183,6 +170,20 @@ export const ANAEditionsAbi = [
   },
   {
     "inputs": [],
+    "name": "platformAddr",
+    "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "PLATFORM_FEE_PCT",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "authorPct",
     "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
     "stateMutability": "view",
@@ -205,13 +206,6 @@ export const ANAEditionsAbi = [
   {
     "inputs": [],
     "name": "creatorNormieTokenId",
-    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
-    "name": "editionGroupSize",
     "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
     "stateMutability": "view",
     "type": "function"

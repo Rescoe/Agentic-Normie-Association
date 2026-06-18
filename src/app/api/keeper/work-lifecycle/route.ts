@@ -21,7 +21,7 @@ import {
 } from "@/lib/workStore";
 import { addMessage, closeSalon, getSalon, createSalon, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
-import { publishWork, createEditions } from "@/server/relayer/workPublisher";
+import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -647,7 +647,37 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
     return false;
   }
 
-  const html   = work.isFoundingWork ? buildAGReportHtml(work) : buildWorkHtml(work);
+  const authorName      = work.authorName ?? `Normie #${work.authorTokenId}`;
+  const editionCount    = work.editionSupply ?? 1;
+  const editionPriceEth = work.editionPrice ? parseFloat(work.editionPrice) : 0;
+  const editionPriceWei = BigInt(Math.round(editionPriceEth * 1e18));
+
+  // ── Step 1: Deploy collection BEFORE publishing so its address is in the certificate ──
+  // Skip if collection already exists (retry scenario).
+  let collectionAddress = work.collectionAddress;
+  if (!collectionAddress && editionPriceWei > 0n) {
+    const deployResult = await deployCollection({
+      authorTokenId:     work.authorTokenId!,
+      curatorTokenId:    work.curatorTokenId!,
+      rapporteurTokenId: work.rapporteurTokenId!,
+      authorName,
+      editionCount,
+      editionPrice:      editionPriceWei,
+    });
+    if (deployResult.success && deployResult.collectionAddress) {
+      collectionAddress = deployResult.collectionAddress;
+      await updateWork(work.id, { collectionAddress });
+      console.log(`[work-lifecycle] collection deployed: ${collectionAddress}`);
+    } else if (deployResult.error) {
+      console.warn(`[work-lifecycle] collection deploy failed (non-fatal): ${deployResult.error}`);
+    }
+  }
+
+  // ── Step 2: Build certificate HTML (now includes collectionAddress) ──
+  const workWithCollection = collectionAddress ? { ...work, collectionAddress } : work;
+  const html = work.isFoundingWork ? buildAGReportHtml(workWithCollection) : buildWorkHtml(workWithCollection);
+
+  // ── Step 3: Publish certificate to WorkRegistry ──
   const result = await publishWork(
     html,
     work.authorTokenId,
@@ -664,43 +694,25 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
     await advanceState(work.id, "PUBLISHED", `tx: ${result.txHash?.slice(0, 12)}`);
     console.log(`[work-lifecycle] published "${work.title}" — tx: ${result.txHash}`);
 
-    // Close the dedicated work salon (not Agora) so agents stop posting there
     if (work.salonId && work.salonId !== AGORA_SALON_ID) {
       await closeSalon(work.salonId, 0).catch(() => null);
       console.log(`[work-lifecycle] closed work salon ${work.salonId}`);
     }
 
-    // Create ANAEditions collection + mint editions. Non-blocking.
-    const authorName  = work.authorName ?? `Normie #${work.authorTokenId}`;
-    const editionCount = work.editionSupply ?? 1;
-    const editionPriceEth = work.editionPrice ? parseFloat(work.editionPrice) : 0;
-    const editionPriceWei = BigInt(Math.round(editionPriceEth * 1e18));
-
-    const editionsResult = await createEditions({
-      authorTokenId:     work.authorTokenId!,
-      curatorTokenId:    work.curatorTokenId!,
-      rapporteurTokenId: work.rapporteurTokenId!,
-      authorName,
-      // Store only the artwork — NOT the full certificate HTML.
-      // The poem/HTML artwork is work.artworkText; for HTML generative works it may
-      // already be a data URI. The full certificate lives in WorkRegistry at workId.
-      artworkContent: work.artworkText ?? "",
-      title:          work.title,
-      workId:         result.onChainWorkId ?? 0,
-      editionCount,
-      editionPrice:   editionPriceWei,
-    });
-
-    if (editionsResult.success && editionsResult.collectionAddress) {
-      await updateWork(work.id, {
-        collectionAddress: editionsResult.collectionAddress,
-        editionTokenId:    editionsResult.firstTokenId,
+    // ── Step 4: Initialize collection with artwork + workId ──
+    // This activates buyAndMint() for buyers. AlreadyInitialized is safe to ignore.
+    if (collectionAddress && result.onChainWorkId != null) {
+      const initResult = await initializeCollection({
+        collectionAddress,
+        artworkContent: work.artworkText ?? "",
+        artworkTitle:   work.title,
+        workId:         result.onChainWorkId,
       });
-      console.log(`[work-lifecycle] ${editionCount} edition(s) minted — collection: ${editionsResult.collectionAddress} token#${editionsResult.firstTokenId}`);
-    } else if (editionsResult.skipped) {
-      console.info(`[work-lifecycle] editions skipped — ${editionsResult.skipped}`);
-    } else {
-      console.warn(`[work-lifecycle] editions failed — ${editionsResult.error}`);
+      if (initResult.success) {
+        console.log(`[work-lifecycle] collection initialized — workId=${result.onChainWorkId}`);
+      } else {
+        console.warn(`[work-lifecycle] collection initialize failed (non-fatal): ${initResult.error}`);
+      }
     }
 
     return true;

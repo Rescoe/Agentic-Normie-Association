@@ -3,7 +3,8 @@ export const ANACollectionFactoryAbi = [
     "inputs": [
       { "internalType": "address", "name": "initialOwner",    "type": "address" },
       { "internalType": "address", "name": "relayerAddr",     "type": "address" },
-      { "internalType": "address", "name": "associationAddr_","type": "address" }
+      { "internalType": "address", "name": "associationAddr_","type": "address" },
+      { "internalType": "address", "name": "platformAddr_",   "type": "address" }
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
@@ -42,7 +43,9 @@ export const ANACollectionFactoryAbi = [
       { "internalType": "address", "name": "rapporteurAddr_", "type": "address" },
       { "internalType": "uint8",   "name": "authorPct_",      "type": "uint8"   },
       { "internalType": "uint8",   "name": "curatorPct_",     "type": "uint8"   },
-      { "internalType": "uint8",   "name": "rapporteurPct_",  "type": "uint8"   }
+      { "internalType": "uint8",   "name": "rapporteurPct_",  "type": "uint8"   },
+      { "internalType": "uint256", "name": "maxSupply_",      "type": "uint256" },
+      { "internalType": "uint256", "name": "priceWei_",       "type": "uint256" }
     ],
     "name": "createCollection",
     "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
@@ -86,6 +89,13 @@ export const ANACollectionFactoryAbi = [
   },
   {
     "inputs": [],
+    "name": "platformAddr",
+    "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "defaultAuthorPct",
     "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
     "stateMutability": "view",
@@ -118,6 +128,13 @@ export const ANACollectionFactoryAbi = [
   {
     "inputs": [{ "internalType": "address", "name": "addr", "type": "address" }],
     "name": "setAssociationAddr",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "addr", "type": "address" }],
+    "name": "setPlatformAddr",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

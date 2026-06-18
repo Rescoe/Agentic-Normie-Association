@@ -10,246 +10,232 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
  * @title ANAEditions
- * @notice ERC-721 for ANA published works.
+ * @notice Open-edition ERC-721 for ANA published works.
  *
- * Each token = one purchasable edition of an ANA artwork.
+ * Lifecycle:
+ *  1. ANACollectionFactory.createCollection() deploys this contract with governance
+ *     params (supply, price, revenue splits). Artwork NOT yet stored — collection
+ *     is dormant.
  *
- * What is stored on-chain per token:
- *   content  — the artwork itself (poem UTF-8, or data:text/html;base64,... for HTML/code)
- *   title    — work title
- *   workId   — index in WorkRegistry where the full certificate lives
+ *  2. WorkRegistry.publish() stores the governance certificate (which includes
+ *     this contract's address) and returns a workId.
  *
- * The full governance certificate (proposal, votes, brief, team, logs) is NOT
- * duplicated here — it is already stored immutably in WorkRegistry. workId is
- * the permanent pointer to it.
+ *  3. Relayer calls initialize(artworkContent, artworkTitle, workId).
+ *     Collection becomes active — mints are now possible.
  *
- * Revenue split on first sale (seller == minter):
+ *  4. Anyone calls buyAndMint() payable. Token minted directly to buyer.
+ *     No pre-minting. Supply is hard-capped at maxSupply.
+ *
+ * Revenue split (first-come, shared rules for all editions):
  *   authorPct% → authorAddr
  *   curatorPct% → curatorAddr
  *   rapporteurPct% → rapporteurAddr
  *   remainder → associationAddr (vault)
  *
- * Revenue split on resale (seller != minter):
- *   90% → seller
- *   10% royalty pool → split among role addresses using same percentages
+ * ERC-2981: 10% to associationAddr for secondary marketplace royalties (OpenSea etc).
  */
 contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
     using Strings for uint256;
 
-    // ─── Types ───────────────────────────────────────────────────────────────
+    // ─── Fixed at deploy (from collective vote) ──────────────────────────────
 
-    struct Edition {
-        string  content;       // artwork only — poem text or data URI for HTML/code
-        string  title;
-        uint256 priceWei;      // 0 = not listed for sale
-        uint256 workId;        // WorkRegistry index → full governance certificate
-        uint256 editionGroup;  // groups editions of the same artwork
-        uint256 createdAt;
-    }
-
-    // ─── State ───────────────────────────────────────────────────────────────
-
+    uint256 public immutable maxSupply;
+    uint256 public immutable priceWei;
     uint256 public immutable creatorNormieTokenId;
-    address public minter;
 
+    // 5% of every sale goes to the real human loi 1901 association that runs the platform.
+    // This sustains the ANA infrastructure independently of on-chain revenue.
+    uint256 public constant PLATFORM_FEE_PCT = 5;
+    address public immutable platformAddr;
+
+    // ─── Set via initialize() after WorkRegistry.publish() ──────────────────
+
+    // The artwork itself — poem UTF-8 text, or data:text/html;base64,... for HTML/code.
+    // NOT the full governance certificate; that lives in WorkRegistry at workId.
+    string  public artworkContent;
+    string  public artworkTitle;
+    uint256 public workId;
+    bool    public initialized;
+
+    // ─── Revenue ─────────────────────────────────────────────────────────────
+
+    address public minter;          // relayer — can call initialize()
     address public authorAddr;
     address public curatorAddr;
     address public rapporteurAddr;
-    address public associationAddr;
+    address public associationAddr; // ANA on-chain vault (TreasuryModule)
 
     uint8  public authorPct;
     uint8  public curatorPct;
     uint8  public rapporteurPct;
 
-    uint256 public nextTokenId;
-    uint256 private _nextEditionGroup;
-
-    mapping(uint256 => Edition) private _editions;
-    mapping(uint256 => bool)    public  tokenForSale;
-    mapping(uint256 => uint256) public  editionGroupSize;
+    uint256 public totalMinted;
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
-    event EditionMinted(uint256 indexed tokenId, uint256 indexed groupId, string title, uint256 priceWei, uint256 total);
-    event EditionSold(uint256 indexed tokenId, address indexed buyer, uint256 priceWei);
-    event EditionListedForResale(uint256 indexed tokenId, uint256 priceWei);
-    event EditionRemovedFromSale(uint256 indexed tokenId);
+    event CollectionInitialized(string artworkTitle, uint256 workId);
+    event EditionMinted(uint256 indexed tokenId, address indexed buyer, uint256 priceWei);
     event MinterUpdated(address indexed newMinter);
     event RecipientUpdated(string role, address newAddr);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
+    error NotInitialized();
+    error AlreadyInitialized();
+    error SoldOut();
     error OnlyMinter();
-    error TokenNotForSale(uint256 tokenId);
     error InsufficientPayment(uint256 required, uint256 sent);
-    error CannotBuyOwn();
-    error TokenDoesNotExist(uint256 tokenId);
     error ZeroAddress();
     error PctOverflow();
-    error NotTokenOwner();
+    error TokenDoesNotExist(uint256 tokenId);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
+    /**
+     * @param name_            ERC-721 collection name
+     * @param symbol_          ERC-721 symbol
+     * @param normieTokenId_   Creator's Normie token ID
+     * @param maxSupply_       Hard cap on editions (from collective vote)
+     * @param priceWei_        Price per edition in wei (from collective vote)
+     * @param minter_          Address that can call initialize() (= relayer)
+     * @param authorAddr_      Revenue recipient — AUTHOR role
+     * @param curatorAddr_     Revenue recipient — CURATOR role
+     * @param rapporteurAddr_  Revenue recipient — RAPPORTEUR role
+     * @param associationAddr_ ANA on-chain vault (TreasuryModule) — remainder + ERC-2981 royalties
+     * @param platformAddr_    Real human loi 1901 association — receives 5% platform fee
+     * @param authorPct_       Author revenue share (0-100, of the 95% remaining after platform fee)
+     * @param curatorPct_      Curator revenue share
+     * @param rapporteurPct_   Rapporteur revenue share
+     */
     constructor(
         string  memory name_,
         string  memory symbol_,
-        uint256 normieTokenId,
+        uint256 normieTokenId_,
+        uint256 maxSupply_,
+        uint256 priceWei_,
         address minter_,
         address authorAddr_,
         address curatorAddr_,
         address rapporteurAddr_,
         address associationAddr_,
+        address platformAddr_,
         uint8   authorPct_,
         uint8   curatorPct_,
         uint8   rapporteurPct_
     ) ERC721(name_, symbol_) Ownable(msg.sender) {
-        if (minter_ == address(0) || associationAddr_ == address(0)) revert ZeroAddress();
+        if (minter_ == address(0) || associationAddr_ == address(0) || platformAddr_ == address(0)) revert ZeroAddress();
         if (uint16(authorPct_) + uint16(curatorPct_) + uint16(rapporteurPct_) > 100) revert PctOverflow();
+        require(maxSupply_ > 0 && maxSupply_ <= 10000, "Invalid supply");
 
-        creatorNormieTokenId = normieTokenId;
-        minter         = minter_;
-        authorAddr     = authorAddr_;
-        curatorAddr    = curatorAddr_;
-        rapporteurAddr = rapporteurAddr_;
+        creatorNormieTokenId = normieTokenId_;
+        maxSupply       = maxSupply_;
+        priceWei        = priceWei_;
+        minter          = minter_;
+        platformAddr    = platformAddr_;
+        authorAddr      = authorAddr_;
+        curatorAddr     = curatorAddr_;
+        rapporteurAddr  = rapporteurAddr_;
         associationAddr = associationAddr_;
-        authorPct      = authorPct_;
-        curatorPct     = curatorPct_;
-        rapporteurPct  = rapporteurPct_;
+        authorPct       = authorPct_;
+        curatorPct      = curatorPct_;
+        rapporteurPct   = rapporteurPct_;
 
         _setDefaultRoyalty(associationAddr_, 1000); // 10% ERC-2981
     }
 
-    // ─── Minting (relayer only) ───────────────────────────────────────────────
+    // ─── Initialization (relayer only, once) ─────────────────────────────────
 
     /**
-     * @notice Mint editions for a published ANA work.
-     * @param totalEditions  Number of edition tokens (1 for 1/1, up to 250)
-     * @param content        The artwork itself — poem UTF-8 text, or data:text/html;base64,...
-     *                       NOT the full certificate. WorkRegistry.works(workId) holds that.
-     * @param title          Work title
-     * @param priceWei       Sale price in wei (0 = minted but not listed)
-     * @param workId         Index of this work in WorkRegistry (permanent certificate reference)
+     * @notice Link the collection to its WorkRegistry certificate and activate mints.
+     *         Called by the relayer after WorkRegistry.publish() returns a workId.
+     *
+     * @param artworkContent_  The artwork only — poem text or data URI for HTML/generative works.
+     *                         NOT the full certificate. WorkRegistry.works(workId) holds that.
+     * @param artworkTitle_    Work title
+     * @param workId_          Index in WorkRegistry where the full governance certificate lives
      */
-    function mint(
-        uint256 totalEditions,
-        string calldata content,
-        string calldata title,
-        uint256 priceWei,
-        uint256 workId
+    function initialize(
+        string calldata artworkContent_,
+        string calldata artworkTitle_,
+        uint256 workId_
     ) external {
         if (msg.sender != minter) revert OnlyMinter();
-        require(totalEditions > 0 && totalEditions <= 250, "Invalid editions count");
-        require(bytes(content).length > 0, "Empty content");
+        if (initialized) revert AlreadyInitialized();
+        require(bytes(artworkContent_).length > 0, "Empty artwork");
 
-        uint256 groupId = _nextEditionGroup++;
-        editionGroupSize[groupId] = totalEditions;
+        artworkContent = artworkContent_;
+        artworkTitle   = artworkTitle_;
+        workId         = workId_;
+        initialized    = true;
 
-        for (uint256 i = 0; i < totalEditions; i++) {
-            uint256 tokenId = nextTokenId++;
-            _safeMint(msg.sender, tokenId);
-            _editions[tokenId] = Edition({
-                content:      content,
-                title:        title,
-                priceWei:     priceWei,
-                workId:       workId,
-                editionGroup: groupId,
-                createdAt:    block.timestamp
-            });
-            if (priceWei > 0) tokenForSale[tokenId] = true;
-            emit EditionMinted(tokenId, groupId, title, priceWei, totalEditions);
-        }
+        emit CollectionInitialized(artworkTitle_, workId_);
     }
 
-    // ─── Buying (public) ─────────────────────────────────────────────────────
+    // ─── Buying / minting (public) ────────────────────────────────────────────
 
-    function buyEdition(uint256 tokenId) external payable nonReentrant {
-        if (!_exists(tokenId)) revert TokenDoesNotExist(tokenId);
-        if (!tokenForSale[tokenId]) revert TokenNotForSale(tokenId);
+    /**
+     * @notice Buy and mint one edition directly to msg.sender.
+     *         Requires the collection to be initialized (artwork set).
+     *         Supply is hard-capped — reverts when sold out.
+     */
+    function buyAndMint() external payable nonReentrant {
+        if (!initialized) revert NotInitialized();
+        if (totalMinted >= maxSupply) revert SoldOut();
+        if (msg.value < priceWei) revert InsufficientPayment(priceWei, msg.value);
 
-        uint256 price = _editions[tokenId].priceWei;
-        if (msg.value < price) revert InsufficientPayment(price, msg.value);
+        uint256 tokenId = totalMinted++;
+        _safeMint(msg.sender, tokenId);
+        _distributeRevenue(priceWei);
 
-        address seller = ownerOf(tokenId);
-        if (seller == msg.sender) revert CannotBuyOwn();
+        emit EditionMinted(tokenId, msg.sender, priceWei);
 
-        tokenForSale[tokenId] = false;
-        _transfer(seller, msg.sender, tokenId);
-        _distributeRevenue(price, seller);
-
-        emit EditionSold(tokenId, msg.sender, price);
-
-        uint256 excess = msg.value - price;
+        uint256 excess = msg.value - priceWei;
         if (excess > 0) {
             (bool ok, ) = payable(msg.sender).call{value: excess}("");
             require(ok, "Refund failed");
         }
     }
 
-    // ─── Resale listing ──────────────────────────────────────────────────────
-
-    function listForResale(uint256 tokenId, uint256 priceWei) external {
-        if (ownerOf(tokenId) != msg.sender) revert NotTokenOwner();
-        require(priceWei > 0, "Price must be > 0");
-        _editions[tokenId].priceWei = priceWei;
-        tokenForSale[tokenId] = true;
-        emit EditionListedForResale(tokenId, priceWei);
-    }
-
-    function removeFromSale(uint256 tokenId) external {
-        if (ownerOf(tokenId) != msg.sender) revert NotTokenOwner();
-        tokenForSale[tokenId] = false;
-        emit EditionRemovedFromSale(tokenId);
-    }
-
     // ─── tokenURI (fully on-chain) ────────────────────────────────────────────
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        if (!_exists(tokenId)) revert TokenDoesNotExist(tokenId);
-        Edition storage e = _editions[tokenId];
-        uint256 groupId   = e.editionGroup;
-        uint256 total     = editionGroupSize[groupId];
+        if (tokenId >= totalMinted) revert TokenDoesNotExist(tokenId);
 
-        uint256 editionNum = _editionNumberInGroup(tokenId, groupId, total);
-        string memory editionLabel = total == 1
+        string memory editionLabel = maxSupply == 1
             ? "1/1"
-            : string(abi.encodePacked(editionNum.toString(), "/", total.toString()));
+            : string(abi.encodePacked((tokenId + 1).toString(), "/", maxSupply.toString()));
 
-        // Detect content type: if it starts with "data:" it's a media data URI (HTML/image)
-        // otherwise it's raw text (poem, code snippet shown as description)
-        bool isDataUri = bytes(e.content).length >= 5 &&
-            bytes(e.content)[0] == 'd' &&
-            bytes(e.content)[1] == 'a' &&
-            bytes(e.content)[2] == 't' &&
-            bytes(e.content)[3] == 'a' &&
-            bytes(e.content)[4] == ':';
+        bool isDataUri = bytes(artworkContent).length >= 5 &&
+            bytes(artworkContent)[0] == 'd' &&
+            bytes(artworkContent)[1] == 'a' &&
+            bytes(artworkContent)[2] == 't' &&
+            bytes(artworkContent)[3] == 'a' &&
+            bytes(artworkContent)[4] == ':';
+
+        bytes memory attrs = abi.encodePacked(
+            '[',
+            '{"trait_type":"Edition","value":"', editionLabel, '"},',
+            '{"trait_type":"Normie","value":', creatorNormieTokenId.toString(), '},',
+            '{"trait_type":"Work ID","value":', workId.toString(), '},',
+            '{"trait_type":"Max supply","value":', maxSupply.toString(), '}',
+            ']'
+        );
 
         bytes memory json;
         if (isDataUri) {
             json = abi.encodePacked(
-                '{"name":"', _escapeJson(e.title), unicode" — ", editionLabel, '",',
+                '{"name":"', _escapeJson(artworkTitle), unicode" — ", editionLabel, '",',
                 '"description":"ANA on-chain work, Normie #', creatorNormieTokenId.toString(), '",',
-                '"animation_url":"', e.content, '",',
+                '"animation_url":"', artworkContent, '",',
                 '"external_url":"https://agentic-normie-association.vercel.app/works",',
-                '"attributes":[',
-                    '{"trait_type":"Edition","value":"', editionLabel, '"},',
-                    '{"trait_type":"Normie","value":', creatorNormieTokenId.toString(), '},',
-                    '{"trait_type":"Work ID","value":', e.workId.toString(), '},',
-                    '{"trait_type":"Total editions","value":', total.toString(), '}',
-                ']}'
+                '"attributes":', attrs, '}'
             );
         } else {
-            // Raw text artwork (poem, etc.) — store as description
             json = abi.encodePacked(
-                '{"name":"', _escapeJson(e.title), unicode" — ", editionLabel, '",',
-                '"description":"', _escapeJson(e.content), '",',
+                '{"name":"', _escapeJson(artworkTitle), unicode" — ", editionLabel, '",',
+                '"description":"', _escapeJson(artworkContent), '",',
                 '"external_url":"https://agentic-normie-association.vercel.app/works",',
-                '"attributes":[',
-                    '{"trait_type":"Edition","value":"', editionLabel, '"},',
-                    '{"trait_type":"Normie","value":', creatorNormieTokenId.toString(), '},',
-                    '{"trait_type":"Work ID","value":', e.workId.toString(), '},',
-                    '{"trait_type":"Art form","value":"text"},',
-                    '{"trait_type":"Total editions","value":', total.toString(), '}',
-                ']}'
+                '"attributes":', attrs, '}'
             );
         }
 
@@ -257,6 +243,16 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
             "data:application/json;base64,",
             Base64.encode(json)
         ));
+    }
+
+    // ─── Views ────────────────────────────────────────────────────────────────
+
+    function getAvailableEditions() external view returns (uint256) {
+        return totalMinted >= maxSupply ? 0 : maxSupply - totalMinted;
+    }
+
+    function isSoldOut() external view returns (bool) {
+        return totalMinted >= maxSupply;
     }
 
     // ─── ERC-165 ─────────────────────────────────────────────────────────────
@@ -268,27 +264,7 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
         return super.supportsInterface(interfaceId);
     }
 
-    // ─── Views ───────────────────────────────────────────────────────────────
-
-    function getEdition(uint256 tokenId) external view returns (Edition memory) {
-        if (!_exists(tokenId)) revert TokenDoesNotExist(tokenId);
-        return _editions[tokenId];
-    }
-
-    function getForSaleTokens() external view returns (uint256[] memory) {
-        uint256 count;
-        for (uint256 i = 0; i < nextTokenId; i++) {
-            if (_exists(i) && tokenForSale[i]) count++;
-        }
-        uint256[] memory ids = new uint256[](count);
-        uint256 idx;
-        for (uint256 i = 0; i < nextTokenId && idx < count; i++) {
-            if (_exists(i) && tokenForSale[i]) ids[idx++] = i;
-        }
-        return ids;
-    }
-
-    // ─── Admin ────────────────────────────────────────────────────────────────
+    // ─── Admin (owner = ANACollectionFactory or multisig) ────────────────────
 
     function setMinter(address newMinter) external onlyOwner {
         if (newMinter == address(0)) revert ZeroAddress();
@@ -319,29 +295,18 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
 
     // ─── Internal ─────────────────────────────────────────────────────────────
 
-    function _distributeRevenue(uint256 price, address seller) internal {
-        bool isResale = (seller != minter);
+    function _distributeRevenue(uint256 price) internal {
+        // 5% platform fee sustains the ANA infrastructure (human loi 1901 association)
+        uint256 platformFee = (price * PLATFORM_FEE_PCT) / 100;
+        uint256 remaining   = price - platformFee;
 
-        uint256 authorAmt;
-        uint256 curatorAmt;
-        uint256 rapporteurAmt;
-        uint256 assocAmt;
+        // Remaining 95% split among role addresses per voted percentages
+        uint256 authorAmt     = (remaining * authorPct)     / 100;
+        uint256 curatorAmt    = (remaining * curatorPct)    / 100;
+        uint256 rapporteurAmt = (remaining * rapporteurPct) / 100;
+        uint256 assocAmt      = remaining - authorAmt - curatorAmt - rapporteurAmt;
 
-        if (!isResale) {
-            authorAmt     = (price * authorPct)     / 100;
-            curatorAmt    = (price * curatorPct)    / 100;
-            rapporteurAmt = (price * rapporteurPct) / 100;
-            assocAmt      = price - authorAmt - curatorAmt - rapporteurAmt;
-        } else {
-            uint256 sellerCut   = (price * 90) / 100;
-            uint256 royaltyPool = price - sellerCut;
-            authorAmt     = (royaltyPool * authorPct)     / 100;
-            curatorAmt    = (royaltyPool * curatorPct)    / 100;
-            rapporteurAmt = (royaltyPool * rapporteurPct) / 100;
-            assocAmt      = royaltyPool - authorAmt - curatorAmt - rapporteurAmt;
-            _safeSend(seller, sellerCut);
-        }
-
+        _safeSend(platformAddr,    platformFee);
         _safeSend(authorAddr,      authorAmt);
         _safeSend(curatorAddr,     curatorAmt);
         _safeSend(rapporteurAddr,  rapporteurAmt);
@@ -352,25 +317,6 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
         if (amount == 0 || to == address(0)) return;
         (bool ok, ) = payable(to).call{value: amount}("");
         require(ok, "Payment failed");
-    }
-
-    function _exists(uint256 tokenId) internal view returns (bool) {
-        return tokenId < nextTokenId && _ownerOf(tokenId) != address(0);
-    }
-
-    function _editionNumberInGroup(uint256 tokenId, uint256 groupId, uint256 total)
-        internal view returns (uint256)
-    {
-        uint256 num = 1;
-        uint256 seen = 0;
-        for (uint256 i = 0; i < nextTokenId && seen < total; i++) {
-            if (_exists(i) && _editions[i].editionGroup == groupId) {
-                seen++;
-                if (i == tokenId) return num;
-                num++;
-            }
-        }
-        return 1;
     }
 
     function _escapeJson(string memory s) internal pure returns (string memory) {

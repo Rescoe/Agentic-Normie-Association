@@ -7,8 +7,12 @@ import * as path from "path";
  *
  * Prerequisites (already deployed):
  *  - AssociationCore
- *  - TreasuryModule (= ANA vault, receives association share of edition sales)
+ *  - TreasuryModule (= ANA on-chain vault)
  *  - FactoryRegistry
+ *
+ * Required env vars:
+ *  - NEXT_PUBLIC_TREASURY_MODULE_ADDRESS  — ANA on-chain vault (associationAddr)
+ *  - PLATFORM_ADDRESS                     — Real human loi 1901 association wallet (5% platform fee)
  *
  * Run:
  *  npx hardhat run scripts/deploy-editions.ts --network base
@@ -38,21 +42,25 @@ async function main() {
 
   const relayerAddress  = process.env.RELAYER_ADDRESS ?? deployer.address;
   const treasuryAddress = existing.TreasuryModule ?? process.env.NEXT_PUBLIC_TREASURY_MODULE_ADDRESS;
+  const platformAddress = process.env.PLATFORM_ADDRESS;
   const registryAddress = existing.FactoryRegistry ?? process.env.NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS;
 
-  if (!treasuryAddress) throw new Error("TreasuryModule address required (existing deployment or NEXT_PUBLIC_TREASURY_MODULE_ADDRESS)");
+  if (!treasuryAddress) throw new Error("TreasuryModule address required (NEXT_PUBLIC_TREASURY_MODULE_ADDRESS)");
+  if (!platformAddress) throw new Error("Platform address required (PLATFORM_ADDRESS) — real human loi 1901 association wallet");
 
   console.log(`\nRelayer  : ${relayerAddress}`);
-  console.log(`Vault    : ${treasuryAddress}`);
+  console.log(`Vault    : ${treasuryAddress}  (ANA on-chain TreasuryModule)`);
+  console.log(`Platform : ${platformAddress}  (loi 1901 human association — 5% fee)`);
   console.log(`Registry : ${registryAddress ?? "(not wiring — set manually)"}\n`);
 
   // ── Deploy ANACollectionFactory ───────────────────────────────────────────
   console.log("[1/2] Deploying ANACollectionFactory...");
   const FactoryF  = await ethers.getContractFactory("ANACollectionFactory");
   const factory   = await FactoryF.deploy(
-    deployer.address,   // initialOwner (= deployer / can be transferred to multisig)
+    deployer.address,   // initialOwner
     relayerAddress,     // pre-authorized minter
-    treasuryAddress,    // ANA vault = default association revenue address
+    treasuryAddress,    // ANA on-chain vault (associationAddr)
+    platformAddress,    // real human association (5% platform fee on all sales)
   );
   await factory.waitForDeployment();
   const factoryAddr = await factory.getAddress();
@@ -82,7 +90,7 @@ async function main() {
 
   console.log("\n─────────────────────────────────────────────────────");
   console.log("✅ Deployment complete!");
-  console.log(`\nAdd to .env.local:\n  NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS=${factoryAddr}`);
+  console.log(`\nAdd to .env / Vercel:\n  NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS=${factoryAddr}`);
   console.log("─────────────────────────────────────────────────────");
 }
 

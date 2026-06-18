@@ -488,33 +488,42 @@ function BuyEditionButton({
   const [error,  setError]  = useState<string | null>(null);
   const [done,   setDone]   = useState(false);
 
-  // Read available token IDs for sale on-chain
-  const { data: forSaleTokens } = useReadContract({
+  // Read available supply directly from the contract
+  const { data: availableData, refetch } = useReadContract({
     address:      collectionAddress,
     abi:          ANA_EDITIONS_ABI,
-    functionName: "getForSaleTokens",
+    functionName: "getAvailableEditions",
     query: { refetchInterval: 30_000 },
+  });
+
+  // Also check if collection is initialized (artwork linked)
+  const { data: isInitialized } = useReadContract({
+    address:      collectionAddress,
+    abi:          ANA_EDITIONS_ABI,
+    functionName: "initialized",
+    query: { refetchInterval: 60_000 },
   });
 
   const { writeContractAsync } = useWriteContract();
 
-  const priceWei = BigInt(Math.round(parseFloat(editionPriceEth) * 1e18));
-  const available = (forSaleTokens as bigint[] | undefined)?.length ?? 0;
-  const firstToken = (forSaleTokens as bigint[] | undefined)?.[0];
+  const priceWei   = BigInt(Math.round(parseFloat(editionPriceEth) * 1e18));
+  const available  = availableData != null ? Number(availableData as bigint) : null;
 
   async function handleBuy() {
-    if (firstToken == null || !connectedAddr) return;
+    if (!connectedAddr) return;
     setBuying(true);
     setError(null);
     try {
+      // buyAndMint() — no tokenId needed, mints directly to buyer
       await writeContractAsync({
         address:      collectionAddress,
         abi:          ANA_EDITIONS_ABI,
-        functionName: "buyEdition",
-        args:         [firstToken],
+        functionName: "buyAndMint",
+        args:         [],
         value:        priceWei,
       });
       setDone(true);
+      refetch();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg.includes("User rejected") ? "Transaction cancelled." : "Transaction failed.");
@@ -531,25 +540,34 @@ function BuyEditionButton({
     );
   }
 
+  // Collection deployed but not yet initialized (artwork not linked)
+  if (isInitialized === false) {
+    return (
+      <p className="font-mono text-[10px] text-[--fg-muted] border border-[--border] px-2 py-1">
+        ◎ {totalEditions} editions · {editionPriceEth} ETH · en cours d'activation…
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
         <p className="font-mono text-[10px] text-[--fg-muted]">
-          {available > 0
-            ? `${available}/${totalEditions} editions available · ${editionPriceEth} ETH`
-            : available === 0 && forSaleTokens !== undefined
-              ? "Sold out"
-              : `${totalEditions} editions · ${editionPriceEth} ETH`}
+          {available === null
+            ? `${totalEditions} editions · ${editionPriceEth} ETH`
+            : available === 0
+              ? "Épuisé"
+              : `${available}/${totalEditions} disponibles · ${editionPriceEth} ETH`}
         </p>
         {!connectedAddr ? (
-          <p className="font-mono text-[10px] text-[--fg-muted]">Connect wallet to buy</p>
-        ) : available > 0 ? (
+          <p className="font-mono text-[10px] text-[--fg-muted]">Connectez votre wallet</p>
+        ) : available !== null && available > 0 ? (
           <button
             onClick={handleBuy}
             disabled={buying}
             className="font-mono text-[10px] border border-[--fg] px-2 py-1 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait"
           >
-            {buying ? "Confirming…" : `Buy · ${editionPriceEth} ETH`}
+            {buying ? "Confirmation…" : `Mint · ${editionPriceEth} ETH`}
           </button>
         ) : null}
       </div>

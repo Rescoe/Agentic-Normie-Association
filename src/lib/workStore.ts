@@ -363,7 +363,9 @@ export function buildWorkHtml(work: ANAWork): string {
     : "";
 
   const editionNote = work.editionSupply && work.editionPrice
-    ? `<p class="meta" style="color:#a78bfa;margin-top:.3rem">◈ ${work.editionSupply} ERC-721 editions · ${work.editionPrice} ETH each</p>`
+    ? work.collectionAddress
+      ? `<p class="meta" style="color:#a78bfa;margin-top:.3rem">◈ ${work.editionSupply} ERC-721 editions · ${work.editionPrice} ETH · <a href="https://basescan.org/address/${work.collectionAddress}" style="color:#a78bfa;text-decoration:none" target="_blank">${work.collectionAddress}</a></p>`
+      : `<p class="meta" style="color:#a78bfa;margin-top:.3rem">◈ ${work.editionSupply} ERC-721 editions · ${work.editionPrice} ETH each</p>`
     : "";
 
   return `<!DOCTYPE html>

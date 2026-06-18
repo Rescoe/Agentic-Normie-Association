@@ -26,6 +26,8 @@ contract ANACollectionFactory is Ownable {
     // ─── State ───────────────────────────────────────────────────────────────
 
     address public associationAddr;
+    // Real human loi 1901 association — receives 5% platform fee on all edition sales
+    address public platformAddr;
 
     mapping(address => bool)       public authorized;
     mapping(uint256 => address[])  public collectionsByNormie;
@@ -56,17 +58,20 @@ contract ANACollectionFactory is Ownable {
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /**
-     * @param initialOwner   Owner address (deployer / multisig)
-     * @param relayerAddr    Relayer address — authorized immediately
-     * @param associationAddr_ ANA vault address (default revenue recipient for association share)
+     * @param initialOwner     Owner address (deployer / multisig)
+     * @param relayerAddr      Relayer address — authorized immediately
+     * @param associationAddr_ ANA on-chain vault (TreasuryModule) — association revenue share
+     * @param platformAddr_    Real human loi 1901 association — 5% platform fee on all sales
      */
     constructor(
         address initialOwner,
         address relayerAddr,
-        address associationAddr_
+        address associationAddr_,
+        address platformAddr_
     ) Ownable(initialOwner) {
-        if (relayerAddr == address(0) || associationAddr_ == address(0)) revert ZeroAddress();
+        if (relayerAddr == address(0) || associationAddr_ == address(0) || platformAddr_ == address(0)) revert ZeroAddress();
         associationAddr = associationAddr_;
+        platformAddr    = platformAddr_;
         authorized[relayerAddr] = true;
         emit AuthorizationUpdated(relayerAddr, true);
     }
@@ -87,6 +92,20 @@ contract ANACollectionFactory is Ownable {
      * @param curatorPct_       Curator %, 0 = use default (only when authorPct_ > 0)
      * @param rapporteurPct_    Rapporteur %, 0 = use default (only when authorPct_ > 0)
      */
+    /**
+     * @param normieTokenId     Creator's Normie token ID
+     * @param name              Collection name (e.g. "Salon d'automne 2025")
+     * @param symbol            ERC-721 symbol
+     * @param minter_           Address that can call initialize() (= relayer)
+     * @param authorAddr_       Revenue address for AUTHOR role
+     * @param curatorAddr_      Revenue address for CURATOR role
+     * @param rapporteurAddr_   Revenue address for RAPPORTEUR role
+     * @param authorPct_        Author %, 0 = use default
+     * @param curatorPct_       Curator %, 0 = use default (only when authorPct_ > 0)
+     * @param rapporteurPct_    Rapporteur %, 0 = use default (only when authorPct_ > 0)
+     * @param maxSupply_        Hard cap on editions (from collective vote)
+     * @param priceWei_         Price per edition in wei (from collective vote)
+     */
     function createCollection(
         uint256 normieTokenId,
         string  calldata name,
@@ -97,10 +116,13 @@ contract ANACollectionFactory is Ownable {
         address rapporteurAddr_,
         uint8   authorPct_,
         uint8   curatorPct_,
-        uint8   rapporteurPct_
+        uint8   rapporteurPct_,
+        uint256 maxSupply_,
+        uint256 priceWei_
     ) external returns (address) {
         if (!authorized[msg.sender]) revert NotAuthorized();
         if (minter_ == address(0)) revert ZeroAddress();
+        require(maxSupply_ > 0, "Supply must be > 0");
 
         uint8 aPct = authorPct_ > 0 ? authorPct_ : defaultAuthorPct;
         uint8 cPct = authorPct_ > 0 ? curatorPct_ : defaultCuratorPct;
@@ -112,11 +134,14 @@ contract ANACollectionFactory is Ownable {
             name,
             symbol,
             normieTokenId,
+            maxSupply_,
+            priceWei_,
             minter_,
             authorAddr_,
             curatorAddr_,
             rapporteurAddr_,
             associationAddr,
+            platformAddr,    // 5% platform fee — same for all collections
             aPct,
             cPct,
             rPct
@@ -164,6 +189,11 @@ contract ANACollectionFactory is Ownable {
     function setAssociationAddr(address addr) external onlyOwner {
         if (addr == address(0)) revert ZeroAddress();
         associationAddr = addr;
+    }
+
+    function setPlatformAddr(address addr) external onlyOwner {
+        if (addr == address(0)) revert ZeroAddress();
+        platformAddr = addr;
     }
 
     function setDefaultPct(uint8 authorPct_, uint8 curatorPct_, uint8 rapporteurPct_) external onlyOwner {

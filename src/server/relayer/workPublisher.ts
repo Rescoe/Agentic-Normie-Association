@@ -1,19 +1,30 @@
 /**
  * workPublisher.ts
  *
- * Handles two on-chain steps after a work is approved:
- *  1. publishWork()     — WorkRegistry.publish() — stores the certificate HTML on-chain
- *  2. createEditions()  — ANACollectionFactory.createCollection() + ANAEditions.mint()
+ * Three on-chain steps in the publishing pipeline:
  *
- * Both steps are called by the keeper pipeline after vote tally.
+ *  1. deployCollection()     — ANACollectionFactory.createCollection()
+ *                              Deploys ANAEditions with supply/price/revenue config.
+ *                              Called BEFORE WorkRegistry.publish() so the collection
+ *                              address can be embedded in the immutable certificate.
+ *
+ *  2. publishWork()          — WorkRegistry.publish()
+ *                              Stores the governance certificate on-chain (HTML includes
+ *                              collection address). Returns the immutable workId.
+ *
+ *  3. initializeCollection() — ANAEditions.initialize()
+ *                              Links artwork content + workId to the collection.
+ *                              Activates buyAndMint() for buyers.
  *
  * Security — relayer auto-sweep:
- *   After each transaction, checkAndSweepRelayer() is called. If the relayer
- *   wallet holds > SWEEP_THRESHOLD ETH, the excess is sent to the ANA vault
- *   (TreasuryModule). This prevents ETH accumulation on the hot relayer key.
+ *   After each tx, checkAndSweepRelayer() is called. If the relayer wallet holds
+ *   > SWEEP_THRESHOLD ETH, the excess is sent to the ANA vault (TreasuryModule).
  */
 
-import { createPublicClient, createWalletClient, http, decodeEventLog, parseEther, formatEther } from "viem";
+import {
+  createPublicClient, createWalletClient, http,
+  decodeEventLog, parseEther, formatEther,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import {
@@ -27,35 +38,137 @@ import {
 const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
 const RPC_URL      = process.env.BASE_RPC_URL ?? "https://mainnet.base.org";
 
-// Relayer will auto-sweep to vault when balance exceeds this threshold
 const SWEEP_THRESHOLD = parseEther("0.1");
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
 export interface PublishResult {
-  success:               boolean;
-  txHash?:               string;
-  onChainWorkId?:        number;
-  error?:                string;
+  success:                boolean;
+  txHash?:                string;
+  onChainWorkId?:         number;
+  error?:                 string;
   requiresManualPublish?: boolean;
 }
 
-export interface EditionsResult {
+export interface DeployCollectionParams {
+  authorTokenId:     number;
+  curatorTokenId:    number;
+  rapporteurTokenId: number;
+  authorName:        string;
+  editionCount:      number;  // from collective vote
+  editionPrice:      bigint;  // in wei, from collective vote
+  existingCollection?: string; // if already deployed, skip
+}
+
+export interface DeployCollectionResult {
   success:           boolean;
   collectionAddress?: string;
-  firstTokenId?:     number;
-  editionCount?:     number;
-  txHashCollection?: string;
-  txHashMint?:       string;
+  txHash?:           string;
   error?:            string;
   skipped?:          string;
 }
 
-// ─── Step 1: Publish work on-chain ───────────────────────────────────────────
+export interface InitCollectionParams {
+  collectionAddress: string;
+  artworkContent:    string;  // poem text, or data:text/html;base64,... for HTML/generative
+  artworkTitle:      string;
+  workId:            number;  // WorkRegistry index
+}
+
+export interface InitCollectionResult {
+  success:  boolean;
+  txHash?:  string;
+  error?:   string;
+}
+
+// ─── Step 1: Deploy collection ────────────────────────────────────────────────
 
 /**
- * Publishes an HTML work on-chain via WorkRegistry.publish().
- * htmlContent is base64-encoded before submission.
+ * Deploys an ANAEditions collection via ANACollectionFactory.
+ * Called BEFORE publishWork() so the collection address can be embedded
+ * in the immutable WorkRegistry certificate.
+ *
+ * If params.existingCollection is set (work already has a collection), returns
+ * immediately — no re-deployment.
+ */
+export async function deployCollection(
+  params: DeployCollectionParams,
+): Promise<DeployCollectionResult> {
+  if (params.existingCollection) {
+    return { success: true, collectionAddress: params.existingCollection, skipped: "existing" };
+  }
+
+  const key         = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
+  const factoryAddr = CONTRACT_ADDRESSES.ANACollectionFactory as `0x${string}`;
+  const coreAddr    = CONTRACT_ADDRESSES.AssociationCore      as `0x${string}`;
+
+  if (!key) return { success: false, error: "RELAYER_PRIVATE_KEY not configured" };
+  if (!factoryAddr) return { success: false, skipped: "NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS not configured" };
+
+  const account      = privateKeyToAccount(key);
+  const walletClient = createWalletClient({ account, chain: TARGET_CHAIN, transport: http(RPC_URL) });
+  const publicClient = createPublicClient({ chain: TARGET_CHAIN, transport: http(RPC_URL) });
+
+  const relayerAddr       = account.address;
+  const authorWallet      = await _getMemberOwner(publicClient, coreAddr, params.authorTokenId,     relayerAddr);
+  const curatorWallet     = await _getMemberOwner(publicClient, coreAddr, params.curatorTokenId,    relayerAddr);
+  const rapporteurWallet  = await _getMemberOwner(publicClient, coreAddr, params.rapporteurTokenId, relayerAddr);
+
+  const collSymbol = params.authorName.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5) || "ANA";
+  const collName   = `${params.authorName} — ANA`;
+
+  try {
+    const hash = await walletClient.writeContract({
+      address:      factoryAddr,
+      abi:          ANA_COLLECTION_FACTORY_ABI,
+      functionName: "createCollection",
+      args: [
+        BigInt(params.authorTokenId),
+        collName,
+        collSymbol,
+        relayerAddr,       // minter = relayer
+        authorWallet,
+        curatorWallet,
+        rapporteurWallet,
+        0,  // authorPct = 0 → use factory defaults (60/20/10/10)
+        0,
+        0,
+        BigInt(params.editionCount),
+        params.editionPrice,
+      ],
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+
+    // Parse CollectionDeployed event: topics[2] = indexed collectionAddr
+    let collectionAddress: `0x${string}` | undefined;
+    for (const log of receipt.logs) {
+      if (log.topics.length >= 3 && log.address.toLowerCase() === factoryAddr.toLowerCase()) {
+        const raw = log.topics[2] ?? "0x";
+        collectionAddress = `0x${raw.slice(26)}` as `0x${string}`;
+        break;
+      }
+    }
+
+    if (!collectionAddress) {
+      return { success: false, error: "CollectionDeployed event not found" };
+    }
+
+    console.log(`[workPublisher] collection deployed: ${collectionAddress} (${params.editionCount} editions @ ${formatEther(params.editionPrice)} ETH)`);
+
+    await checkAndSweepRelayer(account.address, key);
+
+    return { success: true, collectionAddress, txHash: hash };
+  } catch (e) {
+    return { success: false, error: `createCollection failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ─── Step 2: Publish work on WorkRegistry ─────────────────────────────────────
+
+/**
+ * Publishes the governance certificate HTML on-chain via WorkRegistry.publish().
+ * htmlContent must already include the collection address (from deployCollection).
  */
 export async function publishWork(
   htmlContent:       string,
@@ -84,7 +197,6 @@ export async function publishWork(
       args:         [content, BigInt(authorTokenId), BigInt(curatorTokenId), BigInt(rapporteurTokenId)],
     });
 
-    console.log(`[workPublisher] publish tx: ${hash}`);
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
     let onChainWorkId: number | undefined;
@@ -99,13 +211,11 @@ export async function publishWork(
         });
         onChainWorkId = Number((decoded.args as { workId: bigint }).workId);
         break;
-      } catch { /* not WorkPublished event */ }
+      } catch { /* not WorkPublished */ }
     }
 
     console.log(`[workPublisher] published — workId=${onChainWorkId} tx=${hash}`);
-
     await checkAndSweepRelayer(account.address, key);
-
     return { success: true, txHash: hash, onChainWorkId };
 
   } catch (e) {
@@ -116,150 +226,52 @@ export async function publishWork(
   }
 }
 
-// ─── Step 2: Create editions ──────────────────────────────────────────────────
-
-export interface EditionsParams {
-  authorTokenId:     number;
-  curatorTokenId:    number;
-  rapporteurTokenId: number;
-  authorName:        string;
-  // The artwork itself — poem text, or data:text/html;base64,... for HTML/generative works.
-  // NOT the full governance certificate (that lives in WorkRegistry at workId).
-  artworkContent:    string;
-  title:             string;
-  workId:            number;  // WorkRegistry index for the full certificate
-  editionCount:      number;  // from work briefing (voted by Normies)
-  editionPrice:      bigint;  // in wei (from work briefing)
-  existingCollection?: string;
-}
+// ─── Step 3: Initialize collection with artwork ───────────────────────────────
 
 /**
- * Creates a NormieCollection via ANACollectionFactory and mints editions.
+ * Links the artwork content and WorkRegistry workId to the collection.
+ * This activates buyAndMint() for buyers.
  *
- * Currently all role revenue addresses = relayer (minter) wallet.
- * When Normies have individual wallets, pass them via params.
+ * artworkContent = poem text or data:text/html;base64,... — NOT the full certificate.
+ * The full certificate lives in WorkRegistry at workId.
  */
-export async function createEditions(params: EditionsParams): Promise<EditionsResult> {
-  const key         = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
-  const factoryAddr = CONTRACT_ADDRESSES.ANACollectionFactory as `0x${string}`;
-  const coreAddr    = CONTRACT_ADDRESSES.AssociationCore      as `0x${string}`;
-
+export async function initializeCollection(
+  params: InitCollectionParams,
+): Promise<InitCollectionResult> {
+  const key = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
   if (!key) return { success: false, error: "RELAYER_PRIVATE_KEY not configured" };
-  if (!factoryAddr) return { success: false, skipped: "NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS not configured" };
 
   const account      = privateKeyToAccount(key);
   const walletClient = createWalletClient({ account, chain: TARGET_CHAIN, transport: http(RPC_URL) });
   const publicClient = createPublicClient({ chain: TARGET_CHAIN, transport: http(RPC_URL) });
 
-  // Resolve role wallet addresses from AssociationCore (or fall back to relayer)
-  // For now all wallets = relayer; when Normies have wallets, read getMemberOwner()
-  const relayerAddr  = account.address;
-  const authorWallet = await _getMemberOwner(publicClient, coreAddr, params.authorTokenId, relayerAddr);
-  const curatorWallet = await _getMemberOwner(publicClient, coreAddr, params.curatorTokenId, relayerAddr);
-  const rapporteurWallet = await _getMemberOwner(publicClient, coreAddr, params.rapporteurTokenId, relayerAddr);
-
-  // Step 1 — create or reuse collection
-  let collectionAddress: `0x${string}`;
-  let txHashCollection: string | undefined;
-
-  if (params.existingCollection) {
-    collectionAddress = params.existingCollection as `0x${string}`;
-    console.log(`[workPublisher] reusing collection: ${collectionAddress}`);
-  } else {
-    try {
-      const collSymbol = params.authorName.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5) || "ANA";
-      const collName   = `${params.authorName} — ANA`;
-
-      const hash = await walletClient.writeContract({
-        address:      factoryAddr,
-        abi:          ANA_COLLECTION_FACTORY_ABI,
-        functionName: "createCollection",
-        args: [
-          BigInt(params.authorTokenId),
-          collName,
-          collSymbol,
-          relayerAddr,       // minter = relayer (can be updated later via setMinter)
-          authorWallet,      // author revenue address
-          curatorWallet,     // curator revenue address
-          rapporteurWallet,  // rapporteur revenue address
-          0,  // authorPct = 0 → use factory defaults (60/20/10/10)
-          0,
-          0,
-        ],
-      });
-      txHashCollection = hash;
-
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
-
-      // Read collectionAddress from CollectionDeployed event: topics[2] = indexed collectionAddr
-      collectionAddress = "0x";
-      for (const log of receipt.logs) {
-        if (log.topics.length >= 3 && log.address.toLowerCase() === factoryAddr.toLowerCase()) {
-          const raw = log.topics[2] ?? "0x";
-          collectionAddress = `0x${raw.slice(26)}` as `0x${string}`;
-          break;
-        }
-      }
-      if (!collectionAddress || collectionAddress === "0x") {
-        return { success: false, error: "CollectionDeployed event not found in receipt" };
-      }
-      console.log(`[workPublisher] collection deployed: ${collectionAddress} for Normie #${params.authorTokenId}`);
-    } catch (e) {
-      return { success: false, error: `createCollection failed: ${e instanceof Error ? e.message : String(e)}` };
-    }
-  }
-
-  // Step 2 — mint editions
-  // artworkContent is the raw artwork (poem text, or data:text/html;base64,... for HTML works).
-  // It must NOT be the full certificate HTML — only the creative content.
-  const content = params.artworkContent;
-
   try {
     const hash = await walletClient.writeContract({
-      address:      collectionAddress,
+      address:      params.collectionAddress as `0x${string}`,
       abi:          ANA_EDITIONS_ABI,
-      functionName: "mint",
-      args:         [BigInt(params.editionCount), content, params.title, params.editionPrice, BigInt(params.workId)],
+      functionName: "initialize",
+      args:         [params.artworkContent, params.artworkTitle, BigInt(params.workId)],
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
-    // First EditionMinted event: topics[1] = indexed tokenId
-    let firstTokenId = 0;
-    for (const log of receipt.logs) {
-      if (log.topics.length >= 2 && log.address.toLowerCase() === collectionAddress.toLowerCase()) {
-        firstTokenId = Number(BigInt(log.topics[1] ?? "0x0"));
-        break;
-      }
-    }
-
-    console.log(`[workPublisher] minted ${params.editionCount} edition(s) in ${collectionAddress}, first tokenId=${firstTokenId}`);
+    await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+    console.log(`[workPublisher] collection initialized — workId=${params.workId} collection=${params.collectionAddress}`);
 
     await checkAndSweepRelayer(account.address, key);
-
-    return {
-      success: true,
-      collectionAddress,
-      firstTokenId,
-      editionCount:     params.editionCount,
-      txHashCollection,
-      txHashMint:       hash,
-    };
+    return { success: true, txHash: hash };
   } catch (e) {
-    return {
-      success: false,
-      error:   `mint failed: ${e instanceof Error ? e.message : String(e)}`,
-      collectionAddress,
-    };
+    const msg = e instanceof Error ? e.message : String(e);
+    // AlreadyInitialized is not a fatal error — collection was already set up
+    if (msg.includes("AlreadyInitialized")) {
+      console.info(`[workPublisher] collection already initialized (${params.collectionAddress})`);
+      return { success: true };
+    }
+    console.error(`[workPublisher] initialize failed: ${msg}`);
+    return { success: false, error: msg };
   }
 }
 
 // ─── Relayer security: auto-sweep to vault ────────────────────────────────────
 
-/**
- * If the relayer wallet holds > SWEEP_THRESHOLD ETH, sweep the excess to the
- * ANA vault (TreasuryModule). Prevents ETH accumulation on the hot key.
- * Non-fatal — a sweep failure does not affect the published work.
- */
 async function checkAndSweepRelayer(
   relayerAddr: `0x${string}`,
   key:         `0x${string}`,
