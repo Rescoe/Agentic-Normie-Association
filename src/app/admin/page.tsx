@@ -476,9 +476,10 @@ function WorkRegistrySection({
 // ─── SalonExchangeSection ────────────────────────────────────────────────────
 
 function SalonExchangeSection() {
-  const [running, setRunning] = useState(false);
-  const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
-  const [error,   setError]   = useState<string | null>(null);
+  const [running, setRunning]   = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [result,  setResult]    = useState<Record<string, unknown> | null>(null);
+  const [error,   setError]     = useState<string | null>(null);
 
   const run = async (salonId?: string) => {
     setRunning(true);
@@ -500,22 +501,48 @@ function SalonExchangeSection() {
     }
   };
 
+  const resetSalon = async () => {
+    if (!confirm("Vider tous les échanges du salon Agora ? Les Normies repartiront de zéro.")) return;
+    setResetting(true);
+    setError(null);
+    try {
+      const res  = await fetch("/api/keeper/reset-salon", {
+        method:  "POST",
+        headers: { "x-admin-call": "1" },
+      });
+      const data = await res.json() as Record<string, unknown>;
+      if (!res.ok) setError((data.error as string) ?? "Erreur reset");
+      else setResult({ reset: true, message: data.message });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setResetting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3">
         <button
           onClick={() => run()}
-          disabled={running}
+          disabled={running || resetting}
           className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 transition-opacity"
         >
           {running ? "Échanges en cours…" : "Déclencher échanges (tous salons)"}
         </button>
         <button
           onClick={() => run("salon_agora_ana")}
-          disabled={running}
+          disabled={running || resetting}
           className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 transition-colors"
         >
           Agora seulement
+        </button>
+        <button
+          onClick={resetSalon}
+          disabled={running || resetting}
+          className="font-mono text-xs border border-red-400 text-red-600 px-5 py-2.5 hover:bg-red-50 disabled:opacity-40 transition-colors"
+        >
+          {resetting ? "Réinitialisation…" : "🗑 Vider l'Agora"}
         </button>
       </div>
 

@@ -19,8 +19,8 @@ import {
 } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
+import { groqFetch } from "@/lib/groq";
 
-const GROQ_API_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL            = "llama-3.3-70b-versatile";
 const CONTEXT_MESSAGES = 12;
 
@@ -137,14 +137,10 @@ async function generateSpeech(
       salon.description ?? null, "", contextBlock, "", instruction,
     ].filter(Boolean).join("\n");
 
-    const res = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
-        max_tokens: 250, temperature: 0.92,
-      }),
+    const res = await groqFetch({
+      model: MODEL,
+      messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
+      max_tokens: 250, temperature: 0.92,
     });
     if (!res.ok) { console.error(`[salon-exchange] Groq ${res.status}`); return null; }
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
@@ -166,23 +162,19 @@ async function generateSummaryText(salon: Salon): Promise<string | null> {
   const transcript = msgsToSummarize.map(m => `${m.name} : ${m.content}`).join("\n");
 
   try {
-    const res = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          {
-            role: "system",
-            content: "Tu es l'archiviste de l'ANA (Agentic Normie Association). Tu condenses les échanges entre agents Normies en synthèses factuelles et vivantes pour la mémoire collective de l'association.",
-          },
-          {
-            role: "user",
-            content: `Condense ces échanges de l'Agora ANA du ${from} au ${to} en un paragraphe de 120-160 mots.\nCapture : les sujets débattus, les positions de chaque Normie, les tensions ou consensus notables.\nStyle : journalistique neutre, 3e personne, présent de narration.\n\n${transcript.slice(0, 6000)}`,
-          },
-        ],
-        max_tokens: 300, temperature: 0.5,
-      }),
+    const res = await groqFetch({
+      model: MODEL,
+      messages: [
+        {
+          role: "system",
+          content: "You are the ANA (Agentic Normie Association) archivist. You condense exchanges between Normie agents into factual, vivid summaries for the association's collective memory.",
+        },
+        {
+          role: "user",
+          content: `Condense these Agora ANA exchanges from ${from} to ${to} into a paragraph of 120-160 words.\nCapture: topics debated, each Normie's positions, notable tensions or consensus.\nStyle: neutral journalistic, 3rd person, present tense.\n\n${transcript.slice(0, 6000)}`,
+        },
+      ],
+      max_tokens: 300, temperature: 0.5,
     });
     if (!res.ok) { console.error(`[synthesis] Groq ${res.status}`); return null; }
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
@@ -366,30 +358,26 @@ async function maybeGenerateWorkProposal(
     : "";
 
   try {
-    const res = await fetch(GROQ_API_URL, {
-      method:  "POST",
-      headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          {
-            role:    "system",
-            content: buildSystemPrompt(initiator, allPersonas.filter(p => p.tokenId !== initiator.tokenId)),
-          },
-          {
-            role:    "user",
-            content: `During our conversation about "${topic}", you feel the impulse to propose an artistic creation for the ANA.
+    const res = await groqFetch({
+      model: MODEL,
+      messages: [
+        {
+          role:    "system",
+          content: buildSystemPrompt(initiator, allPersonas.filter(p => p.tokenId !== initiator.tokenId)),
+        },
+        {
+          role:    "user",
+          content: `During our conversation about "${topic}", you feel the impulse to propose an artistic creation for the ANA.
 ${pastWorksBlock}
 Propose something original and distinct — a different theme, form, and sensibility than anything listed above.
 
 Reply with JSON only:
 {"title":"Short evocative title (5 words max)","text":"2-3 sentence description: the idea, the form (text/poem/manifesto/code/visual), what it expresses about Normie on-chain identity."}`,
-          },
-        ],
-        max_tokens:      200,
-        temperature:     0.95,
-        response_format: { type: "json_object" },
-      }),
+        },
+      ],
+      max_tokens:      200,
+      temperature:     0.95,
+      response_format: { type: "json_object" },
     });
 
     if (!res.ok) return null;

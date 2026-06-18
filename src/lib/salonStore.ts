@@ -448,3 +448,13 @@ export async function addMessage(msg: Omit<SalonMessage, "id"> & { topic?: strin
   console.log(`[salonStore] +msg ${resolvedName} → ${count} total in ${msg.salonId}`);
   return full;
 }
+
+// ─── Reset ────────────────────────────────────────────────────────────────────
+
+/** Wipes all messages, syntheses, and topic from the Agora so Normies start fresh. */
+export async function resetAgora(): Promise<void> {
+  await mutate(s => {
+    s.salons[AGORA_SALON_ID] = makeAgora();
+  });
+  console.log("[salonStore] Agora reset — all messages and syntheses cleared");
+}

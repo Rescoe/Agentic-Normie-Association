@@ -23,8 +23,8 @@ import { addMessage, closeSalon, getSalon, createSalon, AGORA_SALON_ID } from "@
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
+import { groqFetch } from "@/lib/groq";
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL        = "llama-3.3-70b-versatile";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
@@ -91,19 +91,12 @@ async function groq(
   opts: { model?: string; maxTokens?: number; temp?: number; json?: boolean } = {}
 ): Promise<string | null> {
   try {
-    const res = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization:  `Bearer ${process.env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model:          opts.model      ?? MODEL,
-        messages,
-        max_tokens:     opts.maxTokens  ?? 300,
-        temperature:    opts.temp       ?? 0.7,
-        ...(opts.json ? { response_format: { type: "json_object" } } : {}),
-      }),
+    const res = await groqFetch({
+      model:          opts.model      ?? MODEL,
+      messages,
+      max_tokens:     opts.maxTokens  ?? 300,
+      temperature:    opts.temp       ?? 0.7,
+      ...(opts.json ? { response_format: { type: "json_object" } } : {}),
     });
     if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}`); return null; }
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
