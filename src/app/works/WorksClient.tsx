@@ -231,50 +231,78 @@ function GovernanceReport({ work }: { work: ANAWork }) {
   );
 }
 
-function PoemModal({ work, certUrl, onClose }: { work: ANAWork; certUrl: string; onClose: () => void }) {
+// ─── ArtworkModal — fullscreen view for both HTML and poem works ──────────────
+
+function ArtworkModal({
+  work,
+  certUrl,
+  isHtml,
+  onClose,
+}: {
+  work: ANAWork;
+  certUrl: string;
+  isHtml: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  if (isHtml) {
+    /* HTML/generative artwork — fullscreen iframe, no chrome */
+    return (
+      <div className="fixed inset-0 z-50 bg-black flex flex-col">
+        <div className="flex items-center justify-between px-4 py-2 bg-black border-b border-white/10 shrink-0">
+          <p className="font-mono text-xs text-white/50 truncate">{work.title}</p>
+          <button
+            onClick={onClose}
+            className="font-mono text-xs text-white/40 hover:text-white transition-colors ml-4 shrink-0 border border-white/20 px-2 py-0.5"
+          >
+            ✕ close
+          </button>
+        </div>
+        <iframe
+          src={certUrl}
+          className="flex-1 w-full border-0"
+          sandbox="allow-scripts"
+          title={work.title}
+        />
+      </div>
+    );
+  }
+
+  /* Poem/text — full text on black background */
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 bg-black overflow-y-auto flex items-start justify-center p-8 pt-16"
       onClick={onClose}
     >
       <div
-        className="relative bg-[--bg] border border-[--border] max-w-xl w-full max-h-[80vh] flex flex-col"
+        className="relative w-full max-w-xl"
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 p-5 border-b border-[--border]">
-          <div>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] mb-1">Artwork</p>
-            <p className="font-bold text-sm">{work.title}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="font-mono text-lg text-[--fg-muted] hover:text-[--fg] transition-colors shrink-0 mt-0.5"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* Poem */}
-        <div className="overflow-y-auto p-6 flex-1">
-          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
-            {work.artworkText}
-          </pre>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between p-4 border-t border-[--border]">
-          <p className="font-mono text-[10px] text-[--fg-muted]">
-            {work.artForm ?? "text"} · {work.publishedAt ? new Date(work.publishedAt).getFullYear() : "—"}
+        <button
+          onClick={onClose}
+          className="absolute -top-10 right-0 font-mono text-xs text-white/40 hover:text-white/70 transition-colors"
+        >
+          ✕ close
+        </button>
+        <pre className="font-mono text-sm leading-[2.2] whitespace-pre-wrap text-white/90 tracking-wide">
+          {work.artworkText}
+        </pre>
+        <div className="mt-8 pt-4 border-t border-white/10 flex items-center justify-between">
+          <p className="font-mono text-[10px] text-white/30 uppercase tracking-widest">
+            {work.artForm ?? "text"} · ANA · {work.publishedAt ? new Date(work.publishedAt).getFullYear() : "—"}
           </p>
           <a
             href={certUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors border border-[--border] px-3 py-1.5 flex items-center gap-1"
+            className="font-mono text-[10px] text-white/30 hover:text-white/60 transition-colors flex items-center gap-1"
           >
-            <span>◈</span> Open immutable certificate
+            ◈ immutable certificate
           </a>
         </div>
       </div>
@@ -283,8 +311,8 @@ function PoemModal({ work, certUrl, onClose }: { work: ANAWork; certUrl: string;
 }
 
 function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: number; getName: GetName }) {
+  const [showModal,  setShowModal]  = useState(false);
   const [showReport, setShowReport] = useState(false);
-  const [showPoem,   setShowPoem]   = useState(false);
 
   const date = work.publishedAt ? new Date(work.publishedAt) : null;
   const trio = [
@@ -293,72 +321,66 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
     { label: "Rapporteur", tid: work.rapporteurTokenId,  name: getName(work.rapporteurTokenId, work.rapporteurName) },
   ];
 
-  const certUrl   = `/api/works/html/${onChainId}`;
-  const isHtmlWork = work.artForm?.startsWith("html-") ||
-    !!(work.artworkText && /^<!DOCTYPE|^<html/i.test(work.artworkText.trimStart()));
+  const certUrl = `/api/works/html/${onChainId}`;
+  const isHtml  = !!(work.artForm?.startsWith("html-") ||
+    (work.artworkText && /^<!DOCTYPE|^<html/i.test(work.artworkText.trimStart())));
 
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col">
 
-      {/* ── Artwork zone — always shown first ── */}
-      {isHtmlWork ? (
-        /* HTML/generative — iframe runs immediately */
-        <div className="relative bg-black overflow-hidden" style={{ aspectRatio: "4/3" }}>
-          <iframe
-            src={certUrl}
-            className="w-full h-full border-0"
-            sandbox="allow-scripts"
-            title={work.title}
-          />
-          <a
-            href={certUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="absolute top-2 right-2 bg-black/70 text-white font-mono text-[10px] px-2.5 py-1 hover:bg-black transition-colors border border-white/20"
-          >
-            ⤢ fullscreen
-          </a>
-        </div>
-      ) : work.artworkText ? (
-        /* Text artwork — truncated, click opens poem modal */
-        <button
-          onClick={() => setShowPoem(true)}
-          className="block group relative bg-[--bg-card] px-5 pt-5 pb-0 cursor-pointer overflow-hidden text-left w-full"
-          style={{ maxHeight: "180px" }}
-        >
-          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
-            {work.artworkText}
-          </pre>
-          {/* Fade + "Read full work" overlay */}
-          <div className="absolute bottom-0 inset-x-0 h-20 bg-gradient-to-t from-[--bg-card] to-transparent flex items-end justify-center pb-3">
-            <span className="font-mono text-xs text-[--fg-muted] group-hover:text-[--fg] transition-colors bg-[--bg-card]/80 px-3 py-1 border border-[--border]">
-              Read full work →
-            </span>
+      {/* ── Artwork zone — click opens fullscreen modal ── */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setShowModal(true)}
+        onKeyDown={e => e.key === "Enter" && setShowModal(true)}
+        className="cursor-pointer group overflow-hidden"
+      >
+        {isHtml ? (
+          /* HTML/generative — live but non-interactive preview */
+          <div className="relative bg-black" style={{ aspectRatio: "4/3" }}>
+            <iframe
+              src={certUrl}
+              className="w-full h-full border-0"
+              sandbox="allow-scripts"
+              title={work.title}
+              style={{ pointerEvents: "none" }}
+            />
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
+              <span className="font-mono text-xs text-white border border-white/40 px-3 py-1.5">
+                ⤢ open fullscreen
+              </span>
+            </div>
           </div>
-        </button>
-      ) : (
-        /* Fallback — no artworkText stored (very old works) */
-        <a
-          href={certUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center w-full"
-        >
-          <div className="flex gap-3 items-center">
-            {trio.map(({ label, tid }) => tid != null ? (
-              <div key={label} className="relative w-12 h-12 overflow-hidden">
-                <Image src={getNormieImageUrl(tid!)} alt={`#${tid}`} fill
-                  className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
-              </div>
-            ) : null)}
+        ) : work.artworkText ? (
+          /* Poem/text — displayed directly, fades into CTA */
+          <div className="relative bg-[--bg-card] px-6 pt-6 pb-0 overflow-hidden" style={{ maxHeight: "220px" }}>
+            <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">
+              {work.artworkText}
+            </pre>
+            <div className="absolute bottom-0 inset-x-0 h-20 bg-gradient-to-t from-[--bg-card] to-transparent flex items-end justify-center pb-3">
+              <span className="font-mono text-[10px] text-[--fg-muted] group-hover:text-[--fg] transition-colors">
+                read in full →
+              </span>
+            </div>
           </div>
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100">
-            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
-              Open ↗
-            </span>
+        ) : (
+          /* Fallback — no artworkText */
+          <div className="relative bg-[--bg-card] flex items-center justify-center" style={{ aspectRatio: "4/3" }}>
+            <div className="flex gap-3 items-center">
+              {trio.map(({ label, tid }) => tid != null ? (
+                <div key={label} className="relative w-12 h-12 overflow-hidden">
+                  <Image src={getNormieImageUrl(tid!)} alt={`#${tid}`} fill
+                    className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
+                </div>
+              ) : null)}
+            </div>
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-[--fg]/5 transition-colors">
+              <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">Open ↗</span>
+            </div>
           </div>
-        </a>
-      )}
+        )}
+      </div>
 
       {/* ── Metadata ── */}
       <div className="p-4 space-y-3 flex-1">
@@ -399,25 +421,14 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           </p>
         )}
 
-        {/* Footer actions */}
+        {/* Footer — same for all work types */}
         <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
-          <div className="flex items-center gap-3">
-            {isHtmlWork ? (
-              <button
-                onClick={() => setShowReport(r => !r)}
-                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
-              >
-                {showReport ? "↑ Hide process" : "↓ How it was made"}
-              </button>
-            ) : work.artworkText ? (
-              <button
-                onClick={() => setShowPoem(true)}
-                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
-              >
-                Read full work →
-              </button>
-            ) : null}
-          </div>
+          <button
+            onClick={() => setShowReport(r => !r)}
+            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
+          >
+            {showReport ? "↑ Hide process" : "↓ How it was made"}
+          </button>
           <div className="flex items-center gap-3">
             <a
               href={certUrl}
@@ -441,12 +452,17 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
         </div>
       </div>
 
-      {/* Inline governance report (HTML works only) */}
-      {showReport && isHtmlWork && <GovernanceReport work={work} />}
+      {/* Inline governance report — all work types */}
+      {showReport && <GovernanceReport work={work} />}
 
-      {/* Poem modal (text works only) */}
-      {showPoem && !isHtmlWork && work.artworkText && (
-        <PoemModal work={work} certUrl={certUrl} onClose={() => setShowPoem(false)} />
+      {/* Fullscreen artwork modal */}
+      {showModal && (
+        <ArtworkModal
+          work={work}
+          certUrl={certUrl}
+          isHtml={isHtml}
+          onClose={() => setShowModal(false)}
+        />
       )}
     </div>
   );
@@ -455,6 +471,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
 // ─── OnChainWorkCard — fallback when work is not in Neon ─────────────────────
 
 function OnChainWorkCard({ workId }: { workId: number }) {
+  const [showModal, setShowModal] = useState(false);
   const certUrl = `/api/works/html/${workId}`;
 
   const { data, isLoading } = useReadContract({
@@ -493,22 +510,27 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col">
-      {/* iframe runs immediately — 4/3 aspect ratio */}
-      <div className="relative bg-black overflow-hidden" style={{ aspectRatio: "4/3" }}>
+      {/* iframe preview — non-interactive, click → fullscreen modal */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setShowModal(true)}
+        onKeyDown={e => e.key === "Enter" && setShowModal(true)}
+        className="relative bg-black overflow-hidden cursor-pointer group"
+        style={{ aspectRatio: "4/3" }}
+      >
         <iframe
           src={certUrl}
           className="w-full h-full border-0"
           sandbox="allow-scripts"
           title={`Œuvre #${workId}`}
+          style={{ pointerEvents: "none" }}
         />
-        <a
-          href={certUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="absolute top-2 right-2 bg-black/70 text-white font-mono text-[10px] px-2.5 py-1 hover:bg-black transition-colors border border-white/20"
-        >
-          ⤢ fullscreen
-        </a>
+        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
+          <span className="font-mono text-xs text-white border border-white/40 px-3 py-1.5">
+            ⤢ open fullscreen
+          </span>
+        </div>
       </div>
 
       <div className="p-4 space-y-3 flex-1">
@@ -550,6 +572,27 @@ function OnChainWorkCard({ workId }: { workId: number }) {
           </a>
         </div>
       </div>
+
+      {/* Fullscreen modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 bg-black border-b border-white/10 shrink-0">
+            <p className="font-mono text-xs text-white/50">Œuvre #{workId}</p>
+            <button
+              onClick={() => setShowModal(false)}
+              className="font-mono text-xs text-white/40 hover:text-white transition-colors ml-4 shrink-0 border border-white/20 px-2 py-0.5"
+            >
+              ✕ close
+            </button>
+          </div>
+          <iframe
+            src={certUrl}
+            className="flex-1 w-full border-0"
+            sandbox="allow-scripts"
+            title={`Œuvre #${workId}`}
+          />
+        </div>
+      )}
     </div>
   );
 }
