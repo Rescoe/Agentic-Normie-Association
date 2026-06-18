@@ -123,12 +123,13 @@ export interface EditionsParams {
   curatorTokenId:    number;
   rapporteurTokenId: number;
   authorName:        string;
-  htmlContent:       string;
+  // The artwork itself — poem text, or data:text/html;base64,... for HTML/generative works.
+  // NOT the full governance certificate (that lives in WorkRegistry at workId).
+  artworkContent:    string;
   title:             string;
+  workId:            number;  // WorkRegistry index for the full certificate
   editionCount:      number;  // from work briefing (voted by Normies)
   editionPrice:      bigint;  // in wei (from work briefing)
-  // Optional: provide existing collection address to mint into it
-  // If not provided, a new collection is created
   existingCollection?: string;
 }
 
@@ -209,15 +210,16 @@ export async function createEditions(params: EditionsParams): Promise<EditionsRe
   }
 
   // Step 2 — mint editions
-  const b64     = Buffer.from(params.htmlContent, "utf-8").toString("base64");
-  const content = `data:text/html;base64,${b64}`;
+  // artworkContent is the raw artwork (poem text, or data:text/html;base64,... for HTML works).
+  // It must NOT be the full certificate HTML — only the creative content.
+  const content = params.artworkContent;
 
   try {
     const hash = await walletClient.writeContract({
       address:      collectionAddress,
       abi:          ANA_EDITIONS_ABI,
       functionName: "mint",
-      args:         [BigInt(params.editionCount), content, params.title, params.editionPrice],
+      args:         [BigInt(params.editionCount), content, params.title, params.editionPrice, BigInt(params.workId)],
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 

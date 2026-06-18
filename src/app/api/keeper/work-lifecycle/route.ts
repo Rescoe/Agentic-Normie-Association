@@ -681,10 +681,14 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
       curatorTokenId:    work.curatorTokenId!,
       rapporteurTokenId: work.rapporteurTokenId!,
       authorName,
-      htmlContent:  html,
-      title:        work.title,
+      // Store only the artwork — NOT the full certificate HTML.
+      // The poem/HTML artwork is work.artworkText; for HTML generative works it may
+      // already be a data URI. The full certificate lives in WorkRegistry at workId.
+      artworkContent: work.artworkText ?? "",
+      title:          work.title,
+      workId:         result.onChainWorkId ?? 0,
       editionCount,
-      editionPrice: editionPriceWei,
+      editionPrice:   editionPriceWei,
     });
 
     if (editionsResult.success && editionsResult.collectionAddress) {

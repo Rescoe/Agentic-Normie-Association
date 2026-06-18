@@ -16,14 +16,14 @@ export const ANAEditionsAbi = [
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
-  { "inputs": [],                                                          "name": "CannotBuyOwn",      "type": "error" },
-  { "inputs": [],                                                          "name": "NotTokenOwner",     "type": "error" },
-  { "inputs": [],                                                          "name": "OnlyMinter",        "type": "error" },
-  { "inputs": [],                                                          "name": "PctOverflow",       "type": "error" },
-  { "inputs": [],                                                          "name": "ZeroAddress",       "type": "error" },
-  { "inputs": [{ "internalType": "uint256", "name": "required", "type": "uint256" }, { "internalType": "uint256", "name": "sent", "type": "uint256" }], "name": "InsufficientPayment", "type": "error" },
-  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }], "name": "TokenDoesNotExist",  "type": "error" },
-  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }], "name": "TokenNotForSale",    "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "CannotBuyOwn",      "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "NotTokenOwner",     "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "OnlyMinter",        "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "PctOverflow",       "type": "error" },
+  { "inputs": [],                                                                                                                                                    "name": "ZeroAddress",       "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "required", "type": "uint256" }, { "internalType": "uint256", "name": "sent", "type": "uint256" }],             "name": "InsufficientPayment", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }],                                                                              "name": "TokenDoesNotExist",  "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "tokenId",  "type": "uint256" }],                                                                              "name": "TokenNotForSale",    "type": "error" },
   {
     "anonymous": false,
     "inputs": [
@@ -79,7 +79,8 @@ export const ANAEditionsAbi = [
       { "internalType": "uint256", "name": "totalEditions", "type": "uint256" },
       { "internalType": "string",  "name": "content",       "type": "string"  },
       { "internalType": "string",  "name": "title",         "type": "string"  },
-      { "internalType": "uint256", "name": "priceWei",      "type": "uint256" }
+      { "internalType": "uint256", "name": "priceWei",      "type": "uint256" },
+      { "internalType": "uint256", "name": "workId",        "type": "uint256" }
     ],
     "name": "mint",
     "outputs": [],
@@ -112,6 +113,7 @@ export const ANAEditionsAbi = [
           { "internalType": "string",  "name": "content",      "type": "string"  },
           { "internalType": "string",  "name": "title",        "type": "string"  },
           { "internalType": "uint256", "name": "priceWei",     "type": "uint256" },
+          { "internalType": "uint256", "name": "workId",       "type": "uint256" },
           { "internalType": "uint256", "name": "editionGroup", "type": "uint256" },
           { "internalType": "uint256", "name": "createdAt",    "type": "uint256" }
         ],

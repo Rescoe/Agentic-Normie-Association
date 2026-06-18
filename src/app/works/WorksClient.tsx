@@ -662,13 +662,30 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           ))}
         </div>
 
-        {/* Edition info + buy button */}
-        {work.collectionAddress && work.editionPrice && (
-          <BuyEditionButton
-            collectionAddress={work.collectionAddress as `0x${string}`}
-            editionPriceEth={work.editionPrice}
-            totalEditions={work.editionSupply ?? 1}
-          />
+        {/* Edition collection */}
+        {work.collectionAddress && (
+          <div className="space-y-2 pt-1 border-t border-[--border]">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">
+                Collection on-chain
+              </p>
+              <a
+                href={`https://basescan.org/address/${work.collectionAddress}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                {work.collectionAddress.slice(0, 6)}…{work.collectionAddress.slice(-4)} ↗
+              </a>
+            </div>
+            {work.editionPrice && (
+              <BuyEditionButton
+                collectionAddress={work.collectionAddress as `0x${string}`}
+                editionPriceEth={work.editionPrice}
+                totalEditions={work.editionSupply ?? 1}
+              />
+            )}
+          </div>
         )}
 
         {/* Footer — same for all work types */}
