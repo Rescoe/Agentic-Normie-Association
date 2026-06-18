@@ -12,9 +12,9 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
-import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, ANA_EDITIONS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
-  getActiveWorks, getWork, updateWork, advanceState, addVote,
+  getActiveWorks, listWorks, getWork, updateWork, advanceState, addVote,
   hasVoted, tallyVotes, buildWorkHtml, createWork, getFoundingWork,
   VOTE_WINDOW_MS,
   type ANAWork, type WorkVote,
@@ -652,81 +652,126 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
   const editionPriceEth = work.editionPrice ? parseFloat(work.editionPrice) : 0;
   const editionPriceWei = BigInt(Math.round(editionPriceEth * 1e18));
 
-  // ── Step 1: Deploy collection BEFORE publishing so its address is in the certificate ──
-  // Skip if collection already exists (retry scenario).
   let collectionAddress = work.collectionAddress;
-  if (!collectionAddress && editionPriceWei > 0n) {
-    const deployResult = await deployCollection({
-      authorTokenId:     work.authorTokenId!,
-      curatorTokenId:    work.curatorTokenId!,
-      rapporteurTokenId: work.rapporteurTokenId!,
-      authorName,
-      editionCount,
-      editionPrice:      editionPriceWei,
-    });
-    if (deployResult.success && deployResult.collectionAddress) {
-      collectionAddress = deployResult.collectionAddress;
-      await updateWork(work.id, { collectionAddress });
-      console.log(`[work-lifecycle] collection deployed: ${collectionAddress}`);
-    } else if (deployResult.error) {
-      console.warn(`[work-lifecycle] collection deploy failed (non-fatal): ${deployResult.error}`);
+  let onChainWorkId     = work.onChainWorkId;
+
+  // If already published (work.onChainWorkId saved), skip straight to init retry.
+  // This covers the case where publishWork succeeded but initializeCollection failed.
+  if (onChainWorkId == null) {
+    // ── Step 1: Deploy collection BEFORE publishing so its address is in the certificate ──
+    if (!collectionAddress && editionPriceWei > 0n) {
+      const deployResult = await deployCollection({
+        authorTokenId:     work.authorTokenId!,
+        curatorTokenId:    work.curatorTokenId!,
+        rapporteurTokenId: work.rapporteurTokenId!,
+        authorName,
+        editionCount,
+        editionPrice:      editionPriceWei,
+      });
+      if (deployResult.success && deployResult.collectionAddress) {
+        collectionAddress = deployResult.collectionAddress;
+        await updateWork(work.id, { collectionAddress });
+        console.log(`[work-lifecycle] collection deployed: ${collectionAddress}`);
+      } else if (deployResult.error) {
+        console.warn(`[work-lifecycle] collection deploy failed (non-fatal): ${deployResult.error}`);
+      }
     }
-  }
 
-  // ── Step 2: Build certificate HTML (now includes collectionAddress) ──
-  const workWithCollection = collectionAddress ? { ...work, collectionAddress } : work;
-  const html = work.isFoundingWork ? buildAGReportHtml(workWithCollection) : buildWorkHtml(workWithCollection);
+    // ── Step 2: Build certificate HTML (now includes collectionAddress) ──
+    const workWithCollection = collectionAddress ? { ...work, collectionAddress } : work;
+    const html = work.isFoundingWork ? buildAGReportHtml(workWithCollection) : buildWorkHtml(workWithCollection);
 
-  // ── Step 3: Publish certificate to WorkRegistry ──
-  const result = await publishWork(
-    html,
-    work.authorTokenId,
-    work.curatorTokenId,
-    work.rapporteurTokenId,
-  );
+    // ── Step 3: Publish certificate to WorkRegistry ──
+    const result = await publishWork(
+      html,
+      work.authorTokenId,
+      work.curatorTokenId,
+      work.rapporteurTokenId,
+    );
 
-  if (result.success) {
+    if (!result.success) {
+      if (result.requiresManualPublish) {
+        await updateWork(work.id, { validationNote: result.error?.slice(0, 300) });
+        console.warn(`[work-lifecycle] "${work.title}" requires manual publish: ${result.error}`);
+      } else {
+        console.error(`[work-lifecycle] publish error for "${work.title}": ${result.error}`);
+      }
+      return false;
+    }
+
+    // Save progress without advancing state — init must succeed first.
+    onChainWorkId = result.onChainWorkId;
     await updateWork(work.id, {
       txHash:        result.txHash,
       onChainWorkId: result.onChainWorkId,
       publishedAt:   Date.now(),
     });
-    await advanceState(work.id, "PUBLISHED", `tx: ${result.txHash?.slice(0, 12)}`);
-    console.log(`[work-lifecycle] published "${work.title}" — tx: ${result.txHash}`);
+    console.log(`[work-lifecycle] published "${work.title}" — workId=${onChainWorkId} tx: ${result.txHash}`);
+  } else {
+    console.log(`[work-lifecycle] "${work.title}" already published (workId=${onChainWorkId}), retrying init`);
+  }
 
-    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
-      await closeSalon(work.salonId, 0).catch(() => null);
-      console.log(`[work-lifecycle] closed work salon ${work.salonId}`);
+  // ── Step 4: Initialize collection with artwork + workId ──
+  // Stays in PUBLISHING (returns false) if this fails so the next cycle retries.
+  if (collectionAddress && onChainWorkId != null) {
+    const initResult = await initializeCollection({
+      collectionAddress,
+      artworkContent: work.artworkText ?? "",
+      artworkTitle:   work.title,
+      workId:         onChainWorkId,
+    });
+    if (!initResult.success) {
+      console.warn(`[work-lifecycle] init failed, will retry next cycle: ${initResult.error}`);
+      return false;
     }
+    console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
+  }
 
-    // ── Step 4: Initialize collection with artwork + workId ──
-    // This activates buyAndMint() for buyers. AlreadyInitialized is safe to ignore.
-    if (collectionAddress && result.onChainWorkId != null) {
-      const initResult = await initializeCollection({
-        collectionAddress,
-        artworkContent: work.artworkText ?? "",
-        artworkTitle:   work.title,
-        workId:         result.onChainWorkId,
+  // ── Step 5: All done → advance to PUBLISHED ──
+  await advanceState(work.id, "PUBLISHED", `tx: ${work.txHash?.slice(0, 12)}`);
+
+  if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+    await closeSalon(work.salonId, 0).catch(() => null);
+    console.log(`[work-lifecycle] closed work salon ${work.salonId}`);
+  }
+
+  return true;
+}
+
+// Scans PUBLISHED works whose ERC-721 collection failed to initialize.
+// Runs every keeper cycle — retries initialization automatically (idempotent).
+async function retryPendingInits(): Promise<number> {
+  const all = await listWorks();
+  const candidates = all.filter(
+    w => w.state === "PUBLISHED"
+      && w.collectionAddress
+      && w.onChainWorkId != null
+      && w.artworkText,
+  );
+  if (candidates.length === 0) return 0;
+
+  let retried = 0;
+  for (const work of candidates) {
+    try {
+      const isInit = await client.readContract({
+        address:      work.collectionAddress as `0x${string}`,
+        abi:          ANA_EDITIONS_ABI,
+        functionName: "initialized",
       });
-      if (initResult.success) {
-        console.log(`[work-lifecycle] collection initialized — workId=${result.onChainWorkId}`);
-      } else {
-        console.warn(`[work-lifecycle] collection initialize failed (non-fatal): ${initResult.error}`);
-      }
-    }
+      if (isInit) continue;
 
-    return true;
+      console.log(`[work-lifecycle] retrying collection init: "${work.title}" (${work.collectionAddress})`);
+      const r = await initializeCollection({
+        collectionAddress: work.collectionAddress!,
+        artworkContent:    work.artworkText!,
+        artworkTitle:      work.title,
+        workId:            work.onChainWorkId!,
+      });
+      if (r.success) retried++;
+      await new Promise(res => setTimeout(res, 1_000));
+    } catch { /* ignore per-work errors */ }
   }
-
-  if (result.requiresManualPublish) {
-    // Store error note so operator can diagnose; stay in PUBLISHING for next retry
-    await updateWork(work.id, { validationNote: result.error?.slice(0, 300) });
-    console.warn(`[work-lifecycle] "${work.title}" requires manual publish: ${result.error}`);
-    return false;
-  }
-
-  console.error(`[work-lifecycle] publish error for "${work.title}": ${result.error}`);
-  return false;
+  return retried;
 }
 
 // ─── AG constitutive → founding work ─────────────────────────────────────────
@@ -912,11 +957,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Retry collection initialization for any PUBLISHED work whose ERC-721 init failed.
+  const reinited = await retryPendingInits().catch(e => {
+    console.error("[work-lifecycle] retryPendingInits error:", e);
+    return 0;
+  });
+
   return NextResponse.json({
     processed:       results.length,
     advanced:        results.filter(r => r.advanced).length,
     results,
     memberCount:     personas.length,
     foundingCreated,
+    reinited,
   });
 }

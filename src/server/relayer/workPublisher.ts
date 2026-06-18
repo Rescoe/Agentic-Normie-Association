@@ -251,6 +251,9 @@ export async function initializeCollection(
       abi:          ANA_EDITIONS_ABI,
       functionName: "initialize",
       args:         [params.artworkContent, params.artworkTitle, BigInt(params.workId)],
+      // Storing artwork content (poem ~1KB, HTML ~10KB) requires many SSTORE ops.
+      // Viem auto-estimate underestimates for large string storage. Set explicit limit.
+      gas:          5_000_000n,
     });
 
     await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
