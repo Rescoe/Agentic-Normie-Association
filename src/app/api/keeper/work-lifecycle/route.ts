@@ -246,6 +246,19 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
   return cast > 0;
 }
 
+// Reads a single role holder from AssociationCore. Returns null if not elected.
+async function getElectedRole(roleHash: `0x${string}`): Promise<{ tokenId: number; name?: string } | null> {
+  if (!CORE) return null;
+  try {
+    const r = await client.readContract({
+      address: CORE, abi: ASSOCIATION_CORE_ABI,
+      functionName: "getRoleHolder", args: [roleHash],
+    }) as { tokenId: bigint; holderAddress: string };
+    if (!r || r.holderAddress === ZERO || r.tokenId <= 0n) return null;
+    return { tokenId: Number(r.tokenId) };
+  } catch { return null; }
+}
+
 async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   const passed = work.voteResult === "passed";
 
@@ -257,31 +270,61 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
     return true;
   }
 
-  // Rapporteur = proposer (fixed)
-  // Author + Curator emerge from the preferences expressed during the vote itself
-  const rapporteur = personas.find(p => p.tokenId === work.proposedBy) ?? personas[0];
-  const allOthers  = personas.filter(p => p.tokenId !== rapporteur.tokenId);
+  // ── Check if bureau is elected on AssociationCore ─────────────────────────
+  // If AUTHOR + CURATOR + RAPPORTEUR roles are all filled → use bureau members.
+  // If bureau is incomplete (association just started) → elect from vote preferences.
+  const [electedAuthor, electedCurator, electedRapporteur] = await Promise.all([
+    getElectedRole(ROLES.AUTHOR as `0x${string}`),
+    getElectedRole(ROLES.CURATOR as `0x${string}`),
+    getElectedRole(ROLES.RAPPORTEUR as `0x${string}`),
+  ]);
 
-  // "yes" voters who expressed a role preference (excluding rapporteur)
-  const yesVotes = work.votes.filter(v => v.vote === "yes" && v.tokenId !== rapporteur.tokenId);
+  const bureauElected = !!(electedAuthor && electedCurator && electedRapporteur);
 
-  const findPersona = (tokenId: number) => personas.find(p => p.tokenId === tokenId);
+  let rapporteur: NormiePersona;
+  let author: NormiePersona;
+  let curator: NormiePersona;
 
-  // Author: prefer someone who said "author", then any "yes" voter, then first available
-  const authorVote   = yesVotes.find(v => v.interestedIn === "author");
-  const authorFallback = yesVotes[0] ?? null;
-  const author = (authorVote ? findPersona(authorVote.tokenId) : null)
-    ?? (authorFallback ? findPersona(authorFallback.tokenId) : null)
-    ?? allOthers[0]
-    ?? rapporteur;
+  if (bureauElected) {
+    // ── Bureau elected: use official roles ──────────────────────────────────
+    const findOrFake = (id: number): NormiePersona =>
+      personas.find(p => p.tokenId === id) ?? ({ tokenId: id, name: `Normie #${id}`, imageUrl: "" } as NormiePersona);
 
-  // Curator: prefer someone who said "curator" (≠ author), then another "yes" voter, then remaining
-  const curatorVote    = yesVotes.find(v => v.interestedIn === "curator" && v.tokenId !== author.tokenId);
-  const curatorFallback = yesVotes.find(v => v.tokenId !== author.tokenId) ?? null;
-  const curator = (curatorVote ? findPersona(curatorVote.tokenId) : null)
-    ?? (curatorFallback ? findPersona(curatorFallback.tokenId) : null)
-    ?? allOthers.find(p => p.tokenId !== author.tokenId)
-    ?? author;
+    rapporteur = findOrFake(electedRapporteur!.tokenId);
+    author     = findOrFake(electedAuthor!.tokenId);
+    curator    = findOrFake(electedCurator!.tokenId);
+
+    console.log(`[work-lifecycle] Bureau elected — Author: ${author.name}, Curator: ${curator.name}, Rapporteur: ${rapporteur.name}`);
+  } else {
+    // ── No bureau yet: elect from vote preferences ──────────────────────────
+    // Rapporteur = proposer (most engaged with the proposal)
+    const baseRapporteur = personas.find(p => p.tokenId === work.proposedBy) ?? personas[0];
+    const allOthers      = personas.filter(p => p.tokenId !== baseRapporteur.tokenId);
+    const yesVotes       = work.votes.filter(v => v.vote === "yes" && v.tokenId !== baseRapporteur.tokenId);
+    const findPersona    = (id: number) => personas.find(p => p.tokenId === id);
+
+    // Author: prefer "interestedIn: author" among yes voters, then any yes voter
+    const authorVote     = yesVotes.find(v => v.interestedIn === "author");
+    const authorFallback = yesVotes[0] ?? null;
+    const resolvedAuthor = (authorVote ? findPersona(authorVote.tokenId) : null)
+      ?? (authorFallback ? findPersona(authorFallback.tokenId) : null)
+      ?? allOthers[0]
+      ?? baseRapporteur;
+
+    // Curator: prefer "interestedIn: curator" (≠ author), then another yes voter
+    const curatorVote     = yesVotes.find(v => v.interestedIn === "curator" && v.tokenId !== resolvedAuthor.tokenId);
+    const curatorFallback = yesVotes.find(v => v.tokenId !== resolvedAuthor.tokenId) ?? null;
+    const resolvedCurator = (curatorVote ? findPersona(curatorVote.tokenId) : null)
+      ?? (curatorFallback ? findPersona(curatorFallback.tokenId) : null)
+      ?? allOthers.find(p => p.tokenId !== resolvedAuthor.tokenId)
+      ?? resolvedAuthor;
+
+    rapporteur = baseRapporteur;
+    author     = resolvedAuthor;
+    curator    = resolvedCurator;
+
+    console.log(`[work-lifecycle] No bureau — roles from vote: Author: ${author.name}, Curator: ${curator.name}, Rapporteur: ${rapporteur.name}`);
+  }
 
   await updateWork(work.id, {
     rapporteurTokenId: rapporteur.tokenId,
