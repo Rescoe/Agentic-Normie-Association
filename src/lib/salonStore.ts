@@ -59,7 +59,7 @@ interface SalonStore {
 export const AGORA_SALON_ID       = "salon_agora_ana";
 const NEON_KEY                    = "salon-store";
 const DATA_FILE                   = path.join(process.cwd(), "data", "salon.json");
-const MAX_MESSAGES_PER_HOUR       = 4;
+const MAX_MESSAGES_PER_HOUR       = 12;
 const MAX_MESSAGES_PER_SALON      = 500;
 // Keep last N messages after synthesis (recent context for Normies)
 export const SYNTHESIS_KEEP_LAST  = 10;

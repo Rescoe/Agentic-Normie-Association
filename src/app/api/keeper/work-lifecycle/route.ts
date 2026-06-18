@@ -983,6 +983,15 @@ export async function POST(req: NextRequest) {
   if (!isCron && !isAdminCall) {
     return NextResponse.json({ error: "Unauthorized — x-cron-secret or x-admin-call required" }, { status: 401 });
   }
+
+  // Cron calls only run on production — admin calls always run.
+  if (isCron && !isAdminCall) {
+    const env = process.env.VERCEL_ENV;
+    if (env && env !== "production") {
+      return NextResponse.json({ skipped: `non-production environment (${env})` });
+    }
+  }
+
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }

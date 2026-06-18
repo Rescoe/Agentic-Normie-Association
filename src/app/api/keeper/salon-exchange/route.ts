@@ -442,6 +442,16 @@ export async function POST(req: NextRequest) {
   // Cron requests carry CRON_SECRET — they bypass user stim limits
   const cronSecret  = process.env.CRON_SECRET;
   const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isAdminCall = req.headers.get("x-admin-call") === "1";
+
+  // Cron-triggered exchanges only run on production — never on preview deployments.
+  // Admin calls (manual trigger from /admin) always run regardless of environment.
+  if (isCron && !isAdminCall) {
+    const env = process.env.VERCEL_ENV; // "production" | "preview" | "development" | undefined
+    if (env && env !== "production") {
+      return NextResponse.json({ skipped: `non-production environment (${env})` });
+    }
+  }
 
   let body: { salonId?: string; force?: boolean } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
