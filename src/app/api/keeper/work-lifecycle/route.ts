@@ -692,10 +692,16 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences."}`,
   return true;
 }
 
-async function stepPublishing(work: ANAWork): Promise<boolean> {
+async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   if (!work.authorTokenId || !work.curatorTokenId || !work.rapporteurTokenId || !work.artworkText) {
-    console.error(`[work-lifecycle] PUBLISHING: incomplete data for ${work.id}`);
-    return false;
+    const msg = `PUBLISHING: incomplete data (missing ${[
+      !work.authorTokenId     && "authorTokenId",
+      !work.curatorTokenId    && "curatorTokenId",
+      !work.rapporteurTokenId && "rapporteurTokenId",
+      !work.artworkText       && "artworkText",
+    ].filter(Boolean).join(", ")})`;
+    console.error(`[work-lifecycle] ${msg} for ${work.id}`);
+    return msg;
   }
 
   const authorName      = work.authorName ?? `Normie #${work.authorTokenId}`;
@@ -741,13 +747,14 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
     );
 
     if (!result.success) {
+      const errMsg = result.error ?? "publishWork failed (unknown)";
       if (result.requiresManualPublish) {
-        await updateWork(work.id, { validationNote: result.error?.slice(0, 300) });
-        console.warn(`[work-lifecycle] "${work.title}" requires manual publish: ${result.error}`);
+        await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
+        console.warn(`[work-lifecycle] "${work.title}" requires manual publish: ${errMsg}`);
       } else {
-        console.error(`[work-lifecycle] publish error for "${work.title}": ${result.error}`);
+        console.error(`[work-lifecycle] publish error for "${work.title}": ${errMsg}`);
       }
-      return false;
+      return `publishWork failed: ${errMsg.slice(0, 200)}`;
     }
 
     // Save progress without advancing state — init must succeed first.
@@ -765,17 +772,35 @@ async function stepPublishing(work: ANAWork): Promise<boolean> {
   // ── Step 4: Initialize collection with artwork + workId ──
   // Stays in PUBLISHING (returns false) if this fails so the next cycle retries.
   if (collectionAddress && onChainWorkId != null) {
-    const initResult = await initializeCollection({
-      collectionAddress,
-      artworkContent: work.artworkText ?? "",
-      artworkTitle:   work.title,
-      workId:         onChainWorkId,
-    });
-    if (!initResult.success) {
-      console.warn(`[work-lifecycle] init failed, will retry next cycle: ${initResult.error}`);
-      return false;
+    // Check on-chain first — avoids re-calling initialize() if the tx succeeded
+    // but the Lambda died before we received the receipt.
+    let alreadyInitialized = false;
+    try {
+      alreadyInitialized = await client.readContract({
+        address:      collectionAddress as `0x${string}`,
+        abi:          ANA_EDITIONS_ABI,
+        functionName: "initialized",
+      }) as boolean;
+    } catch (e) {
+      console.warn(`[work-lifecycle] could not read initialized flag: ${e instanceof Error ? e.message : String(e)}`);
     }
-    console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
+
+    if (alreadyInitialized) {
+      console.log(`[work-lifecycle] collection already initialized on-chain — skipping init (workId=${onChainWorkId})`);
+    } else {
+      const initResult = await initializeCollection({
+        collectionAddress,
+        artworkContent: work.artworkText ?? "",
+        artworkTitle:   work.title,
+        workId:         onChainWorkId,
+      });
+      if (!initResult.success) {
+        const errMsg = initResult.error ?? "initializeCollection failed (unknown)";
+        console.warn(`[work-lifecycle] init failed, will retry next cycle: ${errMsg}`);
+        return `initializeCollection failed: ${errMsg.slice(0, 200)}`;
+      }
+      console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
+    }
   }
 
   // ── Step 5: All done → advance to PUBLISHED ──
@@ -934,7 +959,8 @@ async function checkAndCreateFoundingWork(personas: NormiePersona[]): Promise<bo
 
 // ─── Main dispatcher ──────────────────────────────────────────────────────────
 
-async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+// Returns true on success, false or an error string on failure.
+async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<boolean | string> {
   try {
     switch (work.state) {
       case "PROPOSED":     return await stepProposed(work, personas);
@@ -947,8 +973,9 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
       default:             return false;
     }
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     console.error(`[work-lifecycle] error advancing ${work.id} (${work.state}):`, e);
-    return false;
+    return `exception: ${msg.slice(0, 200)}`;
   }
 }
 
@@ -990,13 +1017,15 @@ export async function POST(req: NextRequest) {
 
   // Re-fetch active works in case founding work was just created
   const worksToProcess = foundingCreated ? await getActiveWorks() : activeWorks;
-  const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean }> = [];
+  const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string }> = [];
 
   for (const work of worksToProcess) {
-    const from     = work.state;
-    const advanced = await advanceWork(work, personas);
+    const from   = work.state;
+    const result = await advanceWork(work, personas);
+    const advanced = result === true;
+    const error    = typeof result === "string" ? result : undefined;
     const refreshed = await getWork(work.id);
-    results.push({ id: work.id, title: work.title, from, to: refreshed?.state ?? from, advanced });
+    results.push({ id: work.id, title: work.title, from, to: refreshed?.state ?? from, advanced, ...(error ? { error } : {}) });
     await new Promise(r => setTimeout(r, 300));
   }
 
