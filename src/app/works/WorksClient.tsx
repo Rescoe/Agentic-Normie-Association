@@ -455,7 +455,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
 // ─── OnChainWorkCard — fallback when work is not in Neon ─────────────────────
 
 function OnChainWorkCard({ workId }: { workId: number }) {
-  const [open, setOpen] = useState(false);
+  const certUrl = `/api/works/html/${workId}`;
 
   const { data, isLoading } = useReadContract({
     address:      WR_ADDR,
@@ -467,7 +467,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
   if (isLoading) {
     return (
-      <div className="border border-[--border] bg-[--bg-card] aspect-video flex items-center justify-center">
+      <div className="border border-[--border] bg-[--bg-card] flex items-center justify-center" style={{ aspectRatio: "4/3" }}>
         <div className="w-5 h-5 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
       </div>
     );
@@ -475,7 +475,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
   if (!data) {
     return (
-      <div className="border border-[--border] bg-[--bg-card] aspect-video flex items-center justify-center">
+      <div className="border border-[--border] bg-[--bg-card] flex items-center justify-center" style={{ aspectRatio: "4/3" }}>
         <p className="font-mono text-xs text-[--fg-muted]">Œuvre #{workId} introuvable</p>
       </div>
     );
@@ -493,47 +493,23 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col">
-      {open ? (
-        <div className="relative aspect-video bg-black overflow-hidden">
-          <iframe
-            src={`/api/works/html/${workId}`}
-            className="w-full h-full border-0"
-            sandbox="allow-scripts"
-            title={`Œuvre #${workId}`}
-          />
-          <button
-            onClick={() => setOpen(false)}
-            className="absolute top-2 right-2 bg-black/70 text-white font-mono text-xs px-2 py-1 hover:bg-black"
-          >
-            ✕
-          </button>
-        </div>
-      ) : (
-        <button
-          onClick={() => setOpen(true)}
-          className="relative aspect-video bg-[--bg-card] overflow-hidden group flex items-center justify-center cursor-pointer w-full"
+      {/* iframe runs immediately — 4/3 aspect ratio */}
+      <div className="relative bg-black overflow-hidden" style={{ aspectRatio: "4/3" }}>
+        <iframe
+          src={certUrl}
+          className="w-full h-full border-0"
+          sandbox="allow-scripts"
+          title={`Œuvre #${workId}`}
+        />
+        <a
+          href={certUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute top-2 right-2 bg-black/70 text-white font-mono text-[10px] px-2.5 py-1 hover:bg-black transition-colors border border-white/20"
         >
-          <div className="flex gap-3 items-center">
-            {trio.map(({ label, tid }) => (
-              <div key={label} className="relative w-12 h-12 overflow-hidden">
-                <Image
-                  src={getNormieImageUrl(Number(tid))}
-                  alt={`#${tid}`}
-                  fill
-                  className="object-contain"
-                  style={{ imageRendering: "pixelated" }}
-                  unoptimized
-                />
-              </div>
-            ))}
-          </div>
-          <div className="absolute inset-0 bg-[--fg]/0 group-hover:bg-[--fg]/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-            <span className="font-mono text-xs bg-[--bg] border border-[--border] px-3 py-1.5">
-              Exécuter ▶
-            </span>
-          </div>
-        </button>
-      )}
+          ⤢ fullscreen
+        </a>
+      </div>
 
       <div className="p-4 space-y-3 flex-1">
         <div>
@@ -562,8 +538,16 @@ function OnChainWorkCard({ workId }: { workId: number }) {
           ))}
         </div>
 
-        <div className="pt-1 border-t border-[--border]">
-          <p className="font-mono text-xs text-[--fg-muted]">✓ on-chain · exécutable</p>
+        <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
+          <p className="font-mono text-xs text-[--fg-muted]">on-chain · Base</p>
+          <a
+            href={certUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
+          >
+            <span>◈</span> Certificate
+          </a>
         </div>
       </div>
     </div>
