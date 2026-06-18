@@ -314,18 +314,41 @@ function isHtmlArtwork(text: string): boolean {
   return t.startsWith("<!DOCTYPE") || t.startsWith("<html") || t.startsWith("<!doctype");
 }
 
+// Fetch a Normie's image and embed as a data URI — snapshot at creation time.
+// Falls back to the external URL if fetch fails.
+async function fetchNormieImageUri(tokenId: number): Promise<string> {
+  const url = `https://api.normies.art/normie/${tokenId}/image.png`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return url;
+    const buf = await res.arrayBuffer();
+    const b64 = Buffer.from(buf).toString("base64");
+    return `data:image/png;base64,${b64}`;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Builds the complete self-contained HTML artifact for on-chain storage.
  * If artworkText is already standalone HTML (visual generative art), returns it as-is.
  * Otherwise wraps text artwork in the standard ANA certificate HTML.
  * Content will be base64-encoded and stored as data:text/html;base64,...
  * in WorkRegistry.publish(). No external dependencies, no IPFS.
+ * Normie images are embedded as data URIs — snapshot of their appearance at creation time.
  */
-export function buildWorkHtml(work: ANAWork): string {
+export async function buildWorkHtml(work: ANAWork): Promise<string> {
   // Visual/generative artworks — store the HTML directly, it IS the artifact
   if (work.artworkText && isHtmlArtwork(work.artworkText)) {
     return work.artworkText;
   }
+
+  // Fetch Normie images in parallel for the creation team cards
+  const [rapporteurImg, authorImg, curatorImg] = await Promise.all([
+    work.rapporteurTokenId ? fetchNormieImageUri(work.rapporteurTokenId) : Promise.resolve(""),
+    work.authorTokenId     ? fetchNormieImageUri(work.authorTokenId)     : Promise.resolve(""),
+    work.curatorTokenId    ? fetchNormieImageUri(work.curatorTokenId)    : Promise.resolve(""),
+  ]);
 
   const yes   = work.yesCount    ?? 0;
   const no    = work.noCount     ?? 0;
@@ -391,10 +414,11 @@ canvas{display:block;flex-shrink:0}
 .vtab{width:100%;border-collapse:collapse;font-size:.72rem;margin-top:.5rem}
 .vtab td{padding:.3rem .45rem;border-bottom:1px solid #111;vertical-align:top}
 .vtab td:first-child{color:var(--m);white-space:nowrap;width:30%}
-.credits{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem}
-.card{border:1px solid var(--b);padding:.7rem}
+.credits{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.8rem}
+.card{border:1px solid var(--b);padding:.7rem;display:flex;flex-direction:column;gap:.4rem}
+.card img{width:64px;height:64px;image-rendering:pixelated;display:block}
 .card .role{color:var(--m);font-size:.6rem;text-transform:uppercase;letter-spacing:.12em}
-.card .name{margin-top:.2rem;font-size:.88rem}
+.card .name{font-size:.88rem}
 .card .cid{color:var(--a);font-size:.68rem}
 .log .entry{font-size:.7rem;color:var(--a);padding:.18rem 0;border-bottom:1px solid #0d0d0d}
 .log strong{color:var(--t);font-weight:normal}
@@ -441,11 +465,11 @@ footer{border-top:1px solid var(--b);padding-top:1rem;margin-top:2rem}
 </section>
 
 <section>
-<p class="lbl">Creation Team</p>
+<p class="lbl">Creation Team — snapshot at publication</p>
 <div class="credits">
-<div class="card"><div class="role">Rapporteur</div><div class="name">${escapeHtml(work.rapporteurName ?? "—")}</div><div class="cid">#${work.rapporteurTokenId ?? "?"}</div></div>
-<div class="card"><div class="role">Author</div><div class="name">${escapeHtml(work.authorName ?? "—")}</div><div class="cid">#${work.authorTokenId ?? "?"}</div></div>
-<div class="card"><div class="role">Curator</div><div class="name">${escapeHtml(work.curatorName ?? "—")}</div><div class="cid">#${work.curatorTokenId ?? "?"}</div></div>
+<div class="card">${rapporteurImg ? `<img src="${rapporteurImg}" alt="#${work.rapporteurTokenId}" loading="lazy">` : ""}<div class="role">Rapporteur</div><div class="name">${escapeHtml(work.rapporteurName ?? "—")}</div><div class="cid">#${work.rapporteurTokenId ?? "?"}</div></div>
+<div class="card">${authorImg     ? `<img src="${authorImg}"     alt="#${work.authorTokenId}"     loading="lazy">` : ""}<div class="role">Author</div><div class="name">${escapeHtml(work.authorName ?? "—")}</div><div class="cid">#${work.authorTokenId ?? "?"}</div></div>
+<div class="card">${curatorImg    ? `<img src="${curatorImg}"    alt="#${work.curatorTokenId}"    loading="lazy">` : ""}<div class="role">Curator</div><div class="name">${escapeHtml(work.curatorName ?? "—")}</div><div class="cid">#${work.curatorTokenId ?? "?"}</div></div>
 </div>
 </section>
 
