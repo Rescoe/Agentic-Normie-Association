@@ -630,129 +630,361 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
   );
 }
 
-// ─── OnChainWorkCard — fallback when work is not in Neon ─────────────────────
+// ─── Certificate parser — extracts structured data from the on-chain HTML ────────
 
-function OnChainWorkCard({ workId }: { workId: number }) {
-  const [showModal, setShowModal] = useState(false);
-  const certUrl = `/api/works/html/${workId}`;
+interface ParsedCert {
+  title:             string;
+  artworkText:       string;
+  brief:             string;
+  yes:               number;
+  no:                number;
+  abs:               number;
+  votes:             { name: string; vote: "yes" | "no" | "abstain"; reason: string }[];
+  authorName:        string;
+  authorTokenId:     number | null;
+  curatorName:       string;
+  curatorTokenId:    number | null;
+  rapporteurName:    string;
+  rapporteurTokenId: number | null;
+  txHash:            string;
+  publishedDate:     string;
+  stateHistory:      { state: string; display: string }[];
+  isHtmlArtwork:     boolean;
+}
 
-  const { data, isLoading } = useReadContract({
-    address:      WR_ADDR,
-    abi:          WORK_REGISTRY_ABI,
-    functionName: "getWork",
-    args:         [BigInt(workId)],
-    query:        { enabled: deployed },
+function parseCertHtml(html: string): ParsedCert {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  // No .lbl elements → raw generative HTML artwork, not a poem certificate
+  const isHtmlArtwork = !doc.querySelector(".lbl");
+  const emptyBase = {
+    artworkText: "", brief: "", yes: 0, no: 0, abs: 0, votes: [],
+    authorName: "", authorTokenId: null, curatorName: "", curatorTokenId: null,
+    rapporteurName: "", rapporteurTokenId: null, txHash: "", publishedDate: "",
+    stateHistory: [],
+  };
+  if (isHtmlArtwork) {
+    return {
+      ...emptyBase,
+      title: doc.title?.replace(" — ANA", "").trim() || "Artwork",
+      isHtmlArtwork: true,
+    };
+  }
+
+  const title = doc.querySelector("h1")?.textContent?.trim()
+    ?? doc.title?.replace(" — ANA", "").trim()
+    ?? "";
+
+  const lblEls    = Array.from(doc.querySelectorAll(".lbl"));
+  const findLbl   = (prefix: string) => lblEls.find(l => l.textContent?.trim().startsWith(prefix));
+  const getBlock  = (lbl: Element | undefined) =>
+    lbl?.closest("section")?.querySelector(".block")?.textContent?.trim() ?? "";
+
+  const artworkText = getBlock(findLbl("Artwork"));
+  const brief       = getBlock(findLbl("Creative Brief"));
+
+  // Vote counts from .vleg
+  const voteCount = (cls: string) => {
+    const m = doc.querySelector(`.vleg ${cls}`)?.textContent?.match(/\d+/);
+    return m ? parseInt(m[0]) : 0;
+  };
+  const yes = voteCount(".y");
+  const no  = voteCount(".n");
+  const abs = voteCount(".a");
+
+  // Individual votes from .vtab rows
+  const votes = Array.from(doc.querySelectorAll(".vtab tr")).flatMap(row => {
+    const cells  = row.querySelectorAll("td");
+    if (cells.length < 3) return [];
+    const name   = cells[0].textContent?.trim() ?? "";
+    const icon   = cells[1].textContent?.trim() ?? "";
+    const reason = cells[2].textContent?.trim() ?? "";
+    if (!name) return [];
+    const vote   = icon === "✓" ? "yes" as const : icon === "✗" ? "no" as const : "abstain" as const;
+    return [{ name, vote, reason }];
   });
 
-  if (isLoading) {
-    return (
-      <div className="border border-[--border] bg-[--bg-card] flex items-center justify-center" style={{ aspectRatio: "4/3" }}>
-        <div className="w-5 h-5 border-2 border-[--border] border-t-[--fg] rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div className="border border-[--border] bg-[--bg-card] flex items-center justify-center" style={{ aspectRatio: "4/3" }}>
-        <p className="font-mono text-xs text-[--fg-muted]">Œuvre #{workId} introuvable</p>
-      </div>
-    );
-  }
-
-  const w = data as unknown as {
-    authorTokenId: bigint; curatorTokenId: bigint; rapporteurTokenId: bigint; publishedAt: bigint;
+  // Creation team cards
+  const cards   = Array.from(doc.querySelectorAll(".credits .card"));
+  const getCard = (role: string) => {
+    const card    = cards.find(c => c.querySelector(".role")?.textContent?.trim().toLowerCase() === role);
+    const name    = card?.querySelector(".name")?.textContent?.trim() ?? "";
+    const cidText = card?.querySelector(".cid")?.textContent?.trim() ?? "";
+    const tokenId = cidText ? (parseInt(cidText.replace("#", "")) || null) : null;
+    return { name, tokenId };
   };
-  const date = new Date(Number(w.publishedAt) * 1000);
+  const author     = getCard("author");
+  const curator    = getCard("curator");
+  const rapporteur = getCard("rapporteur");
+
+  // Process log entries
+  const stateHistory = Array.from(doc.querySelectorAll(".log .entry")).map(entry => ({
+    state:   entry.querySelector("strong")?.textContent?.trim() ?? "",
+    display: entry.textContent?.trim().replace(/^▸\s*/, "") ?? "",
+  }));
+
+  // tx hash from .tx paragraph
+  const txText  = doc.querySelector(".tx")?.textContent?.trim() ?? "";
+  const txMatch = txText.match(/0x[a-fA-F0-9]{60,66}/);
+  const txHash  = txMatch?.[0] ?? "";
+
+  // Published date from header .meta line
+  const metaText    = doc.querySelector("p.meta")?.textContent?.trim() ?? "";
+  const pubMatch    = metaText.match(/Published on\s+(.+?)(?:\s*$|\s*·)/);
+  const publishedDate = pubMatch?.[1]?.trim() ?? "";
+
+  return {
+    title, artworkText, brief, yes, no, abs, votes,
+    authorName: author.name, authorTokenId: author.tokenId,
+    curatorName: curator.name, curatorTokenId: curator.tokenId,
+    rapporteurName: rapporteur.name, rapporteurTokenId: rapporteur.tokenId,
+    txHash, publishedDate, stateHistory, isHtmlArtwork: false,
+  };
+}
+
+// ─── OnChainWorkCard — reads & parses the on-chain certificate directly ────────
+
+function OnChainWorkCard({ workId }: { workId: number }) {
+  const [cert,       setCert]       = useState<ParsedCert | null>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [showModal,  setShowModal]  = useState(false);
+  const [showReport, setShowReport] = useState(false);
+
+  const certUrl = `/api/works/html/${workId}`;
+
+  useEffect(() => {
+    fetch(certUrl)
+      .then(r => r.text())
+      .then(html => { setCert(parseCertHtml(html)); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [certUrl]);
+
+  if (loading) {
+    return (
+      <div className="border border-[--border] bg-[--bg] flex items-center gap-2 p-6">
+        <div className="w-3 h-3 border border-[--border] border-t-[--fg-muted] rounded-full animate-spin" />
+        <p className="font-mono text-[10px] text-[--fg-muted]">Loading #{workId} from chain…</p>
+      </div>
+    );
+  }
+
+  if (!cert) {
+    return (
+      <div className="border border-[--border] bg-[--bg] p-6">
+        <p className="font-mono text-xs text-[--fg-muted]">#{workId} — unable to load</p>
+      </div>
+    );
+  }
+
+  // ── HTML / generative artwork ────────────────────────────────────────────────
+  if (cert.isHtmlArtwork) {
+    return (
+      <div className="border border-[--border] bg-[--bg] flex flex-col">
+        <div
+          role="button" tabIndex={0}
+          onClick={() => setShowModal(true)}
+          onKeyDown={e => e.key === "Enter" && setShowModal(true)}
+          className="relative bg-black overflow-hidden cursor-pointer group"
+          style={{ aspectRatio: "4/3" }}
+        >
+          <iframe src={certUrl} className="w-full h-full border-0" sandbox="allow-scripts"
+            title={cert.title} style={{ pointerEvents: "none" }} />
+          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
+            <span className="font-mono text-xs text-white border border-white/40 px-3 py-1.5">⤢ open fullscreen</span>
+          </div>
+        </div>
+        <div className="p-4 space-y-3 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="font-bold text-sm leading-tight">{cert.title || `Artwork #${workId}`}</p>
+            <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">#{workId}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
+            <p className="font-mono text-xs text-[--fg-muted]">on-chain · Base</p>
+            <a href={certUrl} target="_blank" rel="noopener noreferrer"
+              className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1">
+              <span>◈</span> Certificate
+            </a>
+          </div>
+        </div>
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8 bg-[--fg]/40"
+            onClick={() => setShowModal(false)}>
+            <div className="relative flex flex-col bg-[--bg] border border-[--border] w-full max-w-5xl h-[88vh] shadow-2xl"
+              onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-5 py-3 border-b border-[--border] shrink-0">
+                <p className="font-bold text-sm truncate">{cert.title}</p>
+                <button onClick={() => setShowModal(false)}
+                  className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors ml-4 shrink-0">✕</button>
+              </div>
+              <iframe src={certUrl} className="flex-1 w-full border-0 bg-black" sandbox="allow-scripts" title={cert.title} />
+              <div className="flex items-center justify-between px-5 py-3 border-t border-[--border] shrink-0">
+                <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">Artwork · ANA · Base</p>
+                <a href={certUrl} target="_blank" rel="noopener noreferrer"
+                  className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors flex items-center gap-1 border border-[--border] px-2 py-1 hover:border-[--fg]">
+                  ◈ Certificate immutable
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Poem / text certificate ──────────────────────────────────────────────────
   const trio = [
-    { label: "Auteur",     tid: w.authorTokenId },
-    { label: "Curateur",   tid: w.curatorTokenId },
-    { label: "Rapporteur", tid: w.rapporteurTokenId },
+    { role: "Author",     name: cert.authorName,     id: cert.authorTokenId },
+    { role: "Curator",    name: cert.curatorName,    id: cert.curatorTokenId },
+    { role: "Rapporteur", name: cert.rapporteurName, id: cert.rapporteurTokenId },
   ];
 
   return (
     <div className="border border-[--border] bg-[--bg] flex flex-col">
-      {/* iframe preview — non-interactive, click → fullscreen modal */}
+      {/* Poem preview — click to open full poem modal */}
       <div
-        role="button"
-        tabIndex={0}
+        role="button" tabIndex={0}
         onClick={() => setShowModal(true)}
         onKeyDown={e => e.key === "Enter" && setShowModal(true)}
-        className="relative bg-black overflow-hidden cursor-pointer group"
-        style={{ aspectRatio: "4/3" }}
+        className="cursor-pointer group overflow-hidden"
       >
-        <iframe
-          src={certUrl}
-          className="w-full h-full border-0"
-          sandbox="allow-scripts"
-          title={`Œuvre #${workId}`}
-          style={{ pointerEvents: "none" }}
-        />
-        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
-          <span className="font-mono text-xs text-white border border-white/40 px-3 py-1.5">
-            ⤢ open fullscreen
-          </span>
+        <div className="relative bg-[--bg-card] px-6 pt-6 pb-0 overflow-hidden" style={{ maxHeight: "220px" }}>
+          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-[--fg]">{cert.artworkText}</pre>
+          <div className="absolute bottom-0 inset-x-0 h-20 bg-gradient-to-t from-[--bg-card] to-transparent flex items-end justify-center pb-3">
+            <span className="font-mono text-[10px] text-[--fg-muted] group-hover:text-[--fg] transition-colors">read in full →</span>
+          </div>
         </div>
       </div>
 
+      {/* Metadata */}
       <div className="p-4 space-y-3 flex-1">
-        <div>
-          <p className="font-bold text-sm">Œuvre #{workId}</p>
-          <p className="font-mono text-xs text-[--fg-muted]">
-            {date.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
-          </p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-bold text-base leading-tight">{cert.title}</p>
+          <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">#{workId}</span>
         </div>
+        {cert.publishedDate && (
+          <p className="font-mono text-[10px] text-[--fg-muted]">{cert.publishedDate}</p>
+        )}
 
-        <div className="grid grid-cols-3 gap-2 text-center">
-          {trio.map(({ label, tid }) => (
-            <div key={label} className="space-y-1">
-              <div className="relative w-8 h-8 mx-auto overflow-hidden">
-                <Image
-                  src={getNormieImageUrl(Number(tid))}
-                  alt={`#${tid}`}
-                  fill
-                  className="object-contain"
-                  style={{ imageRendering: "pixelated" }}
-                  unoptimized
-                />
-              </div>
-              <p className="font-mono text-[10px] text-[--fg-muted]">{label}</p>
-              <p className="font-mono text-[10px]">#{String(tid)}</p>
+        {/* Creation trio */}
+        <div className="flex items-center gap-6 pt-1">
+          {trio.map(m => (
+            <div key={m.role} className="flex flex-col gap-0.5">
+              <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">{m.role}</p>
+              <p className="font-mono text-xs text-[--fg]">{m.name || (m.id != null ? `#${m.id}` : "—")}</p>
             </div>
           ))}
         </div>
 
+        {/* Footer */}
         <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
-          <p className="font-mono text-xs text-[--fg-muted]">on-chain · Base</p>
-          <a
-            href={certUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
+          <button
+            onClick={() => setShowReport(r => !r)}
+            className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors"
           >
-            <span>◈</span> Certificate
-          </a>
+            {showReport ? "↑ Hide process" : "↓ How it was made"}
+          </button>
+          <div className="flex items-center gap-3">
+            <a href={certUrl} target="_blank" rel="noopener noreferrer"
+              className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1">
+              <span>◈</span> Certificate
+            </a>
+            {cert.txHash && (
+              <a href={`https://basescan.org/tx/${cert.txHash}`} target="_blank" rel="noopener noreferrer"
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors">tx ↗</a>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Fullscreen modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col">
-          <div className="flex items-center justify-between px-4 py-2 bg-black border-b border-white/10 shrink-0">
-            <p className="font-mono text-xs text-white/50">Œuvre #{workId}</p>
-            <button
-              onClick={() => setShowModal(false)}
-              className="font-mono text-xs text-white/40 hover:text-white transition-colors ml-4 shrink-0 border border-white/20 px-2 py-0.5"
-            >
-              ✕ close
-            </button>
+      {/* Governance report — parsed from on-chain certificate */}
+      {showReport && (
+        <div className="border-t border-[--border] bg-[--bg-card] p-4 space-y-4">
+          <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">Governance report</p>
+
+          <div className="space-y-1">
+            <p className="font-mono text-xs font-semibold">Assembly vote</p>
+            <p className="font-mono text-xs">
+              <span className="text-green-500">✓ {cert.yes} yes</span>
+              {" · "}
+              <span className="text-red-400">✗ {cert.no} no</span>
+              {" · "}
+              <span className="text-[--fg-muted]">– {cert.abs} abstain</span>
+            </p>
+            {cert.votes.map((v, i) => (
+              <p key={i} className="font-mono text-[10px] text-[--fg-muted] leading-relaxed pl-2 border-l border-[--border]">
+                {v.vote === "yes" ? "✓" : v.vote === "no" ? "✗" : "–"}{" "}
+                <span className="text-[--fg]">{v.name}</span> — {v.reason}
+              </p>
+            ))}
           </div>
-          <iframe
-            src={certUrl}
-            className="flex-1 w-full border-0"
-            sandbox="allow-scripts"
-            title={`Œuvre #${workId}`}
-          />
+
+          {cert.brief && (
+            <div className="space-y-1">
+              <p className="font-mono text-xs font-semibold">Creative brief</p>
+              <p className="font-mono text-[10px] text-[--fg-muted] leading-relaxed whitespace-pre-wrap">{cert.brief}</p>
+            </div>
+          )}
+
+          {cert.stateHistory.length > 0 && (
+            <div className="space-y-0.5">
+              <p className="font-mono text-xs font-semibold">Process log</p>
+              {cert.stateHistory.map((h, i) => (
+                <p key={i} className="font-mono text-[10px] text-[--fg-muted]">
+                  ▸ <span className="text-[--fg]">{h.state}</span>
+                  {h.display.replace(h.state, "").replace(/^—?\s*/, " — ")}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {cert.txHash && (
+            <p className="font-mono text-[10px] text-[--fg-muted] break-all">
+              Base · WorkRegistry · tx:{" "}
+              <a href={`https://basescan.org/tx/${cert.txHash}`} target="_blank" rel="noopener noreferrer"
+                className="hover:text-[--fg] transition-colors">{cert.txHash}</a>
+            </p>
+          )}
+
+          <div className="space-y-1.5 pt-2 border-t border-[--border]">
+            <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">On-chain proof</p>
+            <WorkChainProof onChainId={workId} />
+          </div>
+        </div>
+      )}
+
+      {/* Full poem modal */}
+      {showModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8 bg-[--fg]/40"
+          onClick={() => setShowModal(false)}
+        >
+          <div
+            className="relative flex flex-col bg-[--bg] border border-[--border] w-full max-w-xl max-h-[85vh] shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-[--border] shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest shrink-0">Poem</p>
+                <p className="font-bold text-sm truncate">{cert.title}</p>
+              </div>
+              <button onClick={() => setShowModal(false)}
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors ml-4 shrink-0">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-8 py-10">
+              <pre className="font-mono text-sm leading-[2.2] whitespace-pre-wrap text-[--fg] tracking-wide">
+                {cert.artworkText}
+              </pre>
+            </div>
+            <div className="flex items-center justify-between px-5 py-3 border-t border-[--border] shrink-0">
+              <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">
+                Poem · ANA · Base{cert.publishedDate ? ` · ${cert.publishedDate}` : ""}
+              </p>
+              <a href={certUrl} target="_blank" rel="noopener noreferrer"
+                className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors flex items-center gap-1 border border-[--border] px-2 py-1 hover:border-[--fg]">
+                ◈ Certificate immutable
+              </a>
+            </div>
+          </div>
         </div>
       )}
     </div>
