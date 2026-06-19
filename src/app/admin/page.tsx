@@ -942,7 +942,7 @@ function WorkStatusSection() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/works");
+      const r = await fetch("/api/works?fresh=1");
       if (r.ok) setWorks(await r.json() as ANAWorkFull[]);
     } finally { setLoading(false); }
   }, []);
@@ -960,11 +960,7 @@ function WorkStatusSection() {
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
-      else {
-        // Wait for Neon write to propagate past the 8s Lambda cache before refreshing
-        await new Promise(res => setTimeout(res, 3000));
-        void refresh();
-      }
+      else { void refresh(); } // /api/works?fresh=1 bypasses cache — no propagation delay needed
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally { setRejectingId(null); }
@@ -1162,7 +1158,7 @@ function WorkTestPipelineSection() {
   const [resetting,  setResetting]  = useState(false);
 
   const fetchWork = useCallback(async (id: string): Promise<ANAWorkFull | null> => {
-    const r = await fetch("/api/works");
+    const r = await fetch("/api/works?fresh=1");
     if (!r.ok) return null;
     const all = await r.json() as ANAWorkFull[];
     return all.find(w => w.id === id) ?? null;

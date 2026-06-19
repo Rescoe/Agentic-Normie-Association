@@ -182,7 +182,7 @@ async function useNeon(): Promise<boolean> {
   return USE_NEON;
 }
 
-async function getStore(): Promise<WorkStore> {
+async function getStore(forceFresh = false): Promise<WorkStore> {
   const neon = await useNeon();
   const now  = Date.now();
   const isStale = neon
@@ -190,7 +190,7 @@ async function getStore(): Promise<WorkStore> {
     && global.__anaWorkStoreLoadedAt !== undefined
     && now - global.__anaWorkStoreLoadedAt > CACHE_TTL_MS;
 
-  if (!global.__anaWorkStore || isStale) {
+  if (!global.__anaWorkStore || isStale || forceFresh) {
     const memFallback = global.__anaWorkStore ?? { works: {} };
     // Priority: 1. Neon (live), 2. static file (demo/backup), 3. in-memory cache
     const fromNeon = neon ? await neonLoad() : null;
@@ -217,8 +217,8 @@ async function mutate(fn: (s: WorkStore) => void): Promise<void> {
 
 // ─── Work CRUD ────────────────────────────────────────────────────────────────
 
-export async function listWorks(): Promise<ANAWork[]> {
-  return Object.values((await getStore()).works).sort((a, b) => b.proposedAt - a.proposedAt);
+export async function listWorks(opts: { fresh?: boolean } = {}): Promise<ANAWork[]> {
+  return Object.values((await getStore(opts.fresh)).works).sort((a, b) => b.proposedAt - a.proposedAt);
 }
 
 export async function getWork(id: string): Promise<ANAWork | null> {
