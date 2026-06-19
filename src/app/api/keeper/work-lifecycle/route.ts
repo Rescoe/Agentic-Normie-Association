@@ -791,9 +791,17 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
     if (alreadyInitialized) {
       console.log(`[work-lifecycle] collection already initialized on-chain — skipping init (workId=${onChainWorkId})`);
     } else {
+      // HTML/generative artworks must be stored as a data URI so ANAEditions.tokenURI
+      // uses animation_url instead of description. Text artworks are stored as-is.
+      const rawArtwork    = work.artworkText ?? "";
+      const isHtml        = rawArtwork.trimStart().startsWith("<");
+      const artworkContent = isHtml
+        ? `data:text/html;base64,${Buffer.from(rawArtwork, "utf-8").toString("base64")}`
+        : rawArtwork;
+
       const initResult = await initializeCollection({
         collectionAddress,
-        artworkContent: work.artworkText ?? "",
+        artworkContent,
         artworkTitle:   work.title,
         workId:         onChainWorkId,
       });

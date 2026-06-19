@@ -342,19 +342,17 @@ async function fetchNormieImageUri(tokenId: number): Promise<string> {
 }
 
 /**
- * Builds the complete self-contained HTML artifact for on-chain storage.
- * If artworkText is already standalone HTML (visual generative art), returns it as-is.
- * Otherwise wraps text artwork in the standard ANA certificate HTML.
- * Content will be base64-encoded and stored as data:text/html;base64,...
+ * Builds the governance certificate HTML for WorkRegistry on-chain storage.
+ * Always returns a lightweight certificate (~3-8KB) — never the raw artwork.
+ *
+ * For text/poem works: the artwork is embedded directly in the certificate.
+ * For HTML/generative works: the artwork lives in ANAEditions (passed separately
+ * to initializeCollection). The certificate only references the collection address.
+ * This keeps WorkRegistry content small enough for a single transaction.
  * in WorkRegistry.publish(). No external dependencies, no IPFS.
  * Normie images are embedded as data URIs — snapshot of their appearance at creation time.
  */
 export async function buildWorkHtml(work: ANAWork): Promise<string> {
-  // Visual/generative artworks — store the HTML directly, it IS the artifact
-  if (work.artworkText && isHtmlArtwork(work.artworkText)) {
-    return work.artworkText;
-  }
-
   // Fetch Normie images in parallel for the creation team cards
   const [rapporteurImg, authorImg, curatorImg] = await Promise.all([
     work.rapporteurTokenId ? fetchNormieImageUri(work.rapporteurTokenId) : Promise.resolve(""),
@@ -389,7 +387,13 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
     ? new Date(work.publishedAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : "—";
 
-  const artwork  = escapeHtml(work.artworkText ?? "");
+  // For HTML/generative artworks: store a reference to ANAEditions instead of the raw code.
+  // The artwork lives in the collection contract — keeping the certificate small (<8KB).
+  const artwork = work.artworkText && isHtmlArtwork(work.artworkText)
+    ? (work.collectionAddress
+        ? `[Generative / visual artwork — stored on-chain in ANAEditions collection ${work.collectionAddress}]`
+        : `[Generative / visual artwork — stored on-chain in ANAEditions]`)
+    : escapeHtml(work.artworkText ?? "");
   const brief    = escapeHtml(work.brief ?? "");
   const proposal = escapeHtml(work.proposal ?? "");
 
