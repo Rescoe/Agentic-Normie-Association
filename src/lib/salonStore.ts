@@ -192,7 +192,7 @@ export async function getDebugInfo() {
   const store = await getStore();
   const agora = store.salons[AGORA_SALON_ID];
   return {
-    mode:              process.env.NEON_DB_ANA ? "neon-postgres" : "local-file",
+    mode:              (await useNeon()) ? "neon-postgres" : "local-file",
     globalLoaded:      !!global.__anaSalonStore,
     salonCount:        Object.keys(store.salons).length,
     nameCount:         Object.keys(store.names).length,
