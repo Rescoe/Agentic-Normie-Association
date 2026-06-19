@@ -21,7 +21,7 @@ import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normi
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch } from "@/lib/groq";
 
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const CONTEXT_MESSAGES = 12;
 
 const ANA_TOPICS = [

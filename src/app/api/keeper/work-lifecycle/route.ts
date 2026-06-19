@@ -25,7 +25,7 @@ import { publishWork, deployCollection, initializeCollection } from "@/server/re
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 
-const MODEL        = "llama-3.3-70b-versatile";
+const MODEL        = "meta-llama/llama-4-scout-17b-16e-instruct";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
 // Fetch current ETH/USD price from CoinGecko (no API key needed).

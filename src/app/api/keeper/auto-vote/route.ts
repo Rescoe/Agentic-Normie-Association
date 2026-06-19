@@ -22,7 +22,7 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL    = "llama-3.3-70b-versatile";
+const MODEL    = "meta-llama/llama-4-scout-17b-16e-instruct";
 const MODEL_F  = "llama-3.1-8b-instant";
 
 const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;

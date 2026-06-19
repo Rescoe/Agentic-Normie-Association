@@ -13,7 +13,7 @@
  *   data: { type: "brief", content: string }   — final artistic brief
  *   data: { type: "done" }
  *
- * Uses Groq API (llama-3.3-70b-versatile) via fetch — no SDK dependency.
+ * Uses Groq API (meta-llama/llama-4-scout-17b-16e-instruct) via fetch — no SDK dependency.
  * GROQ_API_KEY must be set in environment.
  */
 
@@ -31,7 +31,7 @@ interface ElectedMember {
 }
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL        = "llama-3.3-70b-versatile";
+const MODEL        = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 function buildSystemPrompt(elected: ElectedMember[]): string {
   const activeMembers = elected.filter(m => m.tokenId > 0);

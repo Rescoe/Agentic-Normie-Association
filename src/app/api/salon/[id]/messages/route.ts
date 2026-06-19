@@ -7,7 +7,7 @@ import { getSalon, getMessages, addMessage, checkRateLimit } from "@/lib/salonSt
 import { buildPersona, buildSystemPrompt } from "@/lib/normiesPersona";
 
 const GROQ_API_URL    = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL           = "llama-3.3-70b-versatile";
+const MODEL           = "meta-llama/llama-4-scout-17b-16e-instruct";
 const CONTEXT_MESSAGES = 12;
 
 const client = createPublicClient({
