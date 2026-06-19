@@ -21,7 +21,13 @@ import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normi
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch } from "@/lib/groq";
 
-const MODEL            = "llama-3.3-70b-versatile";
+// Models with independent RPM/TPM quotas — spreading calls across them avoids 429s.
+// llama-3.3-70b-versatile : 30 rpm, 12K tpm  — synthesis (quality summaries)
+// llama-4-scout-17b       : 30 rpm, 30K tpm  — speech generation (high TPM = fewer TPM 429s)
+// qwen3-32b               : 60 rpm,  6K tpm  — proposals (double the RPM headroom)
+const MODEL          = "llama-3.3-70b-versatile";
+const MODEL_SPEECH   = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL_PROPOSAL = "qwen/qwen3-32b";
 const CONTEXT_MESSAGES = 12;
 
 const ANA_TOPICS = [
@@ -142,7 +148,7 @@ async function generateSpeech(
     ].filter(Boolean).join("\n");
 
     const res = await groqFetch({
-      model: MODEL,
+      model: MODEL_SPEECH,
       messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
       max_tokens: 250, temperature: 0.92,
     });
@@ -265,7 +271,8 @@ async function runExchange(
     });
     generated.push(initMsg);
 
-    await new Promise(r => setTimeout(r, 800));
+    // 30 RPM = 2s min between requests. Call 1 takes ~1s → wait 2.5s so total gap ≥ 3.5s.
+    await new Promise(r => setTimeout(r, 2500));
 
     // ── Responder ──
     const responder = pickResponder(eligible, initiator.tokenId);
@@ -375,7 +382,7 @@ async function maybeGenerateWorkProposal(
 
   try {
     const res = await groqFetch({
-      model: MODEL,
+      model: MODEL_PROPOSAL,
       messages: [
         {
           role:    "system",
@@ -568,7 +575,12 @@ export async function POST(req: NextRequest) {
   // Snapshot all open salons before the loop (for thematic-salon dedup check)
   const allOpenSalons = await listSalons();
 
-  for (const salon of salonsToProcess) {
+  for (let i = 0; i < salonsToProcess.length; i++) {
+    // Space out salon iterations so the first call of salon N+1 doesn't fire too soon
+    // after the last call of salon N (Groq 30 RPM = 2s min between requests per model).
+    if (i > 0) await new Promise(r => setTimeout(r, 2500));
+
+    const salon = salonsToProcess[i];
     const result = await runExchange(salon, allPersonas, force, !isCron);
     results.push({ salonId: salon.id, messages: result.messages.length, skipped: result.skipped, topic: result.topic });
     allGenerated.push(...result.messages);
