@@ -12,9 +12,10 @@
 
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "./contracts";
+import { logTxClient, confirmTxClient } from "./txLogClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,9 +50,13 @@ export function useAttestation() {
 
   const { writeContractAsync } = useWriteContract();
 
-  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({
+  const { isSuccess: txConfirmed, data: receipt } = useWaitForTransactionReceipt({
     hash: txHash ?? undefined,
   });
+
+  useEffect(() => {
+    if (txConfirmed && txHash) confirmTxClient(txHash, Number(receipt?.blockNumber));
+  }, [txConfirmed, txHash, receipt]);
 
   const register = useCallback(
     async (tokenId: number) => {
@@ -110,6 +115,10 @@ export function useAttestation() {
 
         setTxHash(hash);
         setStatus("pending_tx");
+        logTxClient({
+          txHash: hash, type: "register", contractName: "AssociationCore",
+          functionName: "register", fromAddress: address, workId: String(tokenId),
+        });
       } catch (err: unknown) {
         const msg =
           err instanceof Error ? err.message : "Transaction failed";

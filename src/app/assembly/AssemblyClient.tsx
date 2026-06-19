@@ -20,6 +20,7 @@ import {
 } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 import type { NormiePersona } from "@/lib/normiesPersona";
+import { logTxClient, confirmTxClient } from "@/lib/txLogClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -261,10 +262,14 @@ function RoleVoteCard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasVotedData]);
 
-  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
+  const { isSuccess: txConfirmed, data: voteReceipt } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
   useEffect(() => {
-    if (txConfirmed) { setTxPending(false); refetchVoted(); refetchLeader(); }
-  }, [txConfirmed, refetchVoted, refetchLeader]);
+    if (txConfirmed) {
+      setTxPending(false);
+      if (txHash) confirmTxClient(txHash, Number(voteReceipt?.blockNumber));
+      refetchVoted(); refetchLeader();
+    }
+  }, [txConfirmed, refetchVoted, refetchLeader, txHash, voteReceipt]);
 
   const handleVote = useCallback(async () => {
     if (votingWith === null || selectedCandidate === null) return;
@@ -277,6 +282,10 @@ function RoleVoteCard({
         args: [BigInt(votingWith), role.hash, BigInt(selectedCandidate)],
       });
       setTxHash(hash);
+      logTxClient({
+        txHash: hash, type: "vote", contractName: "ConstituentAssembly",
+        functionName: "castVote", workId: String(votingWith),
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setTxError(msg.includes("rejected") || msg.includes("denied") ? "Annulé" : msg.slice(0, 100));
@@ -539,8 +548,13 @@ function CreativeAssemblySection() {
   const [txError, setTxError] = useState<string | null>(null);
 
   const { writeContractAsync } = useWriteContract();
-  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
-  useEffect(() => { if (txConfirmed && txState === "confirming") setTxState("done"); }, [txConfirmed, txState]);
+  const { isSuccess: txConfirmed, data: sessionReceipt } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
+  useEffect(() => {
+    if (txConfirmed && txState === "confirming") {
+      setTxState("done");
+      if (txHash) confirmTxClient(txHash, Number(sessionReceipt?.blockNumber));
+    }
+  }, [txConfirmed, txState, txHash, sessionReceipt]);
 
   const { data: wrOwnerRaw } = useReadContract({
     address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "owner",
@@ -605,6 +619,7 @@ function CreativeAssemblySection() {
     try {
       const hash = await writeContractAsync({ address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "initiateWorkSession" });
       setTxHash(hash); setTxState("confirming");
+      logTxClient({ txHash: hash, type: "session-init", contractName: "WorkRegistry", functionName: "initiateWorkSession" });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setTxError(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 120));

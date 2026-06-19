@@ -729,6 +729,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
         authorName,
         editionCount,
         editionPrice:      editionPriceWei,
+        workId:            work.id,
       });
       if (deployResult.success && deployResult.collectionAddress) {
         collectionAddress = deployResult.collectionAddress;
@@ -749,6 +750,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
       work.authorTokenId,
       work.curatorTokenId,
       work.rapporteurTokenId,
+      work.id,
     );
 
     if (!result.success) {

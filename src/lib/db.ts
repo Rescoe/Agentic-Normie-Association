@@ -41,7 +41,7 @@ if (!USE_NEON) {
 }
 
 let _sql: ReturnType<typeof neon> | null = null;
-function sql() {
+export function sql() {
   // The Neon serverless driver issues its queries via the global fetch().
   // Next.js patches fetch() to cache responses by default (its Data Cache),
   // which applies to ANY fetch call made during a request — including ones

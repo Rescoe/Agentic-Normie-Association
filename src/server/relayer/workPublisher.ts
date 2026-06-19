@@ -34,6 +34,7 @@ import {
   ANA_COLLECTION_FACTORY_ABI,
   CONTRACT_ADDRESSES,
 } from "@/lib/contracts";
+import { logTxSubmitted, logTxConfirmed, logTxFailed } from "@/lib/txLog";
 
 const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
 const RPC_URL      = process.env.BASE_RPC_URL ?? "https://mainnet.base.org";
@@ -58,6 +59,7 @@ export interface DeployCollectionParams {
   editionCount:      number;  // from collective vote
   editionPrice:      bigint;  // in wei, from collective vote
   existingCollection?: string; // if already deployed, skip
+  workId?:           string;  // ANAWork id, for tx_log only
 }
 
 export interface DeployCollectionResult {
@@ -138,6 +140,12 @@ export async function deployCollection(
       ],
     });
 
+    await logTxSubmitted({
+      txHash: hash, type: "deploy-collection", initiator: "relayer",
+      contractName: "ANACollectionFactory", functionName: "createCollection",
+      fromAddress: relayerAddr, workId: params.workId,
+    });
+
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
     // Parse CollectionDeployed event: topics[2] = indexed collectionAddr
@@ -151,10 +159,12 @@ export async function deployCollection(
     }
 
     if (!collectionAddress) {
+      await logTxFailed(hash, "CollectionDeployed event not found");
       return { success: false, error: "CollectionDeployed event not found" };
     }
 
     console.log(`[workPublisher] collection deployed: ${collectionAddress} (${params.editionCount} editions @ ${formatEther(params.editionPrice)} ETH)`);
+    await logTxConfirmed(hash, receipt.blockNumber, { collectionAddress });
 
     await checkAndSweepRelayer(account.address, key);
 
@@ -175,6 +185,7 @@ export async function publishWork(
   authorTokenId:     number,
   curatorTokenId:    number,
   rapporteurTokenId: number,
+  workId?:           string, // ANAWork id, for tx_log only
 ): Promise<PublishResult> {
   const key          = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
   const registryAddr = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
@@ -231,6 +242,12 @@ export async function publishWork(
       args:         [content, BigInt(authorTokenId), BigInt(curatorTokenId), BigInt(rapporteurTokenId)],
     });
 
+    await logTxSubmitted({
+      txHash: hash, type: "publish", initiator: "relayer",
+      contractName: "WorkRegistry", functionName: "publish",
+      fromAddress: account.address, workId,
+    });
+
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
     let onChainWorkId: number | undefined;
@@ -249,6 +266,7 @@ export async function publishWork(
     }
 
     console.log(`[workPublisher] published — workId=${onChainWorkId} tx=${hash}`);
+    await logTxConfirmed(hash, receipt.blockNumber, { onChainWorkId });
     await checkAndSweepRelayer(account.address, key);
     return { success: true, txHash: hash, onChainWorkId };
 
@@ -298,8 +316,15 @@ export async function initializeCollection(
       gas:          15_000_000n,
     });
 
-    await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+    await logTxSubmitted({
+      txHash: hash, type: "initialize-collection", initiator: "relayer",
+      contractName: "ANAEditions", functionName: "initialize",
+      fromAddress: account.address, workId: String(params.workId),
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
     console.log(`[workPublisher] collection initialized — workId=${params.workId} collection=${params.collectionAddress}`);
+    await logTxConfirmed(hash, receipt.blockNumber, { collectionAddress: params.collectionAddress });
 
     await checkAndSweepRelayer(account.address, key);
     return { success: true, txHash: hash };
