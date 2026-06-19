@@ -1152,10 +1152,16 @@ export function WorksClient() {
   const count = Number(countRaw ?? 0);
 
   useEffect(() => {
-    fetch("/api/works")
-      .then(r => r.json())
-      .then((works: ANAWork[]) => setAllWorks(works))
-      .catch(() => null);
+    const load = () => {
+      fetch("/api/works")
+        .then(r => r.json())
+        .then((works: ANAWork[]) => setAllWorks(works))
+        .catch(() => null);
+    };
+    load();
+    // Without polling, a tab left open never sees works progress past their state at load time.
+    const id = setInterval(load, 20_000);
+    return () => clearInterval(id);
   }, []);
 
   // Batch-resolve real Normie names (stored names may be stale "Normie #XXXX")

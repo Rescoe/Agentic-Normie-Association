@@ -942,7 +942,7 @@ function WorkStatusSection() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/works?fresh=1");
+      const r = await fetch("/api/works");
       if (r.ok) setWorks(await r.json() as ANAWorkFull[]);
     } finally { setLoading(false); }
   }, []);
@@ -960,7 +960,7 @@ function WorkStatusSection() {
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
-      else { void refresh(); } // /api/works?fresh=1 bypasses cache — no propagation delay needed
+      else { void refresh(); } // workStore now reads Neon directly, no cache to wait out
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally { setRejectingId(null); }
@@ -1158,7 +1158,7 @@ function WorkTestPipelineSection() {
   const [resetting,  setResetting]  = useState(false);
 
   const fetchWork = useCallback(async (id: string): Promise<ANAWorkFull | null> => {
-    const r = await fetch("/api/works?fresh=1");
+    const r = await fetch("/api/works");
     if (!r.ok) return null;
     const all = await r.json() as ANAWorkFull[];
     return all.find(w => w.id === id) ?? null;

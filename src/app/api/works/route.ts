@@ -1,9 +1,8 @@
 export const dynamic = "force-dynamic";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { listWorks } from "@/lib/workStore";
 
-export async function GET(req: NextRequest) {
-  const fresh = req.nextUrl.searchParams.get("fresh") === "1";
-  const works = await listWorks({ fresh });
+export async function GET() {
+  const works = await listWorks();
   return NextResponse.json(works);
 }

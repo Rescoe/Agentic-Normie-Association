@@ -68,13 +68,9 @@ export const SYNTHESIS_MIN_MSGS   = 40;
 // 30 days between syntheses
 export const SYNTHESIS_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 
-const CACHE_TTL_MS = 60_000;
-
 declare global {
   // eslint-disable-next-line no-var
   var __anaSalonStore: SalonStore | undefined;
-  // eslint-disable-next-line no-var
-  var __anaSalonStoreLoadedAt: number | undefined;
 }
 
 // ─── Neon I/O ─────────────────────────────────────────────────────────────────
@@ -158,29 +154,25 @@ async function useNeon(): Promise<boolean> {
   return USE_NEON;
 }
 
+// Neon is the source of truth, read fresh on every call — no cross-request
+// in-memory caching. Vercel routes serverless functions to whichever Lambda
+// instance is available, so a per-instance TTL cache caused different pages
+// to see different ages of the same data, sometimes for a full minute.
+// Neon reads are fast and this app's traffic is low, so always-fresh is cheap.
 async function getStore(): Promise<SalonStore> {
-  const neon = await useNeon();
-  const now  = Date.now();
-  const isStale = neon
-    && global.__anaSalonStore
-    && global.__anaSalonStoreLoadedAt !== undefined
-    && now - global.__anaSalonStoreLoadedAt > CACHE_TTL_MS;
-
-  if (!global.__anaSalonStore || isStale) {
-    const memFallback = global.__anaSalonStore ?? { salons: {}, names: {} };
-    // Priority: 1. Neon (live), 2. static file (demo/backup), 3. in-memory cache
-    const fromNeon = neon ? await neonLoad() : null;
-    const s = fromNeon ?? fileLoad() ?? memFallback;
+  if (await useNeon()) {
+    const fromNeon = await neonLoad();
+    const s = fromNeon ?? { salons: {}, names: {} };
     ensureAgora(s);
-    const msgCount = s.salons[AGORA_SALON_ID]?.messages.length ?? 0;
-    const src = fromNeon ? "neon" : (msgCount > 0 ? "file" : "empty");
-    global.__anaSalonStore        = s;
-    global.__anaSalonStoreLoadedAt = now;
-    console.log(
-      `[salonStore] ${isStale ? "refresh" : "init"} (${src}) — ${msgCount} agora msgs`
-    );
+    return s;
   }
-  return global.__anaSalonStore!;
+  // Local dev fallback only (no NEON_DB_ANA configured)
+  if (!global.__anaSalonStore) {
+    const s = fileLoad();
+    ensureAgora(s);
+    global.__anaSalonStore = s;
+  }
+  return global.__anaSalonStore;
 }
 
 async function mutate(fn: (s: SalonStore) => void): Promise<void> {
@@ -188,8 +180,8 @@ async function mutate(fn: (s: SalonStore) => void): Promise<void> {
   fn(store);
   if (await useNeon()) {
     await neonSave(store);
-    global.__anaSalonStoreLoadedAt = Date.now();
   } else {
+    global.__anaSalonStore = store;
     fileSave(store);
   }
 }

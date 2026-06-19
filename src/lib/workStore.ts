@@ -114,15 +114,12 @@ export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
 
 const NEON_KEY    = "work-store";
 const DATA_FILE   = path.join(process.cwd(), "data", "works.json");
-const CACHE_TTL_MS = 8_000;
 
 // ─── Global cache ─────────────────────────────────────────────────────────────
 
 declare global {
   // eslint-disable-next-line no-var
   var __anaWorkStore: WorkStore | undefined;
-  // eslint-disable-next-line no-var
-  var __anaWorkStoreLoadedAt: number | undefined;
 }
 
 // ─── Neon I/O ─────────────────────────────────────────────────────────────────
@@ -182,26 +179,23 @@ async function useNeon(): Promise<boolean> {
   return USE_NEON;
 }
 
-async function getStore(forceFresh = false): Promise<WorkStore> {
-  const neon = await useNeon();
-  const now  = Date.now();
-  const isStale = neon
-    && global.__anaWorkStore
-    && global.__anaWorkStoreLoadedAt !== undefined
-    && now - global.__anaWorkStoreLoadedAt > CACHE_TTL_MS;
-
-  if (!global.__anaWorkStore || isStale || forceFresh) {
-    const memFallback = global.__anaWorkStore ?? { works: {} };
-    // Priority: 1. Neon (live), 2. static file (demo/backup), 3. in-memory cache
-    const fromNeon = neon ? await neonLoad() : null;
-    const s = fromNeon ?? fileLoad() ?? memFallback;
+// Neon is the source of truth, read fresh on every call — no cross-request
+// in-memory caching. Vercel routes serverless functions to whichever Lambda
+// instance is available, so a per-instance TTL cache caused different pages
+// (gallery, homepage banner, admin) to see different ages of the same data.
+// Neon reads are fast and this app's traffic is low, so always-fresh is cheap.
+async function getStore(): Promise<WorkStore> {
+  if (await useNeon()) {
+    const fromNeon = await neonLoad();
+    const s = fromNeon ?? { works: {} };
     if (!s.works) s.works = {};
-    const src = fromNeon ? "neon" : (Object.keys(s.works).length > 0 ? "file" : "empty");
-    global.__anaWorkStore        = s;
-    global.__anaWorkStoreLoadedAt = now;
-    console.log(`[workStore] ${isStale ? "refresh" : "init"} (${src}) — ${Object.keys(s.works).length} works`);
+    return s;
   }
-  return global.__anaWorkStore!;
+  // Local dev fallback only (no NEON_DB_ANA configured)
+  if (!global.__anaWorkStore) {
+    global.__anaWorkStore = fileLoad();
+  }
+  return global.__anaWorkStore;
 }
 
 async function mutate(fn: (s: WorkStore) => void): Promise<void> {
@@ -209,16 +203,16 @@ async function mutate(fn: (s: WorkStore) => void): Promise<void> {
   fn(store);
   if (await useNeon()) {
     await neonSave(store);
-    global.__anaWorkStoreLoadedAt = Date.now();
   } else {
+    global.__anaWorkStore = store;
     fileSave(store);
   }
 }
 
 // ─── Work CRUD ────────────────────────────────────────────────────────────────
 
-export async function listWorks(opts: { fresh?: boolean } = {}): Promise<ANAWork[]> {
-  return Object.values((await getStore(opts.fresh)).works).sort((a, b) => b.proposedAt - a.proposedAt);
+export async function listWorks(): Promise<ANAWork[]> {
+  return Object.values((await getStore()).works).sort((a, b) => b.proposedAt - a.proposedAt);
 }
 
 export async function getWork(id: string): Promise<ANAWork | null> {
@@ -291,8 +285,7 @@ export async function resetWorks(): Promise<void> {
   } else {
     fileSave(empty);
   }
-  global.__anaWorkStore        = empty;
-  global.__anaWorkStoreLoadedAt = Date.now();
+  global.__anaWorkStore = empty;
   console.log("[workStore] reset — all works cleared");
 }
 
