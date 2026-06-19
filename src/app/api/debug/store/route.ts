@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getDebugInfo } from "@/lib/salonStore";
-import { USE_NEON, kvGet } from "@/lib/db";
+import { USE_NEON, kvGet, getNeonHost } from "@/lib/db";
 
 function maskUrl(url: string | undefined): string | null {
   if (!url) return null;
@@ -45,6 +45,7 @@ export async function GET() {
       ...info,
       neonConfigured: USE_NEON,
       neonVarUsed,
+      neonHost: getNeonHost(),
       baseRpcUrl:        maskUrl(process.env.BASE_RPC_URL),
       baseRpcConfigured: !!process.env.BASE_RPC_URL,
       relayerAddressEnv: process.env.RELAYER_ADDRESS ?? null,

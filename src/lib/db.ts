@@ -20,6 +20,19 @@ const connStr =
 
 export const USE_NEON = !!connStr;
 
+// Safe to expose: the hostname identifies which Neon project/branch is
+// actually wired up, with no credentials. Used to diagnose cases where the
+// app reads/writes one branch while the dashboard's SQL editor is pointed
+// at a different one.
+export function getNeonHost(): string | null {
+  if (!connStr) return null;
+  try {
+    return new URL(connStr).hostname;
+  } catch {
+    return null;
+  }
+}
+
 if (!USE_NEON) {
   console.warn("[db] No Neon connection string found (NEON_DB_ANA_POSTGRES_URL / NEON_DB_ANA_DATABASE_URL / NEON_DB_ANA) — falling back to local file. Messages will NOT persist across Lambda instances.");
 } else {
