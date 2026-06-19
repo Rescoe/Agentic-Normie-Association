@@ -933,7 +933,7 @@ const STATE_COLOR: Record<string, string> = {
 };
 
 function WorkStatusSection() {
-  const [works,   setWorks]   = useState<ANAWorkSummary[]>([]);
+  const [works,   setWorks]   = useState<ANAWorkFull[]>([]);
   const [loading, setLoading] = useState(false);
   const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
   const [lcError,  setLcError]  = useState<string | null>(null);
@@ -942,7 +942,7 @@ function WorkStatusSection() {
     setLoading(true);
     try {
       const r = await fetch("/api/works");
-      if (r.ok) setWorks(await r.json() as ANAWorkSummary[]);
+      if (r.ok) setWorks(await r.json() as ANAWorkFull[]);
     } finally { setLoading(false); }
   }, []);
 
@@ -962,6 +962,9 @@ function WorkStatusSection() {
       setLcError(e instanceof Error ? e.message : String(e));
     } finally { setLcRunning(false); }
   };
+
+  type LcWorkResult = { id: string; title: string; from: string; to: string; advanced: boolean; error?: string };
+  const lcResults = (Array.isArray(lcResult?.results) ? lcResult!.results : []) as LcWorkResult[];
 
   const activeWorks = works.filter(w =>
     ["PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING"].includes(w.state)
@@ -993,15 +996,20 @@ function WorkStatusSection() {
       )}
 
       {lcResult && (
-        <div className="border border-green-300 bg-green-50/20 px-4 py-3 space-y-1">
+        <div className={`border px-4 py-3 space-y-1.5 ${lcResults.some(r => !r.advanced) ? "border-orange-300 bg-orange-50/10" : "border-green-300 bg-green-50/20"}`}>
           <p className="font-mono text-xs font-bold text-green-700">
             ✓ {String(lcResult.advanced ?? 0)} / {String(lcResult.processed ?? 0)} œuvres avancées
             {(lcResult.foundingCreated as boolean) && " — ★ Œuvre fondatrice créée !"}
           </p>
-          {Array.isArray(lcResult.results) && (lcResult.results as Array<{title: string; from: string; to: string; advanced: boolean}>).map((r, i) => (
-            <p key={i} className="font-mono text-xs text-[--fg-muted]">
-              {r.advanced ? "→" : "·"} {r.title} : {r.from} → {r.to}
-            </p>
+          {lcResults.map((r, i) => (
+            <div key={i} className="space-y-0.5">
+              <p className={`font-mono text-xs ${r.advanced ? "text-green-700" : "text-orange-600"}`}>
+                {r.advanced ? "✓" : "✗"} {r.title} : {r.from} → {r.to}
+              </p>
+              {r.error && (
+                <p className="font-mono text-[10px] text-red-600 pl-3 leading-relaxed">{r.error}</p>
+              )}
+            </div>
           ))}
           {typeof lcResult.message === "string" && (
             <p className="font-mono text-xs text-[--fg-muted]">{lcResult.message}</p>
@@ -1014,7 +1022,7 @@ function WorkStatusSection() {
         <div className="space-y-2">
           <p className="font-mono text-xs text-[--fg-muted]">{activeWorks.length} œuvre(s) active(s)</p>
           {activeWorks.map(w => (
-            <div key={w.id} className="border border-[--border] p-4 space-y-1.5">
+            <div key={w.id} className={`border p-4 space-y-1.5 ${w.state === "PUBLISHING" && w.validationNote ? "border-orange-300" : "border-[--border]"}`}>
               <div className="flex items-start justify-between gap-3">
                 <p className="font-bold text-sm">
                   {w.isFoundingWork && "★ "}
@@ -1032,6 +1040,44 @@ function WorkStatusSection() {
                 <p className="font-mono text-xs text-[--fg-muted]">
                   dernière étape : {w.stateHistory[w.stateHistory.length - 1]?.note ?? "—"}
                 </p>
+              )}
+              {/* Debug panel for stuck PUBLISHING works */}
+              {w.state === "PUBLISHING" && (
+                <div className="border border-orange-200 bg-orange-50/10 px-3 py-2 space-y-1 mt-1">
+                  <p className="font-mono text-[10px] text-orange-600 uppercase tracking-wider font-bold">Publication on-chain — debug</p>
+                  {w.validationNote && (
+                    <p className="font-mono text-xs text-red-600">⚠ {w.validationNote}</p>
+                  )}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                    <p className="font-mono text-[10px] text-[--fg-muted]">
+                      collectionAddr : {w.collectionAddress
+                        ? <a href={basescanAddr(w.collectionAddress)} target="_blank" rel="noopener noreferrer" className="text-teal-600 underline">{w.collectionAddress.slice(0,10)}… ↗</a>
+                        : <span className="text-red-500">non déployée</span>}
+                    </p>
+                    <p className="font-mono text-[10px] text-[--fg-muted]">
+                      onChainWorkId : {w.onChainWorkId != null
+                        ? <span className="text-green-600">#{w.onChainWorkId}</span>
+                        : <span className="text-orange-500">non publié</span>}
+                    </p>
+                    <p className="font-mono text-[10px] text-[--fg-muted]">
+                      editionSupply : {w.editionSupply ?? <span className="text-red-500">non défini</span>}
+                    </p>
+                    <p className="font-mono text-[10px] text-[--fg-muted]">
+                      editionPrice : {w.editionPrice ? `${w.editionPrice} ETH` : <span className="text-red-500">non défini</span>}
+                    </p>
+                  </div>
+                  {w.txHash && (
+                    <a href={basescanTx(w.txHash)} target="_blank" rel="noopener noreferrer"
+                      className="font-mono text-[10px] text-green-600 underline block">
+                      WorkRegistry tx : {w.txHash.slice(0,18)}… ↗
+                    </a>
+                  )}
+                  {!w.validationNote && (
+                    <p className="font-mono text-[10px] text-[--fg-muted]">
+                      Aucune erreur enregistrée — déclencher le lifecycle pour voir l'erreur exacte.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           ))}
