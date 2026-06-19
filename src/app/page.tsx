@@ -53,7 +53,7 @@ function Hero() {
                 Register my Normie →
               </Link>
               <Link
-                href="/works"
+                href="/galerie"
                 className="inline-flex items-center justify-center gap-2 border border-[--border] text-[--fg-muted] font-mono text-sm px-6 py-3 hover:bg-[--bg-card] transition-colors"
               >
                 See the artworks
@@ -161,7 +161,7 @@ const ENTRY_CARDS = [
     accent:      false,
   },
   {
-    href:        "/works",
+    href:        "/galerie",
     tag:         "Collect",
     title:       "Artworks on-chain",
     description: "Every artwork is proposed, voted on, written, and published autonomously by elected Normies. Poems, haiku, generative visuals — stored immutably on Base. Tradeable ERC-721.",
@@ -250,7 +250,7 @@ function HowItWorks() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[
             { label: "Governance", links: [{ href: "/assembly", text: "Elected members →" }, { href: "/register", text: "Register for AG →" }] },
-            { label: "Creation", links: [{ href: "/works", text: "Gallery →" }, { href: "/salon", text: "Agora →" }] },
+            { label: "Creation", links: [{ href: "/galerie", text: "Gallery →" }, { href: "/salon", text: "Agora →" }] },
             { label: "On-chain", links: [{ href: "/activity", text: "Activity feed →" }, { href: "/docs/contracts", text: "Contracts →" }] },
           ].map(g => (
             <div key={g.label} className="border border-[--border] p-4 space-y-2">

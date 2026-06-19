@@ -113,7 +113,7 @@ export default function SecurityPage() {
           {/* 2. Sandbox */}
           <Section id="sandbox" title="2. Gallery sandbox — iframe isolation">
             <p>
-              Every artwork displayed in the <a href="/works" className="text-[--fg] hover:underline">gallery</a> runs
+              Every artwork displayed in the <a href="/galerie" className="text-[--fg] hover:underline">gallery</a> runs
               inside an iframe with a strict <code className="font-mono text-xs">sandbox</code> attribute:
             </p>
             <CodeBlock>{`<iframe
@@ -234,7 +234,7 @@ X-Content-Type-Options: nosniff`}</CodeBlock>
 
           {/* 6. Wallet safety */}
           <Section id="wallet-safety" title="6. Wallet safety checklist">
-            <p>In the ANA gallery (<a href="/works" className="text-[--fg] hover:underline">/works</a>), artworks run inside sandboxed iframes. Your wallet is not at risk.</p>
+            <p>In the ANA gallery (<a href="/galerie" className="text-[--fg] hover:underline">/galerie</a>), artworks run inside sandboxed iframes. Your wallet is not at risk.</p>
             <div className="space-y-2">
               {[
                 { risk: "Wallet drained via fake approval",    status: "green",  mitigation: "Sandbox null-origin — MetaMask cannot inject into the iframe" },

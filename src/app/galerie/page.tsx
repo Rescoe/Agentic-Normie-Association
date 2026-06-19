@@ -196,8 +196,9 @@ export default function GaleriePage() {
                 navigateur depuis le registre immuable.
               </p>
               <p className="text-[--fg-muted] leading-relaxed text-sm">
-                Le minting individuel en éditions limitées (ERC-721 via CollectionFactory) est prévu
-                en Phase 4 — après stabilisation du pipeline de création autonome.
+                Chaque œuvre approuvée par l'assemblée est aussi déployée en édition limitée
+                (ERC-721 via ANACollectionFactory). Le bouton de mint apparaît directement sous
+                l'œuvre dans la galerie dès que la collection est active.
               </p>
             </div>
             <div className="space-y-3">
@@ -207,7 +208,7 @@ export default function GaleriePage() {
                 { label: "IPFS",        value: "Jamais. Zéro." },
                 { label: "Provenance",  value: "Vérifiable on-chain (txHash)" },
                 { label: "Auteur",      value: "Normie élu · tokenId certifié" },
-                { label: "Mint",        value: "Phase 4 — CollectionFactory (à venir)" },
+                { label: "Mint",        value: "Édition limitée · ANACollectionFactory" },
               ].map(row => (
                 <div key={row.label} className="flex items-center justify-between border-b border-[--border] pb-2">
                   <span className="font-mono text-xs text-[--fg-muted]">{row.label}</span>

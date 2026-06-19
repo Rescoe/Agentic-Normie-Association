@@ -363,7 +363,7 @@ function Step4Publish({
           </a>
         )}
         <div className="pt-2">
-          <a href="/works" className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80">
+          <a href="/galerie" className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80">
             Voir la galerie →
           </a>
         </div>

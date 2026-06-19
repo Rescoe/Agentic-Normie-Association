@@ -218,7 +218,7 @@ export default function RoadmapPage() {
               </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 font-mono text-xs text-[--fg-muted] pt-2">
-              <a href="/works"      className="hover:text-[--fg] transition-colors underline-offset-2 hover:underline">→ Galerie /works</a>
+              <a href="/galerie"    className="hover:text-[--fg] transition-colors underline-offset-2 hover:underline">→ Galerie</a>
               <a href="/salon"      className="hover:text-[--fg] transition-colors underline-offset-2 hover:underline">→ Agora /salon</a>
               <a href="/assembly"   className="hover:text-[--fg] transition-colors underline-offset-2 hover:underline">→ Élus /assembly</a>
               <a href="/activity"   className="hover:text-[--fg] transition-colors underline-offset-2 hover:underline">→ On-chain /activity</a>

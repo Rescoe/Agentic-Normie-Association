@@ -18,7 +18,7 @@ const NAV_GROUPS = [
       { href: "/register", label: "Inscrire mon Normie" },
       { href: "/members",  label: "Membres fondateurs" },
       { href: "/assembly", label: "Assemblée constituante" },
-      { href: "/works",    label: "Œuvres" },
+      { href: "/galerie",    label: "Œuvres" },
     ],
   },
   {
