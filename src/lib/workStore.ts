@@ -319,19 +319,15 @@ function isHtmlArtwork(text: string): boolean {
   return t.startsWith("<!DOCTYPE") || t.startsWith("<html") || t.startsWith("<!doctype");
 }
 
-// Fetch a Normie's image and embed as a data URI — snapshot at creation time.
-// Falls back to the external URL if fetch fails.
-async function fetchNormieImageUri(tokenId: number): Promise<string> {
-  const url = `https://api.normies.art/normie/${tokenId}/image.png`;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-    if (!res.ok) return url;
-    const buf = await res.arrayBuffer();
-    const b64 = Buffer.from(buf).toString("base64");
-    return `data:image/png;base64,${b64}`;
-  } catch {
-    return url;
-  }
+// Returns the external image URL — NOT embedded as base64.
+// Each Normie PNG is 18-24KB; embedding 3 of them (rapporteur+author+curator)
+// inflates the certificate past ~110KB base64, which makes eth_estimateGas
+// fail outright on Base's public RPC (reproduced and confirmed via
+// scripts/debug-publish2.mjs — same error, same calldata signature as the
+// stuck "Echoes"/"Power at the Margins" publishes). The certificate must stay
+// small enough for a single transaction; team portraits are not worth that cost.
+function fetchNormieImageUri(tokenId: number): string {
+  return `https://api.normies.art/normie/${tokenId}/image.png`;
 }
 
 /**
@@ -346,12 +342,9 @@ async function fetchNormieImageUri(tokenId: number): Promise<string> {
  * Normie images are embedded as data URIs — snapshot of their appearance at creation time.
  */
 export async function buildWorkHtml(work: ANAWork): Promise<string> {
-  // Fetch Normie images in parallel for the creation team cards
-  const [rapporteurImg, authorImg, curatorImg] = await Promise.all([
-    work.rapporteurTokenId ? fetchNormieImageUri(work.rapporteurTokenId) : Promise.resolve(""),
-    work.authorTokenId     ? fetchNormieImageUri(work.authorTokenId)     : Promise.resolve(""),
-    work.curatorTokenId    ? fetchNormieImageUri(work.curatorTokenId)    : Promise.resolve(""),
-  ]);
+  const rapporteurImg = work.rapporteurTokenId ? fetchNormieImageUri(work.rapporteurTokenId) : "";
+  const authorImg     = work.authorTokenId     ? fetchNormieImageUri(work.authorTokenId)     : "";
+  const curatorImg    = work.curatorTokenId    ? fetchNormieImageUri(work.curatorTokenId)    : "";
 
   const yes   = work.yesCount    ?? 0;
   const no    = work.noCount     ?? 0;
