@@ -28,6 +28,7 @@ import {
   ASSOCIATION_CORE_ABI,
   CONSTITUENT_ASSEMBLY_ABI,
   WORK_REGISTRY_ABI,
+  ANA_COLLECTION_FACTORY_ABI,
   CONTRACT_ADDRESSES,
   ROLES,
   ROLE_LABELS,
@@ -35,9 +36,10 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore     as `0x${string}`;
-const CA_ADDR   = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
-const WR_ADDR   = CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}`;
+const CORE_ADDR    = CONTRACT_ADDRESSES.AssociationCore       as `0x${string}`;
+const CA_ADDR      = CONTRACT_ADDRESSES.ConstituentAssembly   as `0x${string}`;
+const WR_ADDR      = CONTRACT_ADDRESSES.WorkRegistry          as `0x${string}`;
+const FACTORY_ADDR = CONTRACT_ADDRESSES.ANACollectionFactory  as `0x${string}`;
 const contractsDeployed = !!CONTRACT_ADDRESSES.AssociationCore;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -730,6 +732,158 @@ function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── CollectionFactorySection ────────────────────────────────────────────────
+
+function CollectionFactorySection({
+  isOwner,
+  writeContractAsync,
+}: {
+  isOwner: boolean;
+  writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
+}) {
+  const [authorizeAddr, setAuthorizeAddr] = useState("");
+  const [authState, setAuthState]         = useState<"idle"|"pending"|"done"|"error">("idle");
+  const [authErr,   setAuthErr]           = useState<string | null>(null);
+  const [authTx,    setAuthTx]            = useState<string | null>(null);
+
+  const { data: factoryOwner } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "owner",
+    query: { enabled: !!FACTORY_ADDR },
+  });
+  const { data: assocAddr } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "associationAddr",
+    query: { enabled: !!FACTORY_ADDR },
+  });
+  const { data: platformAddr } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "platformAddr",
+    query: { enabled: !!FACTORY_ADDR },
+  });
+  const { data: defaultAuthorPct } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "defaultAuthorPct",
+    query: { enabled: !!FACTORY_ADDR },
+  });
+  const { data: defaultCuratorPct } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "defaultCuratorPct",
+    query: { enabled: !!FACTORY_ADDR },
+  });
+  const { data: defaultRapporteurPct } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "defaultRapporteurPct",
+    query: { enabled: !!FACTORY_ADDR },
+  });
+  const { data: allCollections } = useReadContract({
+    address: FACTORY_ADDR, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "getAllCollections",
+    query: { enabled: !!FACTORY_ADDR, refetchInterval: 10_000 },
+  });
+
+  const relayerFromEnv = process.env.NEXT_PUBLIC_RELAYER_ADDRESS ?? "";
+
+  const authorizeRelayer = async () => {
+    const addr = authorizeAddr.trim() || relayerFromEnv;
+    if (!isAddress(addr)) { setAuthErr("Adresse invalide"); return; }
+    setAuthState("pending"); setAuthErr(null); setAuthTx(null);
+    try {
+      const hash = await writeContractAsync({
+        address:      FACTORY_ADDR,
+        abi:          ANA_COLLECTION_FACTORY_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
+        functionName: "setAuthorized" as never,
+        args:         [addr as `0x${string}`, true] as never,
+      });
+      setAuthTx(hash);
+      setAuthState("done");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAuthErr(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150));
+      setAuthState("error");
+    }
+  };
+
+  const collections = (allCollections as `0x${string}`[] | undefined) ?? [];
+
+  return (
+    <section className="space-y-4 border-t border-[--border] pt-10">
+      <div>
+        <h2 className="text-xl font-bold">ANACollectionFactory</h2>
+        <p className="font-mono text-xs text-[--fg-muted] mt-1">
+          Factory ERC-721 pour les éditions d'œuvres. Le relayer doit être dans{" "}
+          <code>authorized</code> pour appeler <code>createCollection()</code>.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="border border-[--border] p-5 space-y-0">
+          <div className="flex items-center justify-between mb-3">
+            <p className="font-bold text-sm">ANACollectionFactory</p>
+            <a href={basescanAddr(FACTORY_ADDR)} target="_blank" rel="noopener noreferrer"
+              className="font-mono text-xs text-[--fg-muted] hover:underline">Basescan ↗</a>
+          </div>
+          <StatusRow label="Adresse"        value={`${FACTORY_ADDR.slice(0,10)}…${FACTORY_ADDR.slice(-6)}`} />
+          <StatusRow label="Owner"          value={factoryOwner ? `${(factoryOwner as string).slice(0,10)}…` : "—"} />
+          <StatusRow label="AssociationAddr" value={assocAddr   ? `${(assocAddr   as string).slice(0,10)}…` : "—"} />
+          <StatusRow label="PlatformAddr"   value={platformAddr ? `${(platformAddr as string).slice(0,10)}…` : "—"} />
+          <StatusRow
+            label="Répartition défaut"
+            value={
+              defaultAuthorPct != null
+                ? `Auteur ${String(defaultAuthorPct)}% · Curateur ${String(defaultCuratorPct)}% · Rapporteur ${String(defaultRapporteurPct)}%`
+                : "—"
+            }
+          />
+          <StatusRow label="Collections créées" value={String(collections.length)} ok={collections.length > 0} />
+        </div>
+
+        <div className="border border-[--border] p-5 space-y-3">
+          <p className="font-bold text-sm">Autoriser le relayer</p>
+          <p className="font-mono text-xs text-[--fg-muted] leading-relaxed">
+            Donne le droit à une adresse d'appeler <code>createCollection()</code>.
+            Le relayer est autorisé à la création — nécessaire seulement si l'adresse a changé.
+          </p>
+          <div className="flex gap-2">
+            <input
+              value={authorizeAddr}
+              onChange={e => setAuthorizeAddr(e.target.value)}
+              placeholder={relayerFromEnv || "0x… adresse du relayer"}
+              className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-[--fg]"
+            />
+            <button
+              onClick={authorizeRelayer}
+              disabled={!isOwner || authState === "pending"}
+              className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              {authState === "pending" ? "En cours…" : authState === "done" ? "✓ Autorisé" : "Autoriser →"}
+            </button>
+          </div>
+          {authErr && <p className="font-mono text-xs text-red-600">{authErr}</p>}
+          {authTx && (
+            <a href={basescanTx(authTx)} target="_blank" rel="noopener noreferrer"
+              className="font-mono text-xs text-[--fg-muted] underline">
+              tx: {authTx.slice(0, 16)}… ↗
+            </a>
+          )}
+        </div>
+      </div>
+
+      {collections.length > 0 && (
+        <details className="border border-[--border]">
+          <summary className="bg-[--bg-card] px-4 py-3 cursor-pointer font-mono text-xs text-[--fg-muted] hover:bg-[--bg]">
+            {collections.length} collection(s) déployée(s) →
+          </summary>
+          <div className="divide-y divide-[--border] max-h-64 overflow-y-auto">
+            {collections.map((addr, i) => (
+              <div key={addr} className="px-4 py-2.5 flex items-center justify-between">
+                <span className="font-mono text-xs text-[--fg-muted]">#{i + 1}</span>
+                <a href={basescanAddr(addr)} target="_blank" rel="noopener noreferrer"
+                  className="font-mono text-xs hover:underline break-all">
+                  {addr} ↗
+                </a>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </section>
   );
 }
 
@@ -1818,6 +1972,11 @@ export default function AdminPage() {
             </div>
             <AutoVoteSection sessionActive={session?.active ?? false} />
           </section>
+
+          {/* ── ANACollectionFactory ── */}
+          {FACTORY_ADDR && (
+            <CollectionFactorySection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
+          )}
 
           {/* ── Work lifecycle + status ── */}
           <section className="space-y-4 border-t border-[--border] pt-10">

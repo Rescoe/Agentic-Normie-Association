@@ -698,7 +698,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   }
 
   const authorName      = work.authorName ?? `Normie #${work.authorTokenId}`;
-  const editionCount    = work.editionSupply ?? 1;
+  const editionCount    = (work.editionSupply && work.editionSupply > 0) ? work.editionSupply : 1;
   const editionPriceEth = work.editionPrice ? parseFloat(work.editionPrice) : 0;
   const editionPriceWei = BigInt(Math.round(editionPriceEth * 1e18));
 
@@ -750,6 +750,15 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
       return `publishWork failed: ${errMsg.slice(0, 200)}`;
     }
 
+    // Guard: if event parsing failed and workId is undefined, treat as failure so we
+    // don't silently skip collection initialization on the next cycle.
+    if (result.onChainWorkId == null) {
+      const errMsg = "publishWork tx succeeded but WorkPublished event not decoded — will retry";
+      console.error(`[work-lifecycle] ${errMsg} (tx: ${result.txHash})`);
+      await updateWork(work.id, { validationNote: errMsg });
+      return errMsg;
+    }
+
     // Save progress without advancing state — init must succeed first.
     onChainWorkId = result.onChainWorkId;
     await updateWork(work.id, {
@@ -790,6 +799,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
       if (!initResult.success) {
         const errMsg = initResult.error ?? "initializeCollection failed (unknown)";
         console.warn(`[work-lifecycle] init failed, will retry next cycle: ${errMsg}`);
+        await updateWork(work.id, { validationNote: `initCollection: ${errMsg.slice(0, 280)}` });
         return `initializeCollection failed: ${errMsg.slice(0, 200)}`;
       }
       console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
