@@ -320,28 +320,64 @@ function isHtmlArtwork(text: string): boolean {
   return t.startsWith("<!DOCTYPE") || t.startsWith("<html") || t.startsWith("<!doctype");
 }
 
-// Fetch a Normie's image and embed as a data URI — permanent on-chain snapshot
-// of their appearance at creation time (Normies can change via Canvas later).
-//
-// KNOWN COST: each PNG is ~18-24KB; embedding 3 (rapporteur+author+curator)
-// pushes the certificate to ~110KB base64, which made eth_estimateGas fail
-// outright on Base's public RPC when the relayer's balance was too low to
-// cover the worst-case gas reservation for a tx this size. Reproduced and
-// confirmed at the time via a local simulateContract/estimateContractGas
-// script. Re-enabled deliberately now that the relayer balance has been
-// topped up — if eth_estimateGas/eth_sendRawTransaction starts failing again
-// on publish, suspect this first and fall back to returning `url` directly.
-async function fetchNormieImageUri(tokenId: number): Promise<string> {
-  const url = `https://api.normies.art/normie/${tokenId}/image.png`;
+// Fetch a Normie's 40×40 face bitmap (GET /normie/{id}/pixels — a 1600-char
+// "0101..." string) and pack it into 200 bytes, MSB-first, matching the same
+// SSTORE2 format normies.art itself uses on-chain. Base64 of 200 bytes is
+// ~268 chars — three portraits cost ~800 bytes total in the certificate,
+// versus ~80-100KB for three full PNGs (which made eth_estimateGas fail
+// outright on Base's public RPC — confirmed via local simulation; see
+// commit history). The certificate's inline script (added once, shared by
+// all three portraits) decodes this back into a tiny on-chain-rendered
+// <canvas> face — same data, ~140x smaller than the rendered PNG.
+async function fetchNormiePixelsB64(tokenId: number): Promise<string | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-    if (!res.ok) return url;
-    const buf = await res.arrayBuffer();
-    const b64 = Buffer.from(buf).toString("base64");
-    return `data:image/png;base64,${b64}`;
+    const res = await fetch(`https://api.normies.art/normie/${tokenId}/pixels`, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return null;
+    const bits = (await res.text()).replace(/[^01]/g, ""); // strip quotes/whitespace if API wraps it
+    if (bits.length !== 1600) return null;
+
+    const bytes = Buffer.alloc(200);
+    for (let i = 0; i < 200; i++) {
+      let byte = 0;
+      for (let j = 0; j < 8; j++) byte = (byte << 1) | (bits[i * 8 + j] === "1" ? 1 : 0);
+      bytes[i] = byte;
+    }
+    return bytes.toString("base64");
   } catch {
-    return url;
+    return null;
   }
+}
+
+// Shared decoder, written once per certificate regardless of how many
+// portraits it renders. Unpacks the 200-byte MSB-first bitmap back into a
+// 40×40 monochrome <canvas>, scaled up via image-rendering:pixelated CSS.
+const PORTRAIT_DECODER_SCRIPT = `
+(function(){
+  function draw(c){
+    var b64=c.dataset.bitmap; if(!b64) return;
+    var bin=atob(b64), ctx=c.getContext('2d'), img=ctx.createImageData(40,40), idx=0;
+    for(var i=0;i<bin.length;i++){
+      var byte=bin.charCodeAt(i);
+      for(var j=7;j>=0;j--){
+        var v=((byte>>j)&1)?20:240;
+        img.data[idx*4]=v; img.data[idx*4+1]=v; img.data[idx*4+2]=v; img.data[idx*4+3]=255;
+        idx++;
+      }
+    }
+    ctx.putImageData(img,0,0);
+  }
+  document.querySelectorAll('.normie-portrait').forEach(draw);
+})();
+`.trim();
+
+function portraitCanvas(bitmapB64: string | null, fallbackTokenId?: number): string {
+  if (bitmapB64) {
+    return `<canvas class="normie-portrait" data-bitmap="${bitmapB64}" width="40" height="40" style="width:64px;height:64px;image-rendering:pixelated;display:block"></canvas>`;
+  }
+  // Pixel fetch failed — fall back to the external URL so the card isn't empty.
+  return fallbackTokenId
+    ? `<img src="https://api.normies.art/normie/${fallbackTokenId}/image.png" style="width:64px;height:64px;image-rendering:pixelated;display:block">`
+    : "";
 }
 
 /**
@@ -356,11 +392,14 @@ async function fetchNormieImageUri(tokenId: number): Promise<string> {
  * Normie images are embedded as data URIs — snapshot of their appearance at creation time.
  */
 export async function buildWorkHtml(work: ANAWork): Promise<string> {
-  const [rapporteurImg, authorImg, curatorImg] = await Promise.all([
-    work.rapporteurTokenId ? fetchNormieImageUri(work.rapporteurTokenId) : Promise.resolve(""),
-    work.authorTokenId     ? fetchNormieImageUri(work.authorTokenId)     : Promise.resolve(""),
-    work.curatorTokenId    ? fetchNormieImageUri(work.curatorTokenId)    : Promise.resolve(""),
+  const [rapporteurBitmap, authorBitmap, curatorBitmap] = await Promise.all([
+    work.rapporteurTokenId ? fetchNormiePixelsB64(work.rapporteurTokenId) : Promise.resolve(null),
+    work.authorTokenId     ? fetchNormiePixelsB64(work.authorTokenId)     : Promise.resolve(null),
+    work.curatorTokenId    ? fetchNormiePixelsB64(work.curatorTokenId)    : Promise.resolve(null),
   ]);
+  const rapporteurImg = portraitCanvas(rapporteurBitmap, work.rapporteurTokenId);
+  const authorImg     = portraitCanvas(authorBitmap,     work.authorTokenId);
+  const curatorImg    = portraitCanvas(curatorBitmap,    work.curatorTokenId);
 
   const yes   = work.yesCount    ?? 0;
   const no    = work.noCount     ?? 0;
@@ -485,9 +524,9 @@ footer{border-top:1px solid var(--b);padding-top:1rem;margin-top:2rem}
 <section>
 <p class="lbl">Creation Team — snapshot at publication</p>
 <div class="credits">
-<div class="card">${rapporteurImg ? `<img src="${rapporteurImg}" alt="#${work.rapporteurTokenId}" loading="lazy">` : ""}<div class="role">Rapporteur</div><div class="name">${escapeHtml(work.rapporteurName ?? "—")}</div><div class="cid">#${work.rapporteurTokenId ?? "?"}</div></div>
-<div class="card">${authorImg     ? `<img src="${authorImg}"     alt="#${work.authorTokenId}"     loading="lazy">` : ""}<div class="role">Author</div><div class="name">${escapeHtml(work.authorName ?? "—")}</div><div class="cid">#${work.authorTokenId ?? "?"}</div></div>
-<div class="card">${curatorImg    ? `<img src="${curatorImg}"    alt="#${work.curatorTokenId}"    loading="lazy">` : ""}<div class="role">Curator</div><div class="name">${escapeHtml(work.curatorName ?? "—")}</div><div class="cid">#${work.curatorTokenId ?? "?"}</div></div>
+<div class="card">${rapporteurImg}<div class="role">Rapporteur</div><div class="name">${escapeHtml(work.rapporteurName ?? "—")}</div><div class="cid">#${work.rapporteurTokenId ?? "?"}</div></div>
+<div class="card">${authorImg}<div class="role">Author</div><div class="name">${escapeHtml(work.authorName ?? "—")}</div><div class="cid">#${work.authorTokenId ?? "?"}</div></div>
+<div class="card">${curatorImg}<div class="role">Curator</div><div class="name">${escapeHtml(work.curatorName ?? "—")}</div><div class="cid">#${work.curatorTokenId ?? "?"}</div></div>
 </div>
 </section>
 
@@ -528,6 +567,7 @@ ${work.txHash ? `<p class="tx">Base · WorkRegistry · tx: ${work.txHash}</p>` :
     }
   }
 })();
+${PORTRAIT_DECODER_SCRIPT}
 </script>
 </body>
 </html>`;

@@ -1283,21 +1283,13 @@ export function WorksClient() {
       {/* ── Galerie on-chain ── */}
       {count > 0 && (
         <section className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
-                Galerie
-              </p>
-              <p className="font-mono text-xs text-[--fg-muted]">
-                {count} œuvre{count > 1 ? "s" : ""} publiée{count > 1 ? "s" : ""} on-chain
-              </p>
-            </div>
-            <Link
-              href="/publish"
-              className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80"
-            >
-              + Nouvelle œuvre
-            </Link>
+          <div>
+            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
+              Galerie
+            </p>
+            <p className="font-mono text-xs text-[--fg-muted]">
+              {count} œuvre{count > 1 ? "s" : ""} publiée{count > 1 ? "s" : ""} on-chain
+            </p>
           </div>
           <WorkList count={count} neonWorks={onChainPublishedWorks} getName={getName} />
         </section>
