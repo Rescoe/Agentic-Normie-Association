@@ -42,7 +42,16 @@ if (!USE_NEON) {
 
 let _sql: ReturnType<typeof neon> | null = null;
 function sql() {
-  if (!_sql) _sql = neon(connStr);
+  // The Neon serverless driver issues its queries via the global fetch().
+  // Next.js patches fetch() to cache responses by default (its Data Cache),
+  // which applies to ANY fetch call made during a request — including ones
+  // made deep inside a third-party driver, not just ones we write ourselves.
+  // Without this, a query's response gets cached and reused for subsequent
+  // requests even after the underlying row has changed — every kvGet() kept
+  // returning whatever was the case the first time that Lambda happened to
+  // query it, regardless of later writes. cache: "no-store" opts every query
+  // out of that cache, restoring normal read-your-writes behavior.
+  if (!_sql) _sql = neon(connStr, { fetchOptions: { cache: "no-store" } });
   return _sql;
 }
 

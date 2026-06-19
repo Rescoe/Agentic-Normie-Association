@@ -773,6 +773,31 @@ interface ParsedCert {
   publishedDate:     string;
   stateHistory:      { state: string; display: string }[];
   isHtmlArtwork:     boolean;
+  collectionAddress: string | null;
+  editionPrice:      string | null;
+  editionSupply:     number | null;
+}
+
+// Edition note paragraph looks like:
+// ◈ 5 ERC-721 editions · 0.01 ETH · <a href="https://basescan.org/address/0x...">0x...</a>
+function parseEditionInfo(doc: Document): {
+  collectionAddress: string | null;
+  editionPrice:      string | null;
+  editionSupply:     number | null;
+} {
+  const editionP = Array.from(doc.querySelectorAll("p.meta")).find(p => p.textContent?.includes("ERC-721 editions"));
+  if (!editionP) return { collectionAddress: null, editionPrice: null, editionSupply: null };
+
+  const text  = editionP.textContent ?? "";
+  const match = text.match(/(\d+)\s+ERC-721 editions\s*·\s*([\d.]+)\s*ETH/);
+  const href  = editionP.querySelector("a")?.getAttribute("href") ?? "";
+  const addrMatch = href.match(/0x[a-fA-F0-9]{40}/);
+
+  return {
+    editionSupply:     match ? parseInt(match[1]) : null,
+    editionPrice:       match ? match[2] : null,
+    collectionAddress: addrMatch ? addrMatch[0] : null,
+  };
 }
 
 function parseCertHtml(html: string): ParsedCert {
@@ -780,11 +805,12 @@ function parseCertHtml(html: string): ParsedCert {
 
   // No .lbl elements → raw generative HTML artwork, not a poem certificate
   const isHtmlArtwork = !doc.querySelector(".lbl");
+  const editionInfo = parseEditionInfo(doc);
   const emptyBase = {
     artworkText: "", brief: "", yes: 0, no: 0, abs: 0, votes: [],
     authorName: "", authorTokenId: null, curatorName: "", curatorTokenId: null,
     rapporteurName: "", rapporteurTokenId: null, txHash: "", publishedDate: "",
-    stateHistory: [],
+    stateHistory: [], ...editionInfo,
   };
   if (isHtmlArtwork) {
     return {
@@ -862,6 +888,7 @@ function parseCertHtml(html: string): ParsedCert {
     curatorName: curator.name, curatorTokenId: curator.tokenId,
     rapporteurName: rapporteur.name, rapporteurTokenId: rapporteur.tokenId,
     txHash, publishedDate, stateHistory, isHtmlArtwork: false,
+    ...editionInfo,
   };
 }
 
@@ -921,6 +948,29 @@ function OnChainWorkCard({ workId }: { workId: number }) {
             <p className="font-bold text-sm leading-tight">{cert.title || `Artwork #${workId}`}</p>
             <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">#{workId}</span>
           </div>
+
+          {cert.collectionAddress && cert.editionPrice && (
+            <div className="space-y-2 pt-1 border-t border-[--border]">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">
+                  Collection on-chain
+                </p>
+                <a
+                  href={`https://basescan.org/address/${cert.collectionAddress}`}
+                  target="_blank" rel="noopener noreferrer"
+                  className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+                >
+                  {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
+                </a>
+              </div>
+              <BuyEditionButton
+                collectionAddress={cert.collectionAddress as `0x${string}`}
+                editionPriceEth={cert.editionPrice}
+                totalEditions={cert.editionSupply ?? 1}
+              />
+            </div>
+          )}
+
           <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
             <p className="font-mono text-xs text-[--fg-muted]">on-chain · Base</p>
             <a href={certUrl} target="_blank" rel="noopener noreferrer"
@@ -997,6 +1047,29 @@ function OnChainWorkCard({ workId }: { workId: number }) {
             </div>
           ))}
         </div>
+
+        {/* Edition collection */}
+        {cert.collectionAddress && cert.editionPrice && (
+          <div className="space-y-2 pt-1 border-t border-[--border]">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">
+                Collection on-chain
+              </p>
+              <a
+                href={`https://basescan.org/address/${cert.collectionAddress}`}
+                target="_blank" rel="noopener noreferrer"
+                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
+              </a>
+            </div>
+            <BuyEditionButton
+              collectionAddress={cert.collectionAddress as `0x${string}`}
+              editionPriceEth={cert.editionPrice}
+              totalEditions={cert.editionSupply ?? 1}
+            />
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">

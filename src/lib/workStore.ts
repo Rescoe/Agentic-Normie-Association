@@ -201,8 +201,29 @@ async function getStore(): Promise<WorkStore> {
 
 async function mutate(fn: (s: WorkStore) => void): Promise<void> {
   const store = await getStore();
+  const beforeCount = Object.keys(store.works).length;
   fn(store);
+
   if (await useNeon()) {
+    // Read-modify-write on a single JSON blob is unsafe under concurrent
+    // writers: a Lambda holding a stale snapshot (e.g. from before a long
+    // gap between its own read and write) can overwrite newer work added by
+    // someone else in the meantime, silently destroying it. Re-read Neon
+    // immediately before saving and merge back in any work that exists
+    // there but not in our local copy — never let a write shrink the store.
+    const latest = await neonLoad();
+    if (latest?.works) {
+      for (const [id, w] of Object.entries(latest.works)) {
+        if (!(id in store.works)) {
+          console.warn(`[workStore] mutate() would have dropped "${w.title}" (${id}) — merged back in. This means two writers raced; investigate if it recurs.`);
+          store.works[id] = w;
+        }
+      }
+    }
+    const afterCount = Object.keys(store.works).length;
+    if (afterCount < beforeCount) {
+      console.error(`[workStore] mutate() write would shrink work count ${beforeCount} → ${afterCount} even after merge — saving anyway, but this is unexpected.`);
+    }
     await neonSave(store);
   } else {
     global.__anaWorkStore = store;
