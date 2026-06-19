@@ -960,7 +960,11 @@ function WorkStatusSection() {
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
-      else { void refresh(); }
+      else {
+        // Wait for Neon write to propagate past the 8s Lambda cache before refreshing
+        await new Promise(res => setTimeout(res, 3000));
+        void refresh();
+      }
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally { setRejectingId(null); }

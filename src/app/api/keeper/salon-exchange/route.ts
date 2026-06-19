@@ -265,8 +265,7 @@ async function runExchange(
     });
     generated.push(initMsg);
 
-    // 30 RPM = 2s min between requests. Call 1 takes ~1s → wait 2.5s so total gap ≥ 3.5s.
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise(r => setTimeout(r, 800));
 
     // ── Responder ──
     const responder = pickResponder(eligible, initiator.tokenId);
@@ -570,10 +569,6 @@ export async function POST(req: NextRequest) {
   const allOpenSalons = await listSalons();
 
   for (let i = 0; i < salonsToProcess.length; i++) {
-    // Space out salon iterations so the first call of salon N+1 doesn't fire too soon
-    // after the last call of salon N (Groq 30 RPM = 2s min between requests per model).
-    if (i > 0) await new Promise(r => setTimeout(r, 2500));
-
     const salon = salonsToProcess[i];
     const result = await runExchange(salon, allPersonas, force, !isCron);
     results.push({ salonId: salon.id, messages: result.messages.length, skipped: result.skipped, topic: result.topic });

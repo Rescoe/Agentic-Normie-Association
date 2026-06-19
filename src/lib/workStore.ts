@@ -114,7 +114,7 @@ export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
 
 const NEON_KEY    = "work-store";
 const DATA_FILE   = path.join(process.cwd(), "data", "works.json");
-const CACHE_TTL_MS = 60_000;
+const CACHE_TTL_MS = 8_000;
 
 // ─── Global cache ─────────────────────────────────────────────────────────────
 
