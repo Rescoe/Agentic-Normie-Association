@@ -286,9 +286,16 @@ export async function initializeCollection(
       functionName: "initialize",
       args:         [params.artworkContent, params.artworkTitle, BigInt(params.workId)],
       // Storing artwork content requires many SSTORE ops (20k gas per 32-byte slot).
-      // HTML/JS artworks can be 10-48KB → up to ~30M gas. Viem underestimates, so
-      // we set an explicit ceiling that covers artworks up to ~80KB.
-      gas:          50_000_000n,
+      // Base's public RPC (mainnet.base.org) enforces a hard ~16,777,216 (2^24) gas
+      // cap on both eth_estimateGas and eth_sendRawTransaction — confirmed by binary
+      // search (estimateContractGas succeeds up to exactly that value, fails just
+      // above it, regardless of relayer balance or the chain's real ~400M block
+      // limit). A 50M explicit gas request was silently rejected by this node as
+      // "Missing or invalid parameters" — this is what was stuck initializeCollection
+      // for every PUBLISHING work. 15M stays safely under the cap and covers content
+      // up to ~24KB (poems/manifestos are 1-2KB). Larger generative HTML/JS artworks
+      // will need a premium RPC (Alchemy/QuickNode) to lift this ceiling.
+      gas:          15_000_000n,
     });
 
     await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
