@@ -938,6 +938,7 @@ function WorkStatusSection() {
   const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
   const [lcError,  setLcError]  = useState<string | null>(null);
   const [lcRunning, setLcRunning] = useState(false);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -947,6 +948,23 @@ function WorkStatusSection() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const forceReject = async (workId: string) => {
+    if (!confirm("Forcer REJECTED sur cette œuvre ? Elle sera archivée et la pipeline sera libérée.")) return;
+    setRejectingId(workId);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        body: JSON.stringify({ forceReject: workId }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
+      else { void refresh(); }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setRejectingId(null); }
+  };
 
   const runLifecycle = async () => {
     setLcRunning(true); setLcResult(null); setLcError(null);
@@ -1077,6 +1095,13 @@ function WorkStatusSection() {
                       Aucune erreur enregistrée — déclencher le lifecycle pour voir l'erreur exacte.
                     </p>
                   )}
+                  <button
+                    onClick={() => void forceReject(w.id)}
+                    disabled={rejectingId === w.id}
+                    className="font-mono text-[10px] text-red-600 border border-red-300 px-2 py-1 hover:bg-red-50/20 disabled:opacity-40 mt-1"
+                  >
+                    {rejectingId === w.id ? "…" : "⛔ Forcer REJECTED — libérer la pipeline"}
+                  </button>
                 </div>
               )}
             </div>

@@ -1014,6 +1014,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Admin-only: force a stuck work to REJECTED so the pipeline can restart.
+  // Body: { forceReject: "<workId>" }
+  let body: { forceReject?: string } = {};
+  try { body = await req.json(); } catch { /* empty body ok */ }
+
+  if (body.forceReject) {
+    if (!isAdminCall) return NextResponse.json({ error: "forceReject requires x-admin-call header" }, { status: 403 });
+    const target = await getWork(body.forceReject);
+    if (!target) return NextResponse.json({ error: `Work ${body.forceReject} not found` }, { status: 404 });
+    await advanceState(target.id, "REJECTED", "Forced reject by admin — pipeline reset");
+    console.log(`[work-lifecycle] admin force-rejected work ${target.id} "${target.title}"`);
+    return NextResponse.json({ rejected: target.id, title: target.title });
+  }
+
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }

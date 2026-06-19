@@ -21,13 +21,7 @@ import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normi
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch } from "@/lib/groq";
 
-// Models with independent RPM/TPM quotas — spreading calls across them avoids 429s.
-// llama-3.3-70b-versatile : 30 rpm, 12K tpm  — synthesis (quality summaries)
-// llama-4-scout-17b       : 30 rpm, 30K tpm  — speech generation (high TPM = fewer TPM 429s)
-// qwen3-32b               : 60 rpm,  6K tpm  — proposals (double the RPM headroom)
-const MODEL          = "llama-3.3-70b-versatile";
-const MODEL_SPEECH   = "meta-llama/llama-4-scout-17b-16e-instruct";
-const MODEL_PROPOSAL = "qwen/qwen3-32b";
+const MODEL = "llama-3.3-70b-versatile";
 const CONTEXT_MESSAGES = 12;
 
 const ANA_TOPICS = [
@@ -148,7 +142,7 @@ async function generateSpeech(
     ].filter(Boolean).join("\n");
 
     const res = await groqFetch({
-      model: MODEL_SPEECH,
+      model: MODEL,
       messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
       max_tokens: 250, temperature: 0.92,
     });
@@ -382,7 +376,7 @@ async function maybeGenerateWorkProposal(
 
   try {
     const res = await groqFetch({
-      model: MODEL_PROPOSAL,
+      model: MODEL,
       messages: [
         {
           role:    "system",
