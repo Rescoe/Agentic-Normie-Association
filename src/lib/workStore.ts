@@ -84,6 +84,7 @@ export interface ANAWork {
   artworkAt?:      number;
   validationNote?: string;
   revisionCount?:  number;
+  pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — auto-rejects past MAX_PIPELINE_FAILS
 
   // On-chain
   txHash?:           string;

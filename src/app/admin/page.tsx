@@ -907,6 +907,7 @@ type ANAWorkFull = ANAWorkSummary & {
   collectionAddress?: string;
   publishedAt?: number;
   revisionCount?: number;
+  pipelineFailCount?: number;
   rapporteurName?: string;
   authorName?: string;
   curatorName?: string;
@@ -1065,6 +1066,11 @@ function WorkStatusSection() {
                   <p className="font-mono text-[10px] text-orange-600 uppercase tracking-wider font-bold">Publication on-chain — debug</p>
                   {w.validationNote && (
                     <p className="font-mono text-xs text-red-600">⚠ {w.validationNote}</p>
+                  )}
+                  {!!w.pipelineFailCount && (
+                    <p className="font-mono text-[10px] text-orange-500">
+                      Échecs consécutifs : {w.pipelineFailCount}/4 — auto-rejet au prochain échec si atteint
+                    </p>
                   )}
                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                     <p className="font-mono text-[10px] text-[--fg-muted]">

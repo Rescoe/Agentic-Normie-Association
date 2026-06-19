@@ -1200,8 +1200,15 @@ export function WorksClient() {
     return `#${tokenId}`;
   }, [nameMap]);
 
-  const publishedWorks = allWorks.filter(w => w.state === "PUBLISHED");
-  const activeWorks    = allWorks.filter(w => ACTIVE_STATES.includes(w.state));
+  // Joined to the on-chain gallery by onChainWorkId, NOT by state==="PUBLISHED".
+  // A work's certificate is live on WorkRegistry (and immutable) as soon as
+  // publishWork() succeeds — even if initializeCollection() then fails and the
+  // off-chain pipeline stays stuck in PUBLISHING. Gating on state here meant
+  // such works silently fell back to a bare on-chain-only card with no
+  // collection address and no mint button, even though buying could already
+  // be wired up (or about to be, once initialization succeeds/retries).
+  const onChainPublishedWorks = allWorks.filter(w => w.onChainWorkId != null);
+  const activeWorks           = allWorks.filter(w => ACTIVE_STATES.includes(w.state));
 
   if (!deployed) {
     return (
@@ -1292,7 +1299,7 @@ export function WorksClient() {
               + Nouvelle œuvre
             </Link>
           </div>
-          <WorkList count={count} neonWorks={publishedWorks} getName={getName} />
+          <WorkList count={count} neonWorks={onChainPublishedWorks} getName={getName} />
         </section>
       )}
 

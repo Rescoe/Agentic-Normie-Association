@@ -28,6 +28,10 @@ import { groqFetch } from "@/lib/groq";
 const MODEL        = "meta-llama/llama-4-scout-17b-16e-instruct";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
+// A work that fails the same pipeline step this many times in a row gets
+// auto-rejected instead of staying stuck in PUBLISHING/CREATING/etc. forever.
+const MAX_PIPELINE_FAILS = 4;
+
 // Fetch current ETH/USD price from CoinGecko (no API key needed).
 // Returns null on failure — callers degrade gracefully.
 async function fetchEthUsd(): Promise<number | null> {
@@ -111,8 +115,9 @@ async function groq(
 
 async function announceInSalon(
   work: ANAWork,
-  event: "vote_opened" | "vote_result" | "published" | "rejected",
+  event: "vote_opened" | "vote_result" | "published" | "rejected" | "pipeline_failed",
   personas: NormiePersona[],
+  extra?: { failedState?: string; error?: string },
 ): Promise<void> {
   try {
     const persona = personas.find(p => p.tokenId === work.proposedBy) ?? personas[0];
@@ -132,12 +137,19 @@ async function announceInSalon(
       content = `🔗 L'œuvre « ${work.title} » est publiée on-chain sur Base. Tx : ${work.txHash?.slice(0, 20)}…`;
     } else if (event === "rejected") {
       content = `L'œuvre « ${work.title} » a été rejetée par le curateur après révision. Archivée.`;
+    } else if (event === "pipeline_failed") {
+      content = `⚠️ « ${work.title} » a échoué de façon répétée à l'étape ${extra?.failedState ?? work.state} et a été automatiquement rejetée. Raison : ${(extra?.error ?? "erreur inconnue").slice(0, 200)}. À retravailler — une nouvelle proposition peut repartir sur d'autres bases en tenant compte de cet échec.`;
     }
 
     if (!content) return;
 
+    // Pipeline failures must surface in AGORA — the work's own salon may be
+    // about to close, and future proposers need this context visible where
+    // they actually discuss next works.
+    const salonId = event === "pipeline_failed" ? AGORA_SALON_ID : (work.salonId ?? AGORA_SALON_ID);
+
     await addMessage({
-      salonId:   work.salonId ?? AGORA_SALON_ID,
+      salonId,
       tokenId:   persona.tokenId,
       name:      persona.name,
       imageUrl:  persona.imageUrl,
@@ -1055,15 +1067,44 @@ export async function POST(req: NextRequest) {
 
   // Re-fetch active works in case founding work was just created
   const worksToProcess = foundingCreated ? await getActiveWorks() : activeWorks;
-  const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string }> = [];
+  const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string; autoRejected?: boolean }> = [];
 
   for (const work of worksToProcess) {
     const from   = work.state;
     const result = await advanceWork(work, personas);
     const advanced = result === true;
     const error    = typeof result === "string" ? result : undefined;
+
+    // VOTE_OPEN legitimately returns false while waiting on the 24h voting window
+    // (not everyone has voted yet) — that is normal, not a failure, never auto-reject it.
+    let autoRejected = false;
+    if (!advanced && from !== "VOTE_OPEN") {
+      // Any other non-advancing step counts — even steps that only return false
+      // on failure (no descriptive string) must not block the pipeline forever.
+      const reason    = error ?? `no progress at ${from} (step returned false — likely a transient LLM/data issue)`;
+      const failCount = (work.pipelineFailCount ?? 0) + 1;
+      if (failCount >= MAX_PIPELINE_FAILS) {
+        await advanceState(work.id, "REJECTED", `Auto-rejected after ${failCount} failures at ${from}: ${reason.slice(0, 200)}`);
+        await updateWork(work.id, { validationNote: reason.slice(0, 300), pipelineFailCount: failCount });
+        await announceInSalon(work, "pipeline_failed", personas, { failedState: from, error: reason });
+        if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+          await closeSalon(work.salonId, 0).catch(() => null);
+        }
+        autoRejected = true;
+        console.warn(`[work-lifecycle] "${work.title}" auto-rejected after ${failCount} consecutive failures at ${from}`);
+      } else {
+        await updateWork(work.id, { pipelineFailCount: failCount });
+      }
+    } else if (work.pipelineFailCount) {
+      // Progressed past the failing step — clear the counter for the next state.
+      await updateWork(work.id, { pipelineFailCount: 0 });
+    }
+
     const refreshed = await getWork(work.id);
-    results.push({ id: work.id, title: work.title, from, to: refreshed?.state ?? from, advanced, ...(error ? { error } : {}) });
+    results.push({
+      id: work.id, title: work.title, from, to: refreshed?.state ?? from, advanced,
+      ...(error ? { error } : {}), ...(autoRejected ? { autoRejected } : {}),
+    });
     await new Promise(r => setTimeout(r, 300));
   }
 
