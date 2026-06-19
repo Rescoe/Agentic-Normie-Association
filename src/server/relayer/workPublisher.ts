@@ -189,6 +189,40 @@ export async function publishWork(
   const walletClient = createWalletClient({ account, chain: TARGET_CHAIN, transport: http(RPC_URL) });
   const publicClient = createPublicClient({ chain: TARGET_CHAIN, transport: http(RPC_URL) });
 
+  // Pre-check: diagnose the exact revert cause before wasting a gas estimation round-trip.
+  // eth_estimateGas gives "Transaction creation failed" with no revert reason — these reads are cheaper and give a clear message.
+  const coreAddr = CONTRACT_ADDRESSES.AssociationCore as `0x${string}` | undefined;
+  if (coreAddr) {
+    try {
+      const [relayerOnChain, authorOk, curatorOk, rapporteurOk] = await Promise.all([
+        publicClient.readContract({ address: coreAddr, abi: ASSOCIATION_CORE_ABI, functionName: "relayerAddress" }) as Promise<`0x${string}`>,
+        publicClient.readContract({ address: coreAddr, abi: ASSOCIATION_CORE_ABI, functionName: "isMember", args: [BigInt(authorTokenId)] }) as Promise<boolean>,
+        publicClient.readContract({ address: coreAddr, abi: ASSOCIATION_CORE_ABI, functionName: "isMember", args: [BigInt(curatorTokenId)] }) as Promise<boolean>,
+        publicClient.readContract({ address: coreAddr, abi: ASSOCIATION_CORE_ABI, functionName: "isMember", args: [BigInt(rapporteurTokenId)] }) as Promise<boolean>,
+      ]);
+
+      if (relayerOnChain.toLowerCase() !== account.address.toLowerCase()) {
+        const err = `NotRapporteur: core.relayerAddress()=${relayerOnChain} ≠ current relayer=${account.address} — call core.setRelayer()`;
+        console.error(`[workPublisher] ${err}`);
+        return { success: false, error: err, requiresManualPublish: true };
+      }
+
+      const notMembers = [
+        !authorOk      && `author(#${authorTokenId})`,
+        !curatorOk     && `curator(#${curatorTokenId})`,
+        !rapporteurOk  && `rapporteur(#${rapporteurTokenId})`,
+      ].filter(Boolean) as string[];
+
+      if (notMembers.length > 0) {
+        const err = `ParticipantNotMember: ${notMembers.join(", ")} not registered in AssociationCore — they must call core.register()`;
+        console.error(`[workPublisher] ${err}`);
+        return { success: false, error: err, requiresManualPublish: true };
+      }
+    } catch (preCheckErr) {
+      console.warn(`[workPublisher] pre-check reads failed (non-fatal): ${preCheckErr instanceof Error ? preCheckErr.message : String(preCheckErr)}`);
+    }
+  }
+
   try {
     const hash = await walletClient.writeContract({
       address:      registryAddr,

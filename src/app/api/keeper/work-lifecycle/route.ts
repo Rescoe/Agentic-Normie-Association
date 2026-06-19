@@ -741,8 +741,9 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
 
     if (!result.success) {
       const errMsg = result.error ?? "publishWork failed (unknown)";
+      // Always persist the error so the admin debug panel shows it (not just when requiresManualPublish)
+      await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
       if (result.requiresManualPublish) {
-        await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
         console.warn(`[work-lifecycle] "${work.title}" requires manual publish: ${errMsg}`);
       } else {
         console.error(`[work-lifecycle] publish error for "${work.title}": ${errMsg}`);
