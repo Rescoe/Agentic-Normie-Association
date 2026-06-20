@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSalon, closeSalon, excludeMember } from "@/lib/salonStore";
+import { getWorkBySalonId } from "@/lib/workStore";
 
 export async function GET(
   _req: NextRequest,
@@ -8,7 +9,9 @@ export async function GET(
 ) {
   const salon = await getSalon(params.id);
   if (!salon) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
-  return NextResponse.json({ salon });
+  const work = await getWorkBySalonId(params.id);
+  const workOutcome = work ? (work.state === "PUBLISHED" ? "published" : work.state === "REJECTED" ? "rejected" : "active") : null;
+  return NextResponse.json({ salon: { ...salon, workOutcome } });
 }
 
 export async function PATCH(

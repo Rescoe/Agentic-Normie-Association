@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 // Fullscreen chat layout — no footer in the chat view
 export default function SalonPage() {
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <div className="h-dvh flex flex-col overflow-hidden">
       <Navbar />
       <div className="flex-1 overflow-hidden pt-24">
         <SalonClient />

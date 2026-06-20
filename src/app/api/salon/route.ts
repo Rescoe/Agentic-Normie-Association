@@ -4,6 +4,7 @@ import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listSalons, createSalon, getActiveSalonByCreator, getSynthesisInfo } from "@/lib/salonStore";
+import { getSalonWorkOutcomes } from "@/lib/workStore";
 
 const client = createPublicClient({
   chain:     base,
@@ -22,9 +23,10 @@ async function getMemberIds(): Promise<number[]> {
 }
 
 export async function GET() {
-  const [salons, synthInfo] = await Promise.all([listSalons(), getSynthesisInfo()]);
+  const [salons, synthInfo, outcomes] = await Promise.all([listSalons(), getSynthesisInfo(), getSalonWorkOutcomes()]);
+  const enriched = salons.map(s => ({ ...s, workOutcome: outcomes[s.id] ?? null }));
   return NextResponse.json({
-    salons,
+    salons: enriched,
     nextSynthesisAt:   synthInfo.nextSynthesisAt,
     nextSynthesisDate: new Date(synthInfo.nextSynthesisAt).toISOString(),
   });

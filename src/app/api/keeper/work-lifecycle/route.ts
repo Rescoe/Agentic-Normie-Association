@@ -312,6 +312,9 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
 
   if (!passed) {
     await advanceState(work.id, "REJECTED", "Majorité non atteinte");
+    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+      await closeSalon(work.salonId, 0).catch(() => null);
+    }
     return true;
   }
 
@@ -1038,6 +1041,9 @@ export async function POST(req: NextRequest) {
     const target = await getWork(body.forceReject);
     if (!target) return NextResponse.json({ error: `Work ${body.forceReject} not found` }, { status: 404 });
     await advanceState(target.id, "REJECTED", "Forced reject by admin — pipeline reset");
+    if (target.salonId && target.salonId !== AGORA_SALON_ID) {
+      await closeSalon(target.salonId, 0).catch(() => null);
+    }
     console.log(`[work-lifecycle] admin force-rejected work ${target.id} "${target.title}"`);
     return NextResponse.json({ rejected: target.id, title: target.title });
   }

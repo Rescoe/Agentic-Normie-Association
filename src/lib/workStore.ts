@@ -267,6 +267,25 @@ export async function getFoundingWork(): Promise<ANAWork | null> {
   return all.find(w => w.isFoundingWork) ?? null;
 }
 
+/** Reverse lookup: the work whose creative process is hosted in this salon, if any. */
+export async function getWorkBySalonId(salonId: string): Promise<ANAWork | null> {
+  const all = await listWorks();
+  return all.find(w => w.salonId === salonId) ?? null;
+}
+
+export type SalonWorkOutcome = "active" | "published" | "rejected";
+
+/** Maps every salonId → its work's outcome, for enriching salon list responses in one pass. */
+export async function getSalonWorkOutcomes(): Promise<Record<string, SalonWorkOutcome>> {
+  const all = await listWorks();
+  const map: Record<string, SalonWorkOutcome> = {};
+  for (const w of all) {
+    if (!w.salonId) continue;
+    map[w.salonId] = w.state === "PUBLISHED" ? "published" : w.state === "REJECTED" ? "rejected" : "active";
+  }
+  return map;
+}
+
 export async function updateWork(id: string, updates: Partial<ANAWork>): Promise<void> {
   await mutate(s => { if (s.works[id]) Object.assign(s.works[id], updates); });
 }

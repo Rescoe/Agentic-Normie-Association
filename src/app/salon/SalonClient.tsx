@@ -11,10 +11,37 @@ interface SalonMessage {
   topic?: string;
 }
 
+type SalonWorkOutcome = "active" | "published" | "rejected";
+
 interface Salon {
   id: string; name: string; description: string; createdBy: number;
   createdAt: number; members: number[]; excluded: number[];
   isOpen: boolean; messages: SalonMessage[]; currentTopic: string | null;
+  workOutcome?: SalonWorkOutcome | null;
+}
+
+const AGORA_SALON_ID = "salon_agora_ana";
+const ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days idle
+
+function lastActivityAt(salon: Salon): number {
+  return salon.messages[salon.messages.length - 1]?.timestamp ?? salon.createdAt;
+}
+
+// Agora can never be closed and is never auto-archived — it's pinned in "En cours".
+function isArchived(salon: Salon): boolean {
+  if (salon.id === AGORA_SALON_ID) return false;
+  if (!salon.isOpen) return true;
+  return Date.now() - lastActivityAt(salon) > ARCHIVE_AFTER_MS;
+}
+
+function OutcomeBadge({ outcome }: { outcome?: SalonWorkOutcome | null }) {
+  if (outcome === "published") {
+    return <span className="font-mono text-[9px] text-green-600 border border-green-500 px-0.5 shrink-0">Publiée</span>;
+  }
+  if (outcome === "rejected") {
+    return <span className="font-mono text-[9px] text-red-600 border border-red-500 px-0.5 shrink-0">Rejetée</span>;
+  }
+  return null;
 }
 
 interface AgentCardData {
@@ -518,7 +545,7 @@ function SalonChat({
   return (
     <div className="flex flex-col h-full">
       {/* Chat header */}
-      <div className="border-b border-[--border] px-4 py-2.5 flex items-center justify-between shrink-0">
+      <div className="sticky top-0 z-10 bg-[--bg] border-b border-[--border] px-4 py-2.5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           {/* Back (mobile) */}
           <button
@@ -529,13 +556,15 @@ function SalonChat({
           </button>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
+              {salon.id === AGORA_SALON_ID && <span className="text-yellow-500 shrink-0" title="Salon permanent">★</span>}
               <span className="font-mono text-sm font-bold truncate">{salon.name}</span>
               {!salon.isOpen && (
-                <span className="font-mono text-[10px] text-red-500 border border-red-400 px-1 shrink-0">fermé</span>
+                <span className="font-mono text-[10px] text-red-500 border border-red-400 px-1 shrink-0">Clôturé</span>
               )}
               {salon.members.length > 0 && (
                 <span className="font-mono text-[10px] text-yellow-600 border border-yellow-500 px-1 shrink-0">privé</span>
               )}
+              <OutcomeBadge outcome={salon.workOutcome} />
             </div>
             {salon.description && (
               <p className="font-mono text-[11px] text-[--fg-muted] truncate">{salon.description}</p>
@@ -652,6 +681,7 @@ function SalonSidebar({
   const [newDesc,       setNewDesc]       = useState("");
   const [creating,      setCreating]      = useState(false);
   const [createError,   setCreateError]   = useState<string | null>(null);
+  const [tab,           setTab]           = useState<"active" | "archived">("active");
 
   const createSalon = async () => {
     const id = parseInt(tokenId, 10);
@@ -734,49 +764,78 @@ function SalonSidebar({
         </div>
       )}
 
-      {/* Salon list */}
-      <div className="flex-1 overflow-y-auto">
-        {salons.length === 0 ? (
-          <p className="font-mono text-xs text-[--fg-muted] px-4 py-6 text-center">
-            Aucun salon pour l&apos;instant.
-          </p>
-        ) : (
-          salons.map(salon => {
-            const last   = salon.messages[salon.messages.length - 1];
-            const active = salon.id === selectedId;
-            return (
+      {/* Tabs */}
+      {(() => {
+        const activeSalons   = salons.filter(s => !isArchived(s)).sort((a, b) => lastActivityAt(b) - lastActivityAt(a));
+        const archivedSalons = salons.filter(isArchived).sort((a, b) => lastActivityAt(b) - lastActivityAt(a));
+        const visible = tab === "active" ? activeSalons : archivedSalons;
+
+        return (
+          <>
+            <div className="flex border-b border-[--border] shrink-0">
               <button
-                key={salon.id}
-                onClick={() => onSelect(salon)}
-                className={`w-full text-left px-4 py-3 border-b border-[--border] transition-colors group ${active ? "bg-[--bg-card]" : "hover:bg-[--bg-card]"}`}
+                onClick={() => setTab("active")}
+                className={`flex-1 font-mono text-[11px] py-2 transition-colors ${tab === "active" ? "border-b-2 border-[--fg] text-[--fg] font-bold" : "text-[--fg-muted] hover:text-[--fg]"}`}
               >
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  {active && <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />}
-                  <span className={`font-mono text-xs font-bold truncate ${active ? "text-[--fg]" : "text-[--fg] group-hover:underline"}`}>
-                    {salon.name}
-                  </span>
-                  {!salon.isOpen && (
-                    <span className="font-mono text-[9px] text-red-500 border border-red-400 px-0.5 shrink-0">fermé</span>
-                  )}
-                  {salon.members.length > 0 && (
-                    <span className="font-mono text-[9px] text-yellow-600 border border-yellow-500 px-0.5 shrink-0">privé</span>
-                  )}
-                </div>
-                {last ? (
-                  <p className="font-mono text-[10px] text-[--fg-muted] truncate">
-                    <span className="text-[--fg]">#{last.tokenId}</span> {last.content.slice(0, 40)}{last.content.length > 40 ? "…" : ""}
-                  </p>
-                ) : (
-                  <p className="font-mono text-[10px] text-[--fg-muted]">Aucun échange</p>
-                )}
-                <p className="font-mono text-[9px] text-[--fg-muted] mt-0.5">
-                  {salon.messages.length} msgs · {timeAgo(last?.timestamp ?? salon.createdAt)}
-                </p>
+                En cours ({activeSalons.length})
               </button>
-            );
-          })
-        )}
-      </div>
+              <button
+                onClick={() => setTab("archived")}
+                className={`flex-1 font-mono text-[11px] py-2 transition-colors ${tab === "archived" ? "border-b-2 border-[--fg] text-[--fg] font-bold" : "text-[--fg-muted] hover:text-[--fg]"}`}
+              >
+                Archivé ({archivedSalons.length})
+              </button>
+            </div>
+
+            {/* Salon list */}
+            <div className="flex-1 overflow-y-auto">
+              {visible.length === 0 ? (
+                <p className="font-mono text-xs text-[--fg-muted] px-4 py-6 text-center">
+                  {tab === "active" ? "Aucun salon en cours." : "Aucun salon archivé."}
+                </p>
+              ) : (
+                visible.map(salon => {
+                  const last     = salon.messages[salon.messages.length - 1];
+                  const active   = salon.id === selectedId;
+                  const isAgora  = salon.id === AGORA_SALON_ID;
+                  return (
+                    <button
+                      key={salon.id}
+                      onClick={() => onSelect(salon)}
+                      className={`w-full text-left px-4 py-3 border-b border-[--border] transition-colors group ${active ? "bg-[--bg-card]" : "hover:bg-[--bg-card]"}`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        {active && <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />}
+                        {isAgora && <span className="text-yellow-500 shrink-0" title="Salon permanent">★</span>}
+                        <span className={`font-mono text-xs font-bold truncate ${active ? "text-[--fg]" : "text-[--fg] group-hover:underline"}`}>
+                          {salon.name}
+                        </span>
+                        {!salon.isOpen && (
+                          <span className="font-mono text-[9px] text-red-500 border border-red-400 px-0.5 shrink-0">Clôturé</span>
+                        )}
+                        {salon.members.length > 0 && (
+                          <span className="font-mono text-[9px] text-yellow-600 border border-yellow-500 px-0.5 shrink-0">privé</span>
+                        )}
+                        <OutcomeBadge outcome={salon.workOutcome} />
+                      </div>
+                      {last ? (
+                        <p className="font-mono text-[10px] text-[--fg-muted] truncate">
+                          <span className="text-[--fg]">#{last.tokenId}</span> {last.content.slice(0, 40)}{last.content.length > 40 ? "…" : ""}
+                        </p>
+                      ) : (
+                        <p className="font-mono text-[10px] text-[--fg-muted]">Aucun échange</p>
+                      )}
+                      <p className="font-mono text-[9px] text-[--fg-muted] mt-0.5">
+                        {salon.messages.length} msgs · {timeAgo(last?.timestamp ?? salon.createdAt)}
+                      </p>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }
