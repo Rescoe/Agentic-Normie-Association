@@ -6,7 +6,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useDisconnect } from "wagmi";
-import { LanguageToggle } from "@/components/LanguageToggle";
 import { LiveEventsBanner } from "@/components/LiveEventsBanner";
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
@@ -338,7 +337,7 @@ function MobileMenu({ onClose }: { onClose: () => void }) {
           </Link>
         </div>
 
-        <div className="pt-4 flex items-center justify-between">
+        <div className="pt-4">
           <a
             href="https://normies.art"
             target="_blank" rel="noopener noreferrer"
@@ -346,7 +345,6 @@ function MobileMenu({ onClose }: { onClose: () => void }) {
           >
             normies.art ↗
           </a>
-          <LanguageToggle />
         </div>
       </nav>
     </div>
@@ -389,8 +387,6 @@ export function Navbar() {
             {NAV.map(item => <NavItem key={item.label} item={item} />)}
 
             <div className="w-px h-4 bg-[--border]" />
-
-            <LanguageToggle />
 
             <Link
               href="/register"
