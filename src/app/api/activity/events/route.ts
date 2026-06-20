@@ -9,12 +9,15 @@
  *      → 14 event types × parallel batches ≈ 5–15s instead of 5 min
  *
  * Contracts covered:
- *   AssociationCore      → MemberRegistered, RoleGranted
- *   ConstituentAssembly  → SessionOpened/Closed, VoteCast, RoleResolved, RolesResolved
- *   WorkRegistry         → WorkPublished, WorkSessionInitiated, WorkArchived
- *   GovernanceCalendar   → EventScheduled, EventTriggered
- *   FactoryRegistry      → FactoryRegistered
- *   CollectionFactory    → CollectionCreated
+ *   AssociationCore       → MemberRegistered, RoleGranted
+ *   ConstituentAssembly   → SessionOpened/Closed, VoteCast, RoleResolved, RolesResolved
+ *   WorkRegistry          → WorkPublished, WorkSessionInitiated, WorkArchived
+ *   GovernanceCalendar    → EventScheduled, EventTriggered
+ *   FactoryRegistry       → FactoryRegistered
+ *   CollectionFactory     → CollectionCreated (legacy factory — kept in case of old history)
+ *   ANACollectionFactory  → CollectionDeployed (the factory actually used by workPublisher.ts)
+ *   ANAEditions (dynamic) → CollectionInitialized, EditionMinted — one contract per work,
+ *                           addresses discovered via ANACollectionFactory.getAllCollections()
  */
 
 export const dynamic = "force-dynamic"; // never pre-render at build time
@@ -26,7 +29,7 @@ import {
   type Log, type AbiEvent,
 } from "viem";
 import { base as baseChain } from "viem/chains";
-import { CONTRACT_ADDRESSES, ROLE_LABELS } from "@/lib/contracts";
+import { CONTRACT_ADDRESSES, ROLE_LABELS, ANA_COLLECTION_FACTORY_ABI } from "@/lib/contracts";
 import { listTxLog, type TxLogRow } from "@/lib/txLog";
 
 // ─── RPC client ───────────────────────────────────────────────────────────────
@@ -42,12 +45,17 @@ const rpc = createPublicClient({
 // ─── Contract addresses ───────────────────────────────────────────────────────
 
 const ADDR = {
-  CORE: CONTRACT_ADDRESSES.AssociationCore     as `0x${string}` | undefined,
-  CA:   CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined,
-  WR:   CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}` | undefined,
-  GC:   CONTRACT_ADDRESSES.GovernanceCalendar  as `0x${string}` | undefined,
-  FR:   CONTRACT_ADDRESSES.FactoryRegistry     as `0x${string}` | undefined,
-  CF:   CONTRACT_ADDRESSES.CollectionFactory   as `0x${string}` | undefined,
+  CORE:  CONTRACT_ADDRESSES.AssociationCore     as `0x${string}` | undefined,
+  CA:    CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined,
+  WR:    CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}` | undefined,
+  GC:    CONTRACT_ADDRESSES.GovernanceCalendar  as `0x${string}` | undefined,
+  FR:    CONTRACT_ADDRESSES.FactoryRegistry     as `0x${string}` | undefined,
+  CF:    CONTRACT_ADDRESSES.CollectionFactory   as `0x${string}` | undefined,
+  // ANACollectionFactory is the contract workPublisher.ts actually calls
+  // (CollectionFactory above is an older/legacy factory contract). They emit
+  // different events (CollectionDeployed vs CollectionCreated) — both are
+  // scanned since either could hold real history depending on deployment era.
+  ANACF: CONTRACT_ADDRESSES.ANACollectionFactory as `0x${string}` | undefined,
 };
 
 // ─── Event signatures ─────────────────────────────────────────────────────────
@@ -67,6 +75,13 @@ const EV = {
   GC_TRIGGERED:         parseAbiItem("event EventTriggered(uint256 indexed eventId, bytes32 indexed eventType, address indexed triggeredBy, uint256 timestamp)") as AbiEvent,
   FACTORY_REGISTERED:   parseAbiItem("event FactoryRegistered(bytes32 indexed factoryType, address indexed factory)")                      as AbiEvent,
   COLLECTION_CREATED:   parseAbiItem("event CollectionCreated(uint256 indexed normieTokenId, address indexed collection, string name, string symbol, address minter, uint256 timestamp)") as AbiEvent,
+  // ANACollectionFactory.createCollection() — the contract actually used in production —
+  // emits this, NOT CollectionCreated above (see contracts/factory/ANACollectionFactory.sol:43).
+  COLLECTION_DEPLOYED:  parseAbiItem("event CollectionDeployed(uint256 indexed normieTokenId, address indexed collectionAddr, string name, address minter)") as AbiEvent,
+  // Per-ANAEditions-instance events — these contracts are deployed dynamically (one per
+  // work), so there's no single fixed address to scan; see getAllCollections() fetch below.
+  COLLECTION_INITIALIZED: parseAbiItem("event CollectionInitialized(string artworkTitle, uint256 workId)") as AbiEvent,
+  EDITION_MINTED:          parseAbiItem("event EditionMinted(uint256 indexed tokenId, address indexed buyer, uint256 priceWei)") as AbiEvent,
 };
 
 // ─── GovernanceCalendar event type labels ─────────────────────────────────────
@@ -95,12 +110,12 @@ const BATCH_SIZE = 20;        // 14 types × 20 = 280 max concurrent — OK for 
 const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history
 
 async function fetchLogs(
-  address: `0x${string}`,
+  address: `0x${string}` | `0x${string}`[],
   event:   AbiEvent,
   from:    bigint,
   to:      bigint,
 ): Promise<Log[]> {
-  if (!address) return [];
+  if (!address || (Array.isArray(address) && address.length === 0)) return [];
 
   // Parallel chunk fetching — no optimistic single call (it hangs on range errors
   // for 10-30s on public RPCs, wasting our Vercel budget)
@@ -226,7 +241,7 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 
 // ─── Cache helpers (Neon KV) ──────────────────────────────────────────────────
 
-const CACHE_KEY    = "activity:events:v3";
+const CACHE_KEY    = "activity:events:v4"; // bumped — new event types (CollectionDeployed, CollectionInitialized, EditionMinted)
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 interface CachedPayload {
@@ -283,13 +298,28 @@ export async function GET() {
     console.log(`[activity/events] fetching blocks ${from}–${latest} (${latest - from} blocks)…`);
     const t0 = Date.now();
 
+    // ANAEditions collections are deployed dynamically (one per work) — there's no
+    // fixed address to scan, so we list them via the factory first, then pass the
+    // whole array to getLogs() in one shot for CollectionInitialized/EditionMinted.
+    let collectionAddrs: `0x${string}`[] = [];
+    if (ADDR.ANACF) {
+      try {
+        collectionAddrs = await rpc.readContract({
+          address: ADDR.ANACF, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "getAllCollections",
+        }) as `0x${string}`[];
+      } catch (e) {
+        console.warn(`[activity/events] getAllCollections failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     // Fetch ALL event types in parallel
     const [
       memberLogs, roleLogs,
       sessOpenLogs, sessCloseLogs, voteLogs, roleResLogs, rolesResLogs,
       workPubLogs, workSessLogs, workArcLogs,
       gcSchedLogs, gcTrigLogs,
-      factoryLogs, collectionLogs,
+      factoryLogs, collectionLogs, collectionDeployedLogs,
+      collectionInitLogs, editionMintedLogs,
     ] = await Promise.all([
       ADDR.CORE ? fetchLogs(ADDR.CORE, EV.MEMBER_REGISTERED,  from, latest) : [],
       ADDR.CORE ? fetchLogs(ADDR.CORE, EV.ROLE_GRANTED,       from, latest) : [],
@@ -304,7 +334,10 @@ export async function GET() {
       ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_SCHEDULED,       from, latest) : [],
       ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_TRIGGERED,       from, latest) : [],
       ADDR.FR   ? fetchLogs(ADDR.FR,   EV.FACTORY_REGISTERED, from, latest) : [],
-      ADDR.CF   ? fetchLogs(ADDR.CF,   EV.COLLECTION_CREATED, from, latest) : [],
+      ADDR.CF    ? fetchLogs(ADDR.CF,    EV.COLLECTION_CREATED,    from, latest) : [],
+      ADDR.ANACF ? fetchLogs(ADDR.ANACF, EV.COLLECTION_DEPLOYED,   from, latest) : [],
+      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.COLLECTION_INITIALIZED, from, latest) : [],
+      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.EDITION_MINTED,         from, latest) : [],
     ]);
 
     console.log(`[activity/events] fetch done in ${Date.now() - t0}ms`);
@@ -451,6 +484,39 @@ export async function GET() {
         extra: {
           name:   String(a.name   ?? ""),
           symbol: String(a.symbol ?? ""),
+        },
+      });
+    });
+
+    // ANACollectionFactory.createCollection() — the actual production path.
+    collectionDeployedLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "COLLECTION_CREATED", i),
+        tokenId: Number(a.normieTokenId ?? 0),
+        address: String(a.collectionAddr ?? ""),
+        extra:   { name: String(a.name ?? "") },
+      });
+    });
+
+    // Per-collection ANAEditions.initialize() — links artwork content to the collection.
+    collectionInitLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "COLLECTION_INITIALIZED", i),
+        address: String(log.address ?? ""),
+        workId:  Number(a.workId ?? 0),
+        extra:   { name: String(a.artworkTitle ?? ""), collectionAddress: String(log.address ?? "") },
+      });
+    });
+
+    // buyAndMint() on any deployed ANAEditions collection.
+    editionMintedLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "EDITION_MINTED", i),
+        address: String(a.buyer ?? ""),
+        extra: {
+          collectionAddress: String(log.address ?? ""),
+          tokenId:            Number(a.tokenId  ?? 0),
+          priceWei:           String(a.priceWei  ?? "0"),
         },
       });
     });

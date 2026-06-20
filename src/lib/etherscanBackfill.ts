@@ -10,9 +10,61 @@
  * to catch calls made *to* our contracts by any address, not just the relayer.
  */
 
-import { CONTRACT_ADDRESSES } from "./contracts";
+import { createPublicClient, http, decodeFunctionData, type Abi } from "viem";
+import { base } from "viem/chains";
+import * as abis from "./abis";
+import { CONTRACT_ADDRESSES, ANA_COLLECTION_FACTORY_ABI } from "./contracts";
 import { decodeSelector } from "./functionSelectors";
-import { logTxSubmitted, logTxConfirmed, logTxFailed, type TxInitiator } from "./txLog";
+import { logTxSubmitted, logTxConfirmed, logTxFailed, listIncompleteTxLog, updateTxLabel, type TxInitiator } from "./txLog";
+
+const rpc = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org") });
+
+/** Collections deployed dynamically via ANACollectionFactory have no fixed .env address —
+ *  list them on-chain so their initialize()/buyAndMint() calls get backfilled too. */
+async function getDeployedCollectionAddresses(): Promise<string[]> {
+  const factoryAddr = CONTRACT_ADDRESSES.ANACollectionFactory;
+  if (!factoryAddr) return [];
+  try {
+    const addrs = await rpc.readContract({
+      address: factoryAddr as `0x${string}`, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "getAllCollections",
+    }) as string[];
+    return addrs;
+  } catch {
+    return [];
+  }
+}
+
+/** Pulls a human-readable label + the most relevant tokenId out of a tx's full call data —
+ *  the selector dictionary alone only tells us *which* function was called, not its args. */
+function decodeArgsForLabel(
+  contractName: string,
+  input:        string,
+): { label?: string; relatedTokenId?: number } {
+  try {
+    const abi = (abis as Record<string, Abi>)[`${contractName}Abi`];
+    if (!abi) return {};
+    const { functionName, args } = decodeFunctionData({ abi, data: input as `0x${string}` });
+    if (!args) return {};
+    switch (functionName) {
+      case "createCollection": // (normieTokenId, name, symbol, minter, ...)
+        return { relatedTokenId: Number(args[0]), label: String(args[1]) };
+      case "initialize": // ANAEditions.initialize(artworkContent, artworkTitle, workId)
+        return { label: String(args[1]) };
+      case "publish": // WorkRegistry.publish(content, authorTokenId, curatorTokenId, rapporteurTokenId)
+        return { relatedTokenId: Number(args[1]) };
+      case "castVote": // ConstituentAssembly.castVote(voterTokenId, role, candidateTokenId)
+        return { relatedTokenId: Number(args[0]) };
+      case "register": { // AssociationCore.register(attestation, signature)
+        const attestation = args[0] as { tokenId?: bigint };
+        return attestation?.tokenId !== undefined ? { relatedTokenId: Number(attestation.tokenId) } : {};
+      }
+      default:
+        return {};
+    }
+  } catch {
+    return {}; // malformed/partial input data — non-fatal, just means no extra label
+  }
+}
 
 const ETHERSCAN_API  = "https://api.etherscan.io/v2/api";
 const BASE_CHAIN_ID  = 8453;
@@ -80,9 +132,12 @@ export async function backfillTxLog(sinceBlock = 0): Promise<BackfillResult> {
   const apiKey = process.env.BASESCAN_API_KEY;
   if (!apiKey) throw new Error("BASESCAN_API_KEY not configured");
 
+  const collectionAddrs = await getDeployedCollectionAddresses();
+
   const addresses = [
     RELAYER_ADDR,
     ...Object.values(CONTRACT_ADDRESSES).filter(Boolean).map(a => a.toLowerCase()),
+    ...collectionAddrs.map(a => a.toLowerCase()),
   ].filter(Boolean);
 
   const byHash = new Map<string, EtherscanTx>();
@@ -102,6 +157,7 @@ export async function backfillTxLog(sinceBlock = 0): Promise<BackfillResult> {
 
     const type      = TYPE_BY_FUNCTION[decoded.functionName] ?? decoded.functionName;
     const initiator: TxInitiator = tx.from.toLowerCase() === RELAYER_ADDR ? "relayer" : "user";
+    const { label, relatedTokenId } = decodeArgsForLabel(decoded.contractName, tx.input);
 
     await logTxSubmitted({
       txHash:        tx.hash,
@@ -111,6 +167,8 @@ export async function backfillTxLog(sinceBlock = 0): Promise<BackfillResult> {
       functionName:  decoded.functionName,
       fromAddress:   tx.from,
       targetAddress: tx.to,
+      label,
+      relatedTokenId,
     });
 
     if (tx.isError === "1") {
@@ -122,4 +180,32 @@ export async function backfillTxLog(sinceBlock = 0): Promise<BackfillResult> {
   }
 
   return { scanned: byHash.size, inserted, skipped, addresses };
+}
+
+export interface RelabelResult {
+  checked: number;
+  updated: number;
+}
+
+/** Re-decodes call args for rows already in tx_log that predate the label/relatedTokenId
+ *  fields (or that the selector-only backfill couldn't fill in). Refetches the original
+ *  tx from the chain (tx_log doesn't store raw calldata) to decode it. */
+export async function relabelIncompleteTxLog(): Promise<RelabelResult> {
+  const rows = await listIncompleteTxLog();
+  let updated = 0;
+
+  for (const row of rows) {
+    try {
+      const tx = await rpc.getTransaction({ hash: row.tx_hash as `0x${string}` });
+      if (!tx?.input) continue;
+      const { label, relatedTokenId } = decodeArgsForLabel(row.contract_name, tx.input);
+      if (label === undefined && relatedTokenId === undefined) continue;
+      await updateTxLabel(row.tx_hash, label, relatedTokenId);
+      updated++;
+    } catch {
+      // tx not found / RPC hiccup — leave the row as-is, next run can retry
+    }
+  }
+
+  return { checked: rows.length, updated };
 }
