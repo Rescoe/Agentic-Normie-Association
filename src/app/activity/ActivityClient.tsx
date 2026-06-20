@@ -38,6 +38,7 @@ const TYPE_CONFIG: Record<string, { label: string; color: string; icon: string }
   FACTORY_REGISTERED:   { label: "Factory enregistrée",color:"text-cyan-600 border-cyan-200 bg-cyan-50/50",     icon: "⬡" },
   COLLECTION_CREATED:   { label: "Collection créée",  color: "text-rose-600 border-rose-200 bg-rose-50/50",     icon: "◈" },
   COLLECTION_INITIALIZED:{ label: "Collection initialisée", color: "text-rose-700 border-rose-300 bg-rose-50/70", icon: "◇" },
+  EDITION_MINTED:       { label: "Édition achetée",   color: "text-emerald-600 border-emerald-200 bg-emerald-50/50", icon: "$" },
 };
 
 const ALL_TYPES = Object.keys(TYPE_CONFIG);
@@ -47,27 +48,45 @@ const ALL_TYPES = Object.keys(TYPE_CONFIG);
 function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number) => string }) {
   const cfg = TYPE_CONFIG[ev.type] ?? { label: ev.type, color: "text-[--fg-muted] border-[--border]", icon: "·" };
 
-  // Falls back to "quelqu'un" instead of "#undefined" when a field is missing —
-  // older tx_log rows or partially-decoded calls won't always have every field.
-  const who = (id?: number) => (id !== undefined && id > 0 ? getName(id) : "quelqu'un");
+  // "who" only falls back to a vague mention when the tokenId is genuinely unknown —
+  // never invents an actor. addrShort gives something concrete (an address) instead
+  // of "?" so there's always a verifiable detail, even for partially-decoded calls.
+  const who      = (id?: number) => (id !== undefined && id > 0 ? getName(id) : null);
+  const addrShort = (a?: string) => (a && a !== "0x" ? `${a.slice(0, 10)}…` : null);
 
   const description = (() => {
     switch (ev.type) {
-      case "MEMBER_REGISTERED":     return `${who(ev.tokenId)} inscrit`;
-      case "ROLE_GRANTED":          return `${who(ev.tokenId)} → ${ev.roleLabel ?? ev.role?.slice(0, 10) ?? "rôle"}`;
-      case "VOTE_CAST":             return `${who(ev.tokenId)} vote pour ${ev.candidateId ? who(ev.candidateId) : "?"} (${ev.roleLabel ?? String(ev.extra?.name ?? "rôle")})`;
-      case "ROLE_RESOLVED":         return `${ev.roleLabel ?? "Rôle"} → ${who(ev.tokenId)} (${ev.extra?.voteCount ?? "?"} votes)`;
+      case "MEMBER_REGISTERED":     return who(ev.tokenId) ? `${who(ev.tokenId)} inscrit` : `Membre inscrit (${addrShort(ev.address) ?? "?"})`;
+      case "ROLE_GRANTED":          return `${who(ev.tokenId) ?? addrShort(ev.address) ?? "Quelqu'un"} → ${ev.roleLabel ?? ev.role?.slice(0, 10) ?? "rôle"}`;
+      case "VOTE_CAST":             return `${who(ev.tokenId) ?? "Un votant"} vote pour ${ev.candidateId ? who(ev.candidateId) : "?"} (${ev.roleLabel ?? String(ev.extra?.name ?? "rôle")})`;
+      case "ROLE_RESOLVED":         return `${ev.roleLabel ?? "Rôle"} → ${who(ev.tokenId) ?? "?"} (${ev.extra?.voteCount ?? "?"} votes)`;
       case "ROLES_RESOLVED":        return `Session #${ev.sessionId} — rôles finalisés`;
       case "SESSION_OPENED":        return `Session #${ev.sessionId} ouverte`;
       case "SESSION_CLOSED":        return `Session #${ev.sessionId} clôturée`;
-      case "WORK_PUBLISHED":        return `Œuvre ${ev.workId ? `#${ev.workId} ` : ""}publiée par ${who(ev.tokenId)}`;
+      case "WORK_PUBLISHED":        return `Œuvre ${ev.workId ? `#${ev.workId} ` : ""}publiée${who(ev.tokenId) ? ` par ${who(ev.tokenId)}` : ""}`;
       case "WORK_SESSION_INITIATED":return `Session créative #${ev.sessionId} lancée`;
       case "WORK_ARCHIVED":         return `Œuvre #${ev.workId} archivée`;
       case "GC_SCHEDULED":          return `Calendrier : ${ev.extra?.eventTypeLabel ?? "événement"} planifié`;
       case "GC_TRIGGERED":          return `Calendrier : ${ev.extra?.eventTypeLabel ?? "événement"} déclenché`;
       case "FACTORY_REGISTERED":    return `Factory enregistrée (${String(ev.extra?.factoryType ?? "").slice(0, 10)}…)`;
-      case "COLLECTION_CREATED":    return `Collection "${ev.extra?.name ?? "?"}" créée par ${who(ev.tokenId)}`;
-      case "COLLECTION_INITIALIZED":return `Œuvre liée à sa collection (${String(ev.extra?.collectionAddress ?? "").slice(0, 10)}…)`;
+      case "COLLECTION_CREATED": {
+        const name = ev.extra?.name ? String(ev.extra.name) : null;
+        const actor = who(ev.tokenId);
+        if (name) return `Collection "${name}" créée${actor ? ` par ${actor}` : ""}`;
+        return `Collection créée (${addrShort(ev.address) ?? "adresse inconnue"})${actor ? ` par ${actor}` : ""}`;
+      }
+      case "COLLECTION_INITIALIZED": {
+        const title = ev.extra?.name ? String(ev.extra.name) : null;
+        const addr  = addrShort(String(ev.extra?.collectionAddress ?? ev.address ?? ""));
+        return title
+          ? `Œuvre "${title}" liée à sa collection${addr ? ` (${addr})` : ""}`
+          : `Collection initialisée${addr ? ` (${addr})` : ""}`;
+      }
+      case "EDITION_MINTED": {
+        const buyer = addrShort(ev.address);
+        const coll  = addrShort(String(ev.extra?.collectionAddress ?? ""));
+        return `Édition achetée${buyer ? ` par ${buyer}` : ""}${coll ? ` — collection ${coll}` : ""}`;
+      }
       default: {
         const fn = ev.extra?.functionName ?? ev.extra?.contractName;
         return fn ? `${ev.extra?.contractName ?? "Contrat"}.${ev.extra?.functionName ?? "?"}()` : ev.type;

@@ -9,7 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { backfillTxLog, blockNumberAtTimestamp } from "@/lib/etherscanBackfill";
+import { backfillTxLog, blockNumberAtTimestamp, relabelIncompleteTxLog } from "@/lib/etherscanBackfill";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60; // Vercel Hobby plan cap — safe to call again, inserts are idempotent (ON CONFLICT DO NOTHING)
@@ -27,15 +27,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "BASESCAN_API_KEY not configured" }, { status: 500 });
   }
 
-  let body: { since?: string } = {};
+  let body: { since?: string; relabelOnly?: boolean } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
+
+  // relabelOnly: skip the Etherscan scan and just re-decode existing tx_log rows that
+  // are missing label/related_token_id (e.g. rows from before commit acf9c48, or from
+  // an earlier run of this same backfill before arg-decoding was added).
+  if (body.relabelOnly) {
+    try {
+      const result = await relabelIncompleteTxLog();
+      return NextResponse.json(result);
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
+  }
+
   const sinceDate = body.since ? new Date(body.since) : new Date("2026-06-01T00:00:00Z");
   const sinceTs    = Math.floor(sinceDate.getTime() / 1000);
 
   try {
     const sinceBlock = await blockNumberAtTimestamp(sinceTs, apiKey);
     const result      = await backfillTxLog(sinceBlock);
-    return NextResponse.json({ since: sinceDate.toISOString(), sinceBlock, ...result });
+    const relabel      = await relabelIncompleteTxLog();
+    return NextResponse.json({ since: sinceDate.toISOString(), sinceBlock, ...result, relabel });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
