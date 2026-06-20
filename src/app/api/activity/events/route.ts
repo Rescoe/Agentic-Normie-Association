@@ -27,6 +27,7 @@ import {
 } from "viem";
 import { base as baseChain } from "viem/chains";
 import { CONTRACT_ADDRESSES, ROLE_LABELS } from "@/lib/contracts";
+import { listTxLog, type TxLogRow } from "@/lib/txLog";
 
 // ─── RPC client ───────────────────────────────────────────────────────────────
 
@@ -157,6 +158,59 @@ function args(log: Log): Record<string, unknown> {
   return (log as { args?: Record<string, unknown> }).args ?? {};
 }
 
+// ─── tx_log merge ──────────────────────────────────────────────────────────────
+// tx_log is written the moment ANA submits a tx (see lib/txLog.ts) — it's always
+// fresher than the chain-scan cache above (which can be up to 10 min stale) and
+// costs one indexed SQL query instead of an RPC round-trip. We merge it in on
+// every request, regardless of cache hit/miss, so brand-new activity shows up
+// immediately. The chain scan remains the source of truth for history predating
+// this feature and for anything tx_log might have missed.
+
+const TX_LOG_TYPE_MAP: Record<string, string> = {
+  "register":               "MEMBER_REGISTERED",
+  "vote":                   "VOTE_CAST",
+  "session-init":           "WORK_SESSION_INITIATED",
+  "publish":                "WORK_PUBLISHED",
+  "deploy-collection":      "COLLECTION_CREATED",
+  "initialize-collection":  "COLLECTION_INITIALIZED",
+};
+
+function txLogToEvents(rows: TxLogRow[]): ActivityEvent[] {
+  return rows
+    .filter(r => r.status === "confirmed")
+    .map(r => {
+      const workIdNum = r.work_id != null && /^\d+$/.test(r.work_id) ? Number(r.work_id) : undefined;
+      return {
+        id:          `txlog-${r.tx_hash}`,
+        type:        TX_LOG_TYPE_MAP[r.type] ?? r.type.toUpperCase(),
+        blockNumber: r.block_number != null ? String(r.block_number) : "0",
+        txHash:      r.tx_hash,
+        timestamp:   r.confirmed_at ? Math.floor(new Date(r.confirmed_at).getTime() / 1000) : undefined,
+        address:     r.from_address ?? undefined,
+        workId:      workIdNum,
+        extra:       r.result_data as Record<string, string | number | boolean> | undefined,
+      };
+    });
+}
+
+async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
+  try {
+    const rows = await listTxLog(200);
+    if (rows.length === 0) return events;
+    const knownHashes = new Set(events.map(e => e.txHash));
+    const extra = txLogToEvents(rows).filter(e => !knownHashes.has(e.txHash));
+    const merged = [...extra, ...events];
+    merged.sort((a, b) => {
+      const diff = BigInt(b.blockNumber) - BigInt(a.blockNumber);
+      return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+    });
+    return merged;
+  } catch (e) {
+    console.warn(`[activity/events] tx_log merge failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+    return events;
+  }
+}
+
 // ─── Cache helpers (Neon KV) ──────────────────────────────────────────────────
 
 const CACHE_KEY    = "activity:events:v3";
@@ -193,8 +247,9 @@ export async function GET() {
   // ── 1. Try cache first ────────────────────────────────────────────────────
   const cached = await readCache();
   if (cached) {
-    console.log(`[activity/events] cache hit — ${cached.events.length} events`);
-    return NextResponse.json(cached, {
+    const events = await mergeTxLog(cached.events);
+    console.log(`[activity/events] cache hit — ${cached.events.length} events (+tx_log → ${events.length})`);
+    return NextResponse.json({ ...cached, events }, {
       headers: { "X-Cache": "HIT" },
     });
   }
@@ -403,11 +458,12 @@ export async function GET() {
     };
 
     const payload: CachedPayload = { events, meta };
-    await writeCache(payload);
+    await writeCache(payload); // cache stores pure chain data — tx_log is merged in fresh on every request
 
-    console.log(`[activity/events] ${events.length} events — cache miss, chain fetched in ${Date.now() - t0}ms`);
+    const merged = await mergeTxLog(events);
+    console.log(`[activity/events] ${events.length} events — cache miss, chain fetched in ${Date.now() - t0}ms (+tx_log → ${merged.length})`);
 
-    return NextResponse.json(payload, {
+    return NextResponse.json({ ...payload, events: merged }, {
       headers: { "X-Cache": "MISS" },
     });
 

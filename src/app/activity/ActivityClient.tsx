@@ -37,6 +37,7 @@ const TYPE_CONFIG: Record<string, { label: string; color: string; icon: string }
   GC_TRIGGERED:         { label: "Événement déclenché",color:"text-teal-700 border-teal-300 bg-teal-50/70",     icon: "⚡" },
   FACTORY_REGISTERED:   { label: "Factory enregistrée",color:"text-cyan-600 border-cyan-200 bg-cyan-50/50",     icon: "⬡" },
   COLLECTION_CREATED:   { label: "Collection créée",  color: "text-rose-600 border-rose-200 bg-rose-50/50",     icon: "◈" },
+  COLLECTION_INITIALIZED:{ label: "Collection initialisée", color: "text-rose-700 border-rose-300 bg-rose-50/70", icon: "◇" },
 };
 
 const ALL_TYPES = Object.keys(TYPE_CONFIG);
@@ -62,6 +63,7 @@ function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number)
       case "GC_TRIGGERED":          return `Calendrier : ${ev.extra?.eventTypeLabel ?? "événement"} déclenché`;
       case "FACTORY_REGISTERED":    return `Factory enregistrée (${String(ev.extra?.factoryType ?? "").slice(0, 10)}…)`;
       case "COLLECTION_CREATED":    return `Collection "${ev.extra?.name ?? "?"}" créée par ${getName(ev.tokenId!)}`;
+      case "COLLECTION_INITIALIZED":return `Œuvre liée à sa collection (${String(ev.extra?.collectionAddress ?? "").slice(0, 10)}…)`;
       default:                      return ev.type;
     }
   })();
