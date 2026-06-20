@@ -143,7 +143,8 @@ export async function deployCollection(
     await logTxSubmitted({
       txHash: hash, type: "deploy-collection", initiator: "relayer",
       contractName: "ANACollectionFactory", functionName: "createCollection",
-      fromAddress: relayerAddr, workId: params.workId,
+      fromAddress: relayerAddr, targetAddress: factoryAddr, workId: params.workId,
+      relatedTokenId: params.authorTokenId, label: collName,
     });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
@@ -245,7 +246,8 @@ export async function publishWork(
     await logTxSubmitted({
       txHash: hash, type: "publish", initiator: "relayer",
       contractName: "WorkRegistry", functionName: "publish",
-      fromAddress: account.address, workId,
+      fromAddress: account.address, targetAddress: registryAddr, workId,
+      relatedTokenId: authorTokenId,
     });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
@@ -319,7 +321,8 @@ export async function initializeCollection(
     await logTxSubmitted({
       txHash: hash, type: "initialize-collection", initiator: "relayer",
       contractName: "ANAEditions", functionName: "initialize",
-      fromAddress: account.address, workId: String(params.workId),
+      fromAddress: account.address, targetAddress: params.collectionAddress,
+      workId: String(params.workId), label: params.artworkTitle,
     });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });

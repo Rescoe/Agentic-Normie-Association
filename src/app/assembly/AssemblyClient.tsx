@@ -284,7 +284,8 @@ function RoleVoteCard({
       setTxHash(hash);
       logTxClient({
         txHash: hash, type: "vote", contractName: "ConstituentAssembly",
-        functionName: "castVote", workId: String(votingWith),
+        functionName: "castVote", targetAddress: CA_ADDR, relatedTokenId: votingWith,
+        label: role.label,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -619,7 +620,7 @@ function CreativeAssemblySection() {
     try {
       const hash = await writeContractAsync({ address: WR_ADDR, abi: WORK_REGISTRY_ABI, functionName: "initiateWorkSession" });
       setTxHash(hash); setTxState("confirming");
-      logTxClient({ txHash: hash, type: "session-init", contractName: "WorkRegistry", functionName: "initiateWorkSession" });
+      logTxClient({ txHash: hash, type: "session-init", contractName: "WorkRegistry", functionName: "initiateWorkSession", targetAddress: WR_ADDR });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setTxError(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 120));

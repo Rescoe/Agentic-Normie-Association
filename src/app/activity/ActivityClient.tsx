@@ -47,24 +47,31 @@ const ALL_TYPES = Object.keys(TYPE_CONFIG);
 function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number) => string }) {
   const cfg = TYPE_CONFIG[ev.type] ?? { label: ev.type, color: "text-[--fg-muted] border-[--border]", icon: "·" };
 
+  // Falls back to "quelqu'un" instead of "#undefined" when a field is missing —
+  // older tx_log rows or partially-decoded calls won't always have every field.
+  const who = (id?: number) => (id !== undefined && id > 0 ? getName(id) : "quelqu'un");
+
   const description = (() => {
     switch (ev.type) {
-      case "MEMBER_REGISTERED":     return `${getName(ev.tokenId!)} inscrit`;
-      case "ROLE_GRANTED":          return `${getName(ev.tokenId!)} → ${ev.roleLabel ?? ev.role?.slice(0, 10) ?? "rôle"}`;
-      case "VOTE_CAST":             return `${getName(ev.tokenId!)} vote pour ${getName(ev.candidateId!)} (${ev.roleLabel ?? "rôle"})`;
-      case "ROLE_RESOLVED":         return `${ev.roleLabel ?? "Rôle"} → ${getName(ev.tokenId!)} (${ev.extra?.voteCount ?? "?"} votes)`;
+      case "MEMBER_REGISTERED":     return `${who(ev.tokenId)} inscrit`;
+      case "ROLE_GRANTED":          return `${who(ev.tokenId)} → ${ev.roleLabel ?? ev.role?.slice(0, 10) ?? "rôle"}`;
+      case "VOTE_CAST":             return `${who(ev.tokenId)} vote pour ${ev.candidateId ? who(ev.candidateId) : "?"} (${ev.roleLabel ?? String(ev.extra?.name ?? "rôle")})`;
+      case "ROLE_RESOLVED":         return `${ev.roleLabel ?? "Rôle"} → ${who(ev.tokenId)} (${ev.extra?.voteCount ?? "?"} votes)`;
       case "ROLES_RESOLVED":        return `Session #${ev.sessionId} — rôles finalisés`;
       case "SESSION_OPENED":        return `Session #${ev.sessionId} ouverte`;
       case "SESSION_CLOSED":        return `Session #${ev.sessionId} clôturée`;
-      case "WORK_PUBLISHED":        return `Œuvre #${ev.workId} publiée par ${getName(ev.tokenId!)}`;
+      case "WORK_PUBLISHED":        return `Œuvre ${ev.workId ? `#${ev.workId} ` : ""}publiée par ${who(ev.tokenId)}`;
       case "WORK_SESSION_INITIATED":return `Session créative #${ev.sessionId} lancée`;
       case "WORK_ARCHIVED":         return `Œuvre #${ev.workId} archivée`;
       case "GC_SCHEDULED":          return `Calendrier : ${ev.extra?.eventTypeLabel ?? "événement"} planifié`;
       case "GC_TRIGGERED":          return `Calendrier : ${ev.extra?.eventTypeLabel ?? "événement"} déclenché`;
       case "FACTORY_REGISTERED":    return `Factory enregistrée (${String(ev.extra?.factoryType ?? "").slice(0, 10)}…)`;
-      case "COLLECTION_CREATED":    return `Collection "${ev.extra?.name ?? "?"}" créée par ${getName(ev.tokenId!)}`;
+      case "COLLECTION_CREATED":    return `Collection "${ev.extra?.name ?? "?"}" créée par ${who(ev.tokenId)}`;
       case "COLLECTION_INITIALIZED":return `Œuvre liée à sa collection (${String(ev.extra?.collectionAddress ?? "").slice(0, 10)}…)`;
-      default:                      return ev.type;
+      default: {
+        const fn = ev.extra?.functionName ?? ev.extra?.contractName;
+        return fn ? `${ev.extra?.contractName ?? "Contrat"}.${ev.extra?.functionName ?? "?"}()` : ev.type;
+      }
     }
   })();
 
@@ -90,6 +97,13 @@ function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number)
           bloc {ev.blockNumber} —{" "}
           <a href={`https://basescan.org/tx/${ev.txHash}`} target="_blank" rel="noopener noreferrer"
             className="hover:underline">{ev.txHash.slice(0, 10)}…</a>
+          {ev.address && (
+            <>
+              {" · "}
+              <a href={`https://basescan.org/address/${ev.address}`} target="_blank" rel="noopener noreferrer"
+                className="hover:underline" title="Adresse du contrat appelé">{ev.address.slice(0, 10)}…</a>
+            </>
+          )}
         </p>
       </div>
 
@@ -304,7 +318,12 @@ export function ActivityClient() {
   const filtered = filter === "ALL" ? events : events.filter(e => e.type === filter);
 
   return (
-    <div className="space-y-8">
+    // translate="no" — this subtree re-renders on every poll/filter change. Google
+    // Translate rewrites text nodes in place; when React then patches the same nodes
+    // it can throw "Failed to execute 'removeChild' on 'Node'" (client-side exception).
+    // Excluding it from translation avoids the conflict without disabling the widget
+    // for the rest of the site.
+    <div className="space-y-8 notranslate" translate="no">
 
       {/* Elected roles — reads getLeader() directly (6 calls, always fresh) */}
       {CA_ADDR && <ElectedRolesPanel />}

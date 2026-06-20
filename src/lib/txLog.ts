@@ -13,14 +13,17 @@ export type TxInitiator = "user" | "normie" | "owner" | "relayer";
 export type TxStatus     = "pending" | "confirmed" | "failed";
 
 export interface TxLogEntry {
-  txHash:        string;
-  type:          string;   // "register" | "vote" | "publish" | "deploy-collection" | "initialize-collection" | "session-init" | ...
-  initiator:     TxInitiator;
-  contractName:  string;
-  functionName:  string;
-  fromAddress?:  string;
-  workId?:       string;
-  resultData?:   Record<string, unknown>;
+  txHash:         string;
+  type:           string;   // "register" | "vote" | "publish" | "deploy-collection" | "initialize-collection" | "session-init" | ...
+  initiator:      TxInitiator;
+  contractName:   string;
+  functionName:   string;
+  fromAddress?:   string;   // who submitted the tx (relayer wallet, or the user's wallet)
+  targetAddress?: string;   // the contract address actually called — lets anyone verify on BaseScan
+  workId?:        string;   // internal ANAWork id, when this tx belongs to a work's pipeline
+  relatedTokenId?: number;  // the Normie tokenId this tx is "about" (author, voter, registrant…)
+  label?:         string;   // short human label, e.g. a collection name
+  resultData?:    Record<string, unknown>;
 }
 
 let _tableReady = false;
@@ -44,6 +47,11 @@ async function ensureTable() {
       confirmed_at  TIMESTAMPTZ
     )
   `;
+  // Added after the table already existed in prod — ALTER ... ADD COLUMN IF NOT EXISTS
+  // backfills it on existing deployments without a separate migration step.
+  await sql()`ALTER TABLE tx_log ADD COLUMN IF NOT EXISTS target_address TEXT`;
+  await sql()`ALTER TABLE tx_log ADD COLUMN IF NOT EXISTS related_token_id INTEGER`;
+  await sql()`ALTER TABLE tx_log ADD COLUMN IF NOT EXISTS label TEXT`;
   await sql()`CREATE INDEX IF NOT EXISTS tx_log_created_at_idx ON tx_log (created_at DESC)`;
   await sql()`CREATE INDEX IF NOT EXISTS tx_log_work_id_idx ON tx_log (work_id)`;
   _tableReady = true;
@@ -55,9 +63,10 @@ export async function logTxSubmitted(entry: TxLogEntry): Promise<void> {
   try {
     await ensureTable();
     await sql()`
-      INSERT INTO tx_log (tx_hash, type, initiator, contract_name, function_name, from_address, work_id, status)
+      INSERT INTO tx_log (tx_hash, type, initiator, contract_name, function_name, from_address, target_address, work_id, related_token_id, label, status)
       VALUES (${entry.txHash}, ${entry.type}, ${entry.initiator}, ${entry.contractName}, ${entry.functionName},
-              ${entry.fromAddress ?? null}, ${entry.workId ?? null}, 'pending')
+              ${entry.fromAddress ?? null}, ${entry.targetAddress ?? null}, ${entry.workId ?? null},
+              ${entry.relatedTokenId ?? null}, ${entry.label ?? null}, 'pending')
       ON CONFLICT (tx_hash) DO NOTHING
     `;
   } catch (e) {
@@ -106,7 +115,10 @@ export interface TxLogRow {
   contract_name: string;
   function_name: string;
   from_address: string | null;
+  target_address: string | null;
   work_id: string | null;
+  related_token_id: number | null;
+  label: string | null;
   status: TxStatus;
   block_number: number | null;
   error: string | null;

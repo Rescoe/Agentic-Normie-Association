@@ -117,7 +117,8 @@ export function useAttestation() {
         setStatus("pending_tx");
         logTxClient({
           txHash: hash, type: "register", contractName: "AssociationCore",
-          functionName: "register", fromAddress: address, workId: String(tokenId),
+          functionName: "register", fromAddress: address,
+          targetAddress: CONTRACT_ADDRESSES.AssociationCore, relatedTokenId: tokenId,
         });
       } catch (err: unknown) {
         const msg =

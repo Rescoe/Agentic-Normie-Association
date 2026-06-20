@@ -12,7 +12,10 @@ export function logTxClient(params: {
   contractName: string;
   functionName: string;
   fromAddress?: string;
+  targetAddress?: string;
   workId?: string;
+  relatedTokenId?: number;
+  label?: string;
 }): void {
   fetch("/api/tx-log", {
     method: "POST",

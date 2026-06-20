@@ -909,7 +909,10 @@ export default function SalonClient() {
   }
 
   return (
-    <div className="h-full flex overflow-hidden bg-[--bg] text-[--fg]">
+    // translate="no" — this view re-renders constantly (polling, new messages). Google
+    // Translate mutates text nodes in place; React patching the same nodes afterwards can
+    // throw a client-side exception. Excluding it avoids the conflict on this page only.
+    <div className="h-full flex overflow-hidden bg-[--bg] text-[--fg] notranslate" translate="no">
 
       {/* Agent card modal */}
       {agentCard && (

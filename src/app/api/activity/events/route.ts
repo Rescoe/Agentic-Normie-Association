@@ -179,16 +179,29 @@ function txLogToEvents(rows: TxLogRow[]): ActivityEvent[] {
   return rows
     .filter(r => r.status === "confirmed")
     .map(r => {
-      const workIdNum = r.work_id != null && /^\d+$/.test(r.work_id) ? Number(r.work_id) : undefined;
+      const resultData = (r.result_data ?? {}) as Record<string, unknown>;
+      // The on-chain numeric workId only exists for "publish" (from the WorkPublished
+      // event, captured in result_data) — work_id otherwise holds our internal ANAWork
+      // id (e.g. "work_169..._abcde"), which isn't a display-friendly number.
+      const onChainWorkId = r.type === "publish" && typeof resultData.onChainWorkId === "number"
+        ? resultData.onChainWorkId : undefined;
       return {
-        id:          `txlog-${r.tx_hash}`,
-        type:        TX_LOG_TYPE_MAP[r.type] ?? r.type.toUpperCase(),
-        blockNumber: r.block_number != null ? String(r.block_number) : "0",
-        txHash:      r.tx_hash,
-        timestamp:   r.confirmed_at ? Math.floor(new Date(r.confirmed_at).getTime() / 1000) : undefined,
-        address:     r.from_address ?? undefined,
-        workId:      workIdNum,
-        extra:       r.result_data as Record<string, string | number | boolean> | undefined,
+        id:            `txlog-${r.tx_hash}`,
+        type:          TX_LOG_TYPE_MAP[r.type] ?? r.type.toUpperCase(),
+        blockNumber:   r.block_number != null ? String(r.block_number) : "0",
+        txHash:        r.tx_hash,
+        timestamp:     r.confirmed_at ? Math.floor(new Date(r.confirmed_at).getTime() / 1000) : undefined,
+        address:       r.target_address ?? r.from_address ?? undefined,
+        tokenId:       r.related_token_id ?? undefined,
+        workId:        onChainWorkId,
+        extra:         {
+          ...(resultData as Record<string, string | number | boolean>),
+          name:           r.label ?? undefined,
+          fromAddress:    r.from_address ?? undefined,
+          targetAddress:  r.target_address ?? undefined,
+          functionName:   r.function_name,
+          contractName:   r.contract_name,
+        } as Record<string, string | number | boolean>,
       };
     });
 }

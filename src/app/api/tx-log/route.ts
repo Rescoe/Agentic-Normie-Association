@@ -17,13 +17,16 @@ export async function GET(req: NextRequest) {
 }
 
 interface SubmitBody {
-  txHash:       string;
-  type:         string;
-  initiator?:   TxInitiator;
-  contractName: string;
-  functionName: string;
-  fromAddress?: string;
-  workId?:      string;
+  txHash:         string;
+  type:           string;
+  initiator?:     TxInitiator;
+  contractName:   string;
+  functionName:   string;
+  fromAddress?:   string;
+  targetAddress?: string;
+  workId?:        string;
+  relatedTokenId?: number;
+  label?:         string;
 }
 
 export async function POST(req: NextRequest) {
@@ -32,13 +35,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
   await logTxSubmitted({
-    txHash:       body.txHash,
-    type:         body.type,
-    initiator:    body.initiator ?? "user",
-    contractName: body.contractName,
-    functionName: body.functionName,
-    fromAddress:  body.fromAddress,
-    workId:       body.workId,
+    txHash:         body.txHash,
+    type:           body.type,
+    initiator:      body.initiator ?? "user",
+    contractName:   body.contractName,
+    functionName:   body.functionName,
+    fromAddress:    body.fromAddress,
+    targetAddress:  body.targetAddress,
+    workId:         body.workId,
+    relatedTokenId: body.relatedTokenId,
+    label:          body.label,
   });
   return NextResponse.json({ ok: true });
 }
