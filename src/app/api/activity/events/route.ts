@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic"; // never pre-render at build time
 
 import { NextResponse }     from "next/server";
 import {
-  createPublicClient, http, parseAbiItem,
+  createPublicClient, http, fallback, parseAbiItem,
   keccak256, stringToBytes,
   type Log, type AbiEvent,
 } from "viem";
@@ -36,10 +36,25 @@ import { listTxLog, type TxLogRow } from "@/lib/txLog";
 
 // LlamaRPC supports up to 10 000 blocks per eth_getLogs (vs 2 000 for mainnet.base.org).
 // Override with BASE_RPC_URL env var to use Alchemy/QuickNode/etc.
+// fallback() retries against the next URL when one is down — llamarpc had a full
+// outage (HTTP 521) that silently zeroed out every event in production, because
+// fetchLogs() swallows per-chunk errors to keep one bad provider from killing the
+// whole scan. Without a fallback transport, "swallow the error" became "swallow
+// the entire chain's history" the moment the primary RPC went down.
 const RPC_URL = process.env.BASE_RPC_URL ?? "https://base.llamarpc.com";
 const rpc = createPublicClient({
   chain:     baseChain,
-  transport: http(RPC_URL),
+  transport: fallback([
+    http(RPC_URL),
+    // base.publicnode.com and mainnet.base.org both reject getLogs on block ranges
+    // older than their free-tier window ("Archive requests require a personal
+    // token" / outright rate-limit) — verified by hand against this exact
+    // 2M-block range. drpc.org is the one public Base RPC that actually serves
+    // full archive history for free, so it's the real fallback; the others are
+    // kept after it only in case drpc.org itself has an outage.
+    http("https://base.drpc.org"),
+    http("https://mainnet.base.org"),
+  ]),
 });
 
 // ─── Contract addresses ───────────────────────────────────────────────────────
@@ -96,17 +111,20 @@ const GC_LABELS: Record<string, string> = {
 };
 
 // ─── Parallel log fetcher ─────────────────────────────────────────────────────
-// Uses LlamaRPC (base.llamarpc.com) which supports up to 10 000 blocks per
-// getLogs request — 5× larger than mainnet.base.org (2 000 limit).
+// CHUNK is capped at 2 000 — the limit of the *narrowest* provider in the fallback
+// chain (mainnet.base.org). LlamaRPC alone tolerates up to 10 000, but a chunk
+// size that only works on the primary defeats the point of having a fallback:
+// if llamarpc is down and we fail over to mainnet.base.org mid-scan, a 5 000-block
+// request would just fail there too.
 //
-// Math with CHUNK=5 000 and SCAN_RANGE=2 000 000:
-//   2 000 000 / 5 000 = 400 chunks per type
-//   400 / BATCH_SIZE(20) = 20 sequential batches per type
-//   All 14 event types run in parallel → dominated by slowest ≈ 5–10s
-//   Well within Vercel Hobby 60s limit.
+// Math with CHUNK=2 000 and SCAN_RANGE=2 000 000:
+//   2 000 000 / 2 000 = 1000 chunks per type
+//   1000 / BATCH_SIZE(20) = 50 sequential batches per type
+//   All event types run in parallel → dominated by slowest ≈ 15–25s
+//   Within Vercel Hobby 60s limit.
 
-const CHUNK      = 5_000n;    // LlamaRPC supports up to 10 000 — 5 000 is safe
-const BATCH_SIZE = 20;        // 14 types × 20 = 280 max concurrent — OK for llamarpc
+const CHUNK      = 2_000n;
+const BATCH_SIZE = 20;
 const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history
 
 async function fetchLogs(
