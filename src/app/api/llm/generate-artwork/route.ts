@@ -22,19 +22,20 @@ interface ElectedMember {
   persona:   NormiePersona | null;
 }
 
-const SYSTEM_PROMPT = `Tu es un développeur génératif expert. Tu crées des programmes HTML/JS/CSS auto-contenus
-qui s'exécutent dans un iframe sandbox (allow-scripts uniquement, pas de réseau, pas de DOM parent).
+const SYSTEM_PROMPT = `You are an expert generative developer. You write self-contained HTML/JS/CSS programs
+that run inside a sandboxed iframe (allow-scripts only, no network, no parent DOM).
 
-RÈGLES ABSOLUES :
-- Retourne UNIQUEMENT le code HTML, sans markdown, sans balises de code, sans explication
-- Le fichier doit être un HTML complet et valide (<!DOCTYPE html> ... </html>)
-- Tout le CSS et le JS doit être inline (pas de CDN, pas d'import, pas de fetch)
-- Utilise <canvas> pour les visuels génératifs (requestAnimationFrame pour l'animation)
-- Palette sombre par défaut (background #0A0A0A, couleurs saturées mais fines)
-- Police monospace pour tout texte
-- Le programme doit être autonome, infini, et beau
-- Taille max : ~15 KB de code (pas de bibliothèques volumineuses)
-- Commence directement par <!DOCTYPE html>`;
+ABSOLUTE RULES:
+- Always write in English for any visible text in the artwork.
+- Return ONLY the HTML code — no markdown, no code fences, no explanation
+- The file must be a complete, valid HTML document (<!DOCTYPE html> ... </html>)
+- All CSS and JS must be inline (no CDN, no import, no fetch)
+- Use <canvas> for generative visuals (requestAnimationFrame for animation)
+- Dark palette by default (background #0A0A0A, saturated but restrained colors)
+- Monospace font for any text
+- The program must be self-contained, endless, and beautiful
+- Max size: ~15 KB of code (no heavy libraries)
+- Start directly with <!DOCTYPE html>`;
 
 export async function POST(req: NextRequest) {
   let body: { brief?: string; elected?: ElectedMember[] };
@@ -56,18 +57,18 @@ export async function POST(req: NextRequest) {
     ? elected.map(m => {
         const traits = m.persona?.traits?.slice(0, 3).map(t => `${t.trait_type}:${t.value}`).join(", ") ?? "";
         const arch   = m.persona?.archetype ?? "";
-        return `- ${m.roleLabel} : Normie #${m.tokenId}${arch ? ` (${arch})` : ""}${traits ? ` [${traits}]` : ""}`;
+        return `- ${m.roleLabel}: Normie #${m.tokenId}${arch ? ` (${arch})` : ""}${traits ? ` [${traits}]` : ""}`;
       }).join("\n")
     : "";
 
-  const userPrompt = `BRIEF ARTISTIQUE DE L'ASSEMBLÉE :
+  const userPrompt = `ASSEMBLY'S ARTISTIC BRIEF:
 ${brief}
 
-${normieContext ? `NORMIES CRÉATEURS :\n${normieContext}\n` : ""}
+${normieContext ? `CREATING NORMIES:\n${normieContext}\n` : ""}
 
-Génère un programme HTML/JS génératif qui incarne ce brief.
-Le programme doit être visuel, animé, et refléter l'identité collective de ces Normies.
-Code HTML complet, autonomous, auto-contenu. Commence par <!DOCTYPE html>.`;
+Generate a generative HTML/JS program that embodies this brief.
+The program must be visual, animated, and reflect the collective identity of these Normies.
+Complete, self-contained, standalone HTML code. Start with <!DOCTYPE html>.`;
 
   try {
     const res = await fetch(GROQ_API_URL, {

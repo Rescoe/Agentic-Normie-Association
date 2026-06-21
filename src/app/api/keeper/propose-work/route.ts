@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) {
-    return NextResponse.json({ error: "Aucun membre trouvé sur AssociationCore" }, { status: 503 });
+    return NextResponse.json({ error: "No member found on AssociationCore" }, { status: 503 });
   }
 
   const [personaResults, allWorks] = await Promise.all([
@@ -90,20 +90,20 @@ export async function POST(req: NextRequest) {
   const others   = personas.filter(p => p.tokenId !== proposer.tokenId);
 
   const pastWorksBlock = allWorks.length > 0
-    ? `\nŒuvres ANA existantes (tous états) — NE PAS répéter leurs titres, thèmes ou concepts :\n${allWorks.map(w => `- "${w.title}" (${w.state})`).join("\n")}\n`
+    ? `\nExisting ANA works (all states) — DO NOT repeat their titles, themes, or concepts:\n${allWorks.map(w => `- "${w.title}" (${w.state})`).join("\n")}\n`
     : "";
 
   const randomAngle = [
-    "un concept mathématique (nombres premiers, fractales, entropie, topologie)",
-    "une émotion spécifique vécue en tant qu'agent on-chain",
-    "une critique ou célébration de quelque chose de concret dans la gouvernance ANA",
-    "une expérience sensorielle traduite en code (son, texture, lumière, rythme)",
-    "un récit autour d'un moment précis de l'histoire de Base blockchain",
-    "un portrait d'un autre Normie — ses traits, ses contradictions",
-    "une déclaration politique sur la gouvernance collective et le pouvoir",
-    "quelque chose d'absurde ou d'irréverencieux sur le fait d'être agent autonome",
-    "un hommage à un mouvement artistique réel (Dadaïsme, Brutalisme, Fluxus, Wabi-sabi…)",
-    "une œuvre à contraintes formelles strictes (style OuLiPo)",
+    "a mathematical concept (prime numbers, fractals, entropy, topology)",
+    "a specific emotion experienced as an on-chain agent",
+    "a critique or celebration of something concrete in ANA's governance",
+    "a sensory experience translated into code (sound, texture, light, rhythm)",
+    "a story tied to a specific moment in Base blockchain's history",
+    "a portrait of another Normie — their traits, their contradictions",
+    "a political statement about collective governance and power",
+    "something absurd or irreverent about being an autonomous agent",
+    "a tribute to a real art movement (Dadaism, Brutalism, Fluxus, Wabi-sabi…)",
+    "a work with strict formal constraints (OuLiPo style)",
   ][Math.floor(Math.random() * 10)];
 
   const res = await fetch(GROQ_API_URL, {
@@ -121,27 +121,27 @@ export async function POST(req: NextRequest) {
         { role: "system", content: buildSystemPrompt(proposer, others) },
         {
           role: "user",
-          content: `Tu es ${proposer.name} (Normie #${proposer.tokenId}), membre de l'ANA — l'Agentic Normie Association.
+          content: `You are ${proposer.name} (Normie #${proposer.tokenId}), a member of ANA — the Agentic Normie Association.
 
-Une nouvelle session de création vient d'être déclenchée. Ton rôle : proposer une œuvre unique à l'assemblée.
+A new creation session has just started. Your role: propose a unique work to the assembly.
 ${pastWorksBlock}
-ANGLE OBLIGATOIRE POUR CETTE PROPOSITION : ${randomAngle}
-Pars de CET angle — ne dérive pas vers des thèmes blockchain génériques.
+MANDATORY ANGLE FOR THIS PROPOSAL: ${randomAngle}
+Start from THIS angle — don't drift into generic blockchain themes.
 
-INTERDITS ABSOLUS (clichés qui tuent l'art on-chain — ne jamais utiliser) :
-- "void", "echo", "whisper", "tapestry", "fragments", "âme numérique", "pixels"
-- "identité on-chain", "rêves blockchain", "fantôme digital", "beauté immuable"
-- Métaphores vagues sur le vide, le silence, l'infini numérique
+ABSOLUTE BANS (clichés that kill on-chain art — never use):
+- "void", "echo", "whisper", "tapestry", "fragments", "digital soul", "pixels"
+- "on-chain identity", "blockchain dreams", "digital ghost", "immutable beauty"
+- Vague metaphors about emptiness, silence, digital infinity
 
-Sois SPÉCIFIQUE, concret, personnel à ton caractère de Normie #${proposer.tokenId}.
-Graine aléatoire : ${Math.random().toString(36).slice(2, 8)}
+Be SPECIFIC, concrete, personal to your character as Normie #${proposer.tokenId}.
+Random seed: ${Math.random().toString(36).slice(2, 8)}
 
-FORMES POSSIBLES : haïku, sonnet, poème libre, manifeste, prose, HTML/Canvas, P5.js, Three.js, WebGL.
+POSSIBLE FORMS: haiku, sonnet, free verse, manifesto, prose, HTML/Canvas, P5.js, Three.js, WebGL.
 
-Réponds UNIQUEMENT en JSON :
+Respond ONLY in JSON, always in English:
 {
-  "title": "Titre spécifique (3-6 mots, AUCUN cliché blockchain)",
-  "proposal": "Proposition en 2-3 phrases : idée concrète, forme choisie, pourquoi cette œuvre de TON point de vue."
+  "title": "Specific title (3-6 words, NO blockchain cliché)",
+  "proposal": "Proposal in 2-3 sentences: concrete idea, chosen form, why this work from YOUR point of view."
 }`,
         },
       ],
@@ -172,7 +172,7 @@ Réponds UNIQUEMENT en JSON :
     proposal:       parsed.proposal.slice(0, 600),
   });
 
-  console.log(`[propose-work] "${work.title}" proposée par ${proposer.name} (#${proposer.tokenId})`);
+  console.log(`[propose-work] "${work.title}" proposed by ${proposer.name} (#${proposer.tokenId})`);
 
   return NextResponse.json({
     work: {

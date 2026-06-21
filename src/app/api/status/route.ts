@@ -11,12 +11,12 @@ export async function GET() {
 
   const session = stats.sessionState;
   const sessionPhase = !stats.deployed
-    ? "pré-lancement"
+    ? "pre-launch"
     : session?.resolved
-    ? "rôles attribués"
+    ? "roles assigned"
     : session?.active
-    ? "AG constitutive"
-    : "inscription";
+    ? "constituent assembly"
+    : "registration";
 
   return NextResponse.json({
     deployed:      stats.deployed,

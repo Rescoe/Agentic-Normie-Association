@@ -124,7 +124,7 @@ export async function GET(
 
   return new NextResponse(
     `<!DOCTYPE html><html><body style="background:#050505;color:#e2e8f0;font-family:monospace;padding:2rem">
-<p>Œuvre #${onChainId} introuvable ou non encore indexée.</p>
+<p>Work #${onChainId} not found or not yet indexed.</p>
 </body></html>`,
     { status: 404, headers: HTML_HEADERS }
   );

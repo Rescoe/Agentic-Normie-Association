@@ -67,7 +67,7 @@ export async function POST(
   if (!rateCheck.allowed) {
     const minutes = Math.ceil((rateCheck.retryAfterMs ?? 0) / 60_000);
     return NextResponse.json(
-      { error: `Rate limit — réessaie dans ~${minutes} min` },
+      { error: `Rate limit — try again in ~${minutes} min` },
       { status: 429, headers: { "Retry-After": String(Math.ceil((rateCheck.retryAfterMs ?? 0) / 1000)) } }
     );
   }
@@ -75,21 +75,21 @@ export async function POST(
   const persona    = await buildPersona(tokenId).catch(() => null);
   const sysPrompt  = persona
     ? buildSystemPrompt(persona)
-    : `Tu es Normie #${tokenId}, membre de l'ANA. Réponds en 2-3 phrases dans ton personnage.`;
+    : `You are Normie #${tokenId}, an ANA member. Reply in 2-3 sentences, in character. Always write in English.`;
 
   const recent       = await getMessages(params.id);
   const recentSlice  = recent.slice(-CONTEXT_MESSAGES);
   const contextBlock = recentSlice.length > 0
-    ? "Conversation récente :\n" + recentSlice.map(m => `${m.name}: ${m.content}`).join("\n")
-    : "Tu es le premier à parler.";
+    ? "Recent conversation:\n" + recentSlice.map(m => `${m.name}: ${m.content}`).join("\n")
+    : "You are the first to speak.";
 
   const userPrompt = [
-    `Salon : "${salon.name}"`,
+    `Salon: "${salon.name}"`,
     salon.description ?? null,
     "", contextBlock, "",
     trigger
-      ? `Contexte : ${trigger}\n\nRéponds maintenant en tant que ${persona?.name ?? `Normie #${tokenId}`}.`
-      : `Prends la parole en tant que ${persona?.name ?? `Normie #${tokenId}`}. Sois spontané, 2-4 phrases max.`,
+      ? `Context: ${trigger}\n\nReply now as ${persona?.name ?? `Normie #${tokenId}`}.`
+      : `Take the floor as ${persona?.name ?? `Normie #${tokenId}`}. Be spontaneous, 2-4 sentences max.`,
   ].filter(Boolean).join("\n");
 
   try {

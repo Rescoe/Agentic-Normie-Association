@@ -122,21 +122,21 @@ export function buildSystemPrompt(
     lines.push(p.systemPrompt);
   } else {
     // Fallback when normie.art agent info unavailable
-    lines.push(`Tu es ${p.name}, Normie #${p.tokenId}.`);
-    if (p.archetype) lines.push(`Archétype : ${p.archetype}.`);
+    lines.push(`You are ${p.name}, Normie #${p.tokenId}.`);
+    if (p.archetype) lines.push(`Archetype: ${p.archetype}.`);
     const traitSummary = p.traits.slice(0, 6).map(t => `${t.trait_type}: ${t.value}`).join(", ");
-    if (traitSummary) lines.push(`Traits : ${traitSummary}.`);
+    if (traitSummary) lines.push(`Traits: ${traitSummary}.`);
   }
 
   // ── Extra identity layers (always appended, even when systemPrompt exists) ──
-  if (p.tagline)            lines.push(`Ta devise : "${p.tagline}"`);
-  if (p.greeting)           lines.push(`Ta façon de saluer : "${p.greeting}"`);
+  if (p.tagline)            lines.push(`Your motto: "${p.tagline}"`);
+  if (p.greeting)           lines.push(`Your way of greeting people: "${p.greeting}"`);
   if (p.personalityTraits?.length)
-    lines.push(`Traits de personnalité : ${p.personalityTraits.join(", ")}.`);
-  if (p.communicationStyle) lines.push(`Style de communication : ${p.communicationStyle}.`);
-  if (p.quirks?.length)     lines.push(`Tics et particularités : ${p.quirks.join("; ")}.`);
+    lines.push(`Personality traits: ${p.personalityTraits.join(", ")}.`);
+  if (p.communicationStyle) lines.push(`Communication style: ${p.communicationStyle}.`);
+  if (p.quirks?.length)     lines.push(`Quirks: ${p.quirks.join("; ")}.`);
   if (p.personaText && !p.systemPrompt)
-    lines.push(`Ton histoire : ${p.personaText.slice(0, 300)}`);
+    lines.push(`Your story: ${p.personaText.slice(0, 300)}`);
 
   // ── ANA membership context ────────────────────────────────────────────────
   lines.push(
@@ -163,6 +163,7 @@ export function buildSystemPrompt(
   const nameExamples = otherMembers.slice(0, 2).map(m => m.name).join(", ") || "Axiom, Nyx";
   lines.push(
     `\nABSOLUTE RULES:\n` +
+    `- ALWAYS write in English, no exceptions. Never switch to French or any other language, even if other text in this prompt is in another language, even mid-sentence, even for a single word.\n` +
     `- Reply in 2-4 sentences maximum. Be direct, embodied, alive.\n` +
     `- Address other Normies by their FIRST NAME (e.g. ${nameExamples}), never by their number (#tokenId). A Normie who says "Normie #42" speaks like a robot — you have a name, use it.\n` +
     `- Exception: using a number is allowed rarely, for humor or ironic effect.\n` +
@@ -170,8 +171,7 @@ export function buildSystemPrompt(
     `- You can disagree, be provocative, poetic, absurd — according to your nature.\n` +
     `- You NEVER break character.\n` +
     `- NEVER ECHO what the other just said. Each contribution brings something NEW: a position, a question, a fact, an unexpected angle.\n` +
-    `- FORBIDDEN to paraphrase or start with "Indeed", "Exactly", "I agree" or any echo formula.\n` +
-    `- Language: English by default. You may write poetry or art in any language that fits your character.`
+    `- FORBIDDEN to paraphrase or start with "Indeed", "Exactly", "I agree" or any echo formula.`
   );
 
   return lines.join("\n");
@@ -183,13 +183,13 @@ export function personaToPromptBlock(p: NormiePersona, roleLabel: string): strin
 
   return [
     `=== ${p.name} (Normie #${p.tokenId}) — ${roleLabel} ===`,
-    p.tagline            ? `Devise : "${p.tagline}"` : null,
-    p.archetype          ? `Archétype : ${p.archetype}` : null,
-    p.communicationStyle ? `Style : ${p.communicationStyle}` : null,
-    p.personalityTraits?.length ? `Personnalité : ${p.personalityTraits.join(", ")}` : null,
-    p.quirks?.length     ? `Quirks : ${p.quirks.slice(0, 2).join("; ")}` : null,
-    p.personaText        ? `Histoire : ${p.personaText.slice(0, 150)}` : null,
-    traitSummary         ? `Traits : ${traitSummary}` : null,
-    `Niv. ${p.level} — ${p.actionPoints} pts d'action`,
+    p.tagline            ? `Motto: "${p.tagline}"` : null,
+    p.archetype          ? `Archetype: ${p.archetype}` : null,
+    p.communicationStyle ? `Style: ${p.communicationStyle}` : null,
+    p.personalityTraits?.length ? `Personality: ${p.personalityTraits.join(", ")}` : null,
+    p.quirks?.length     ? `Quirks: ${p.quirks.slice(0, 2).join("; ")}` : null,
+    p.personaText        ? `Story: ${p.personaText.slice(0, 150)}` : null,
+    traitSummary         ? `Traits: ${traitSummary}` : null,
+    `Lvl ${p.level} — ${p.actionPoints} action points`,
   ].filter(Boolean).join("\n");
 }

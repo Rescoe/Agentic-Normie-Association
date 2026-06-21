@@ -59,35 +59,35 @@ function buildSystemPrompt(elected: ElectedMember[]): string {
     ))
     .join("\n\n");
 
-  return `Tu es le simulateur de l'Assemblée Constituante de l'ANA (Agentic Normie Association).
+  return `You are the simulator for the ANA (Agentic Normie Association) Constituent Assembly.
 
-L'ANA est une association culturelle entièrement on-chain sur Base. Ses membres sont des NFTs Normies.
-Les 6 Normies ci-dessous ont été élus aux rôles institutionnels de l'association.
-Ils doivent maintenant discuter ensemble pour concevoir leur première œuvre collective.
+ANA is a cultural association entirely on-chain on Base. Its members are Normie NFTs.
+The 6 Normies below have been elected to the association's institutional roles.
+They must now discuss together to design their first collective work.
 
-MEMBRES ÉLUS :
+ELECTED MEMBERS:
 ${membersBlock}
 
-RÈGLES DE LA DISCUSSION :
-- Chaque Normie parle avec sa voix propre, nourrie par son archétype, ses traits et son persona.
-- La discussion doit mener à un consensus sur :
-  1. Le concept de l'œuvre (thème, intention artistique)
-  2. La forme technique (animation canvas, générateur de formes, visualisation de données onchain...)
-  3. Le nombre d'éditions proposé
-- L'œuvre sera du HTML/JS/CSS exécutable, stockée entièrement on-chain sur Base.
-- Les Normies doivent tenir compte de leurs rôles institutionnels dans la discussion.
-- Utilise le français. Sois créatif, fidèle aux personas, concis dans chaque prise de parole.
+DISCUSSION RULES:
+- Each Normie speaks in their own voice, shaped by their archetype, traits, and persona.
+- The discussion must reach a consensus on:
+  1. The work's concept (theme, artistic intent)
+  2. The technical form (canvas animation, shape generator, on-chain data visualization...)
+  3. The proposed number of editions
+- The work will be executable HTML/JS/CSS, stored entirely on-chain on Base.
+- Normies must factor their institutional roles into the discussion.
+- Always write in English. Be creative, true to each persona, concise in every turn.
 
-FORMAT DE SORTIE :
-Pour chaque tour de parole, écris EXACTEMENT :
-[NOM_DU_NORMIE (RÔLE)]: <prise de parole>
+OUTPUT FORMAT:
+For each turn, write EXACTLY:
+[NORMIE_NAME (ROLE)]: <turn of speech>
 
-À la fin, écris un BRIEF ARTISTIQUE résumant les décisions :
-BRIEF ARTISTIQUE:
-Titre: <titre de l'œuvre>
-Concept: <description du concept>
-Forme: <description technique>
-Éditions: <nombre>
+At the end, write an ARTISTIC BRIEF summarizing the decisions:
+ARTISTIC BRIEF:
+Title: <work title>
+Concept: <concept description>
+Form: <technical description>
+Editions: <number>
 `;
 }
 
@@ -137,10 +137,10 @@ export async function POST(req: NextRequest) {
   const systemPrompt = buildSystemPrompt(elected);
 
   const userPrompt = [
-    `${activeMembers.length} Normies sont réunis pour leur première assemblée créative.`,
-    `Organise ${rounds} tours de discussion (chaque Normie prend la parole ${rounds} fois),`,
-    `puis produis le BRIEF ARTISTIQUE final consensuel.`,
-    `Commence directement par la discussion.`,
+    `${activeMembers.length} Normies are gathered for their first creative assembly.`,
+    `Run ${rounds} discussion rounds (each Normie speaks ${rounds} times),`,
+    `then produce the final consensus ARTISTIC BRIEF.`,
+    `Start directly with the discussion.`,
   ].join(" ");
 
   const messages = [

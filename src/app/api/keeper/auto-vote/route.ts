@@ -94,17 +94,17 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
 
 async function decideCandidacy(p: NormiePersona): Promise<Candidacy> {
   const roleList = ORDERED_ROLE_ENTRIES.map(r => r.label).join(", ");
-  const prompt   = `Tu es ${p.name} (Normie #${p.tokenId}).
-Persona: ${p.personaText ?? ""} Archétype: ${p.archetype ?? ""}
+  const prompt   = `You are ${p.name} (Normie #${p.tokenId}).
+Persona: ${p.personaText ?? ""} Archetype: ${p.archetype ?? ""}
 Traits: ${p.traits.slice(0, 4).map((t: { trait_type: string; value: string }) => `${t.trait_type}:${t.value}`).join(", ")}
 
-Rôles ANA: ${roleList}
-Pour quel(s) rôle(s) te présentes-tu ? (1-2 max selon ton persona)
-Format: CANDIDAT: <rôle1>[, <rôle2>]\nRAISON: <phrase>`;
+ANA roles: ${roleList}
+Which role(s) are you running for? (1-2 max, based on your persona)
+Always write in English. Format: CANDIDATE: <role1>[, <role2>]\nREASON: <sentence>`;
 
   const resp       = await groqText(prompt, true);
-  const candLine   = resp.match(/CANDIDAT:\s*(.+)/i)?.[1] ?? "";
-  const reasoning  = resp.match(/RAISON:\s*(.+)/i)?.[1]?.trim() ?? "";
+  const candLine   = resp.match(/CANDIDATE:\s*(.+)/i)?.[1] ?? "";
+  const reasoning  = resp.match(/REASON:\s*(.+)/i)?.[1]?.trim() ?? "";
 
   const roles: string[] = []; const roleNames: string[] = [];
   for (const { hash, label } of ORDERED_ROLE_ENTRIES) {
@@ -140,13 +140,13 @@ async function decideAllVotes(
     if (r.validIds.length > 0) exampleVotes[r.label] = r.validIds[0];
   }
 
-  const prompt = `Tu es ${voter.name} (#${voter.tokenId}). Persona: ${voter.personaText ?? ""} Archétype: ${voter.archetype ?? ""}
+  const prompt = `You are ${voter.name} (#${voter.tokenId}). Persona: ${voter.personaText ?? ""} Archetype: ${voter.archetype ?? ""}
 
-Votes pour les 6 rôles de l'ANA. Pour chaque rôle, choisis un tokenId parmi les candidats listés :
-${roleDefs.map(r => `${r.label}: candidats disponibles = [${r.validIds.join(", ")}]`).join("\n")}
+Vote for ANA's 6 roles. For each role, pick a tokenId among the listed candidates:
+${roleDefs.map(r => `${r.label}: available candidates = [${r.validIds.join(", ")}]`).join("\n")}
 
-Réponds UNIQUEMENT en JSON. Exemple : ${JSON.stringify({ votes: exampleVotes })}
-Choisis les tokenIds qui correspondent le mieux aux rôles selon ta personnalité.`;
+Respond ONLY in JSON, always in English. Example: ${JSON.stringify({ votes: exampleVotes })}
+Pick the tokenIds that best match the roles according to your personality.`;
 
   const json = await groqJson(prompt, 200);
   const votes = (json.votes ?? json) as Record<string, unknown>;
@@ -173,13 +173,13 @@ Choisis les tokenIds qui correspondent le mieux aux rôles selon ta personnalit�
 // ─── Salon helpers ─────────────────────────────────────────────────────────────
 
 async function getOrCreateVoteSalon(sessionId: number): Promise<string> {
-  const salonName = `AG Constitutive — Session #${sessionId}`;
+  const salonName = `Constituent Assembly — Session #${sessionId}`;
   const all = await listSalons();
   const existing = all.find(s => s.name === salonName);
   if (existing) return existing.id;
   const salon = await createSalon({
     name:        salonName,
-    description: `Candidatures et votes automatiques des Normies pour l'assemblée générale constitutive (session #${sessionId}).`,
+    description: `Automatic Normie candidacies and votes for the constituent general assembly (session #${sessionId}).`,
     createdBy:   0,
     members:     [],
   });
@@ -346,8 +346,8 @@ export async function POST(req: NextRequest) {
     for (const cand of candidacies) {
       const persona = personas.find(p => p.tokenId === cand.tokenId);
       const content = cand.roleNames.length > 0
-        ? `🙋 Je me présente pour : **${cand.roleNames.join(", ")}** — ${cand.reasoning}`
-        : `Je ne me présente pour aucun rôle cette fois. ${cand.reasoning}`;
+        ? `🙋 I'm running for: **${cand.roleNames.join(", ")}** — ${cand.reasoning}`
+        : `I'm not running for any role this time. ${cand.reasoning}`;
       await addMessage({
         salonId:   voteSalonId,
         tokenId:   cand.tokenId,
@@ -367,7 +367,7 @@ export async function POST(req: NextRequest) {
         tokenId:   0,
         name:      "ANA",
         imageUrl:  "",
-        content:   `🗳️ L'AG constitutive (session #${sessionId}) est en cours. Candidatures et votes dans le salon dédié → « AG Constitutive — Session #${sessionId} ».`,
+        content:   `🗳️ The constituent assembly (session #${sessionId}) is underway. Candidacies and votes in the dedicated salon → "Constituent Assembly — Session #${sessionId}".`,
         isLlm:     true,
         timestamp: Date.now(),
       }).catch(() => null);

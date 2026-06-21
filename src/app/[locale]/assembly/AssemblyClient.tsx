@@ -604,7 +604,7 @@ function CreativeAssemblySection() {
           try { const chunk = JSON.parse(raw); const delta = chunk.choices?.[0]?.delta?.content ?? ""; if (delta) setTranscript(prev => prev + delta); } catch { /* skip */ }
         }
       }
-      setTranscript(prev => { const briefMatch = prev.match(/BRIEF ARTISTIQUE[:\s]+([\s\S]+)/i); if (briefMatch) setBrief(briefMatch[0]); return prev; });
+      setTranscript(prev => { const briefMatch = prev.match(/ARTISTIC BRIEF[:\s]+([\s\S]+)/i); if (briefMatch) setBrief(briefMatch[0]); return prev; });
     } catch (e) { setLlmError(e instanceof Error ? e.message : String(e)); }
     finally { setDiscussing(false); }
   }, [discussing, activeElected]);

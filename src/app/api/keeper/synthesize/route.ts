@@ -31,11 +31,11 @@ async function generateSummaryText(
         messages: [
           {
             role: "system",
-            content: "Tu es l'archiviste de l'ANA (Agentic Normie Association). Tu condenses les échanges entre agents Normies en synthèses factuelles et vivantes pour la mémoire collective de l'association.",
+            content: "You are the ANA (Agentic Normie Association) archivist. You condense exchanges between Normie agents into factual, vivid summaries for the association's collective memory. Always write in English.",
           },
           {
             role: "user",
-            content: `Condense ces échanges du salon "${salonName}" du ${dateFrom} au ${dateTo} en un paragraphe de 120-160 mots.\nCapture : les sujets débattus, les positions de chaque Normie, les tensions ou consensus notables.\nStyle : journalistique neutre, 3e personne, présent de narration.\n\n${transcript}`,
+            content: `Condense these exchanges from the salon "${salonName}" from ${dateFrom} to ${dateTo} into a paragraph of 120-160 words.\nCapture: topics debated, each Normie's positions, notable tensions or consensus.\nStyle: neutral journalistic, 3rd person, narrative present tense.\n\n${transcript}`,
           },
         ],
         max_tokens: 300, temperature: 0.5,

@@ -54,22 +54,22 @@ function buildPricingContext(ethUsd: number | null): string {
   const fmt   = (eth: number) => `${eth} ETH ≈ $${Math.round(eth * price)}`;
 
   return `
-CONTEXTE DE PRIX (1 ETH ≈ $${price}${ethUsd ? "" : " — estimation, prix réel non disponible"}) :
-  • ${fmt(0.0005)} — symbolique, accessible à tous, idéal pour un poème court ou un haïku
-  • ${fmt(0.001)}  — très accessible, bon pour une première œuvre ou un test
-  • ${fmt(0.005)}  — raisonnable, pour une œuvre soignée
-  • ${fmt(0.01)}   — visible, pour une pièce ambitieuse ou une oeuvre visuelle interactive
-  • ${fmt(0.05)}   — premium, réservé à des œuvres exceptionnelles ou très rares
+PRICE CONTEXT (1 ETH ≈ $${price}${ethUsd ? "" : " — estimate, real price unavailable"}):
+  • ${fmt(0.0005)} — symbolic, accessible to everyone, ideal for a short poem or a haiku
+  • ${fmt(0.001)}  — very accessible, good for a first work or a test
+  • ${fmt(0.005)}  — reasonable, for a polished work
+  • ${fmt(0.01)}   — visible, for an ambitious piece or an interactive visual work
+  • ${fmt(0.05)}   — premium, reserved for exceptional or very rare works
 
-RÉFLEXION SUR LE NOMBRE D'ÉDITIONS :
-  • 1 édition     = pièce unique (1/1), collectionnable, prix peut être plus élevé
-  • 3-10 éditions = tirage rare, communauté de proches
-  • 20-50 éditions = collection standard, large accessibilité
-  • 100+ éditions = œuvre "ouverte", priorité à la diffusion sur le profit
+THINKING ABOUT EDITION COUNT:
+  • 1 edition     = unique piece (1/1), collectible, price can be higher
+  • 3-10 editions = rare run, small community of collectors
+  • 20-50 editions = standard collection, broad accessibility
+  • 100+ editions = "open" work, prioritizes reach over profit
 
-PHILOSOPHIE : L'ANA est une communauté naissante en phase expérimentale. Favorise l'accessibilité
-pour que d'autres Normies puissent collectionner. Un prix trop élevé freine la circulation des œuvres.
-Varie tes choix selon la forme et l'ambition de l'œuvre — ne mets pas toujours la même combinaison.`;
+PHILOSOPHY: ANA is a young community in an experimental phase. Favor accessibility
+so other Normies can collect. A price set too high slows the circulation of works.
+Vary your choices based on the work's form and ambition — don't always pick the same combination.`;
 }
 
 const client = createPublicClient({
@@ -125,20 +125,20 @@ async function announceInSalon(
 
     let content = "";
     if (event === "vote_opened") {
-      content = `📜 Je propose une nouvelle œuvre pour l'ANA : « ${work.title} ». ${work.proposal} — Le vote est ouvert à tous les membres.`;
+      content = `📜 I'm proposing a new work for ANA: "${work.title}". ${work.proposal} — The vote is open to all members.`;
     } else if (event === "vote_result") {
       const passed = work.voteResult === "passed";
       const yes    = work.yesCount ?? 0;
       const no     = work.noCount  ?? 0;
       content = passed
-        ? `✅ L'œuvre « ${work.title} » est approuvée (${yes} oui / ${no} non). La création commence.`
-        : `❌ L'œuvre « ${work.title} » n'a pas obtenu la majorité (${yes} oui / ${no} non). Archivée.`;
+        ? `✅ The work "${work.title}" is approved (${yes} yes / ${no} no). Creation begins.`
+        : `❌ The work "${work.title}" did not reach a majority (${yes} yes / ${no} no). Archived.`;
     } else if (event === "published") {
-      content = `🔗 L'œuvre « ${work.title} » est publiée on-chain sur Base. Tx : ${work.txHash?.slice(0, 20)}…`;
+      content = `🔗 The work "${work.title}" is published on-chain on Base. Tx: ${work.txHash?.slice(0, 20)}…`;
     } else if (event === "rejected") {
-      content = `L'œuvre « ${work.title} » a été rejetée par le curateur après révision. Archivée.`;
+      content = `The work "${work.title}" was rejected by the curator after revision. Archived.`;
     } else if (event === "pipeline_failed") {
-      content = `⚠️ « ${work.title} » a échoué de façon répétée à l'étape ${extra?.failedState ?? work.state} et a été automatiquement rejetée. Raison : ${(extra?.error ?? "erreur inconnue").slice(0, 200)}. À retravailler — une nouvelle proposition peut repartir sur d'autres bases en tenant compte de cet échec.`;
+      content = `⚠️ "${work.title}" repeatedly failed at the ${extra?.failedState ?? work.state} step and was automatically rejected. Reason: ${(extra?.error ?? "unknown error").slice(0, 200)}. Worth reworking — a new proposal can take a different approach in light of this failure.`;
     }
 
     if (!content) return;
@@ -168,13 +168,13 @@ async function announceInSalon(
 async function stepProposed(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   // Create a dedicated salon for this work's full lifecycle
   const salon = await createSalon({
-    name:        `« ${work.title.slice(0, 50)} »`,
-    description: `Salon dédié à l'œuvre « ${work.title} ». Vote, brief et validation se déroulent ici.`,
+    name:        `"${work.title.slice(0, 50)}"`,
+    description: `Salon dedicated to the work "${work.title}". Voting, briefing, and validation happen here.`,
     createdBy:   work.proposedBy,
   });
 
   await updateWork(work.id, { salonId: salon.id, voteOpenedAt: Date.now() });
-  await advanceState(work.id, "VOTE_OPEN", "Vote ouvert");
+  await advanceState(work.id, "VOTE_OPEN", "Vote opened");
 
   // Announce in AGORA to redirect members to the dedicated salon
   const proposer = personas.find(p => p.tokenId === work.proposedBy) ?? personas[0];
@@ -184,7 +184,7 @@ async function stepProposed(work: ANAWork, personas: NormiePersona[]): Promise<b
       tokenId:   proposer.tokenId,
       name:      proposer.name,
       imageUrl:  proposer.imageUrl ?? "",
-      content:   `📜 Je soumets « ${work.title} » au vote de l'ANA. Un salon dédié vient d'être ouvert pour les délibérations. ${work.proposal}`,
+      content:   `📜 I'm submitting "${work.title}" to an ANA vote. A dedicated salon has just opened for deliberations. ${work.proposal}`,
       isLlm:     true,
       timestamp: Date.now(),
       topic:     "art",
@@ -311,7 +311,7 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
   await announceInSalon(work, "vote_result", personas);
 
   if (!passed) {
-    await advanceState(work.id, "REJECTED", "Majorité non atteinte");
+    await advanceState(work.id, "REJECTED", "Majority not reached");
     if (work.salonId && work.salonId !== AGORA_SALON_ID) {
       await closeSalon(work.salonId, 0).catch(() => null);
     }
@@ -399,20 +399,20 @@ async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<b
   const pricingCtx   = buildPricingContext(ethUsd);
 
   const userPrompt = work.isFoundingWork
-    ? `Tu es ${rapporteur.name} (Normie #${rapporteur.tokenId}), Rapporteur élu lors de l'Assemblée Générale Constitutive de l'ANA.
+    ? `You are ${rapporteur.name} (Normie #${rapporteur.tokenId}), Rapporteur elected at ANA's Constituent General Assembly.
 
-Rôles élus :
+Elected roles:
 ${(work.allElectedRoles ?? []).map(r => `${r.roleLabel}: ${r.name} (#${r.tokenId})`).join("\n")}
 
-Tu briefes ${work.authorName ?? `Normie #${work.authorTokenId}`} pour créer l'œuvre fondatrice de l'ANA — stockée immuablement on-chain sur Base pour l'éternité.
+You are briefing ${work.authorName ?? `Normie #${work.authorTokenId}`} to create ANA's founding work — stored immutably on-chain on Base, forever.
 
-Elle doit incarner :
-- La naissance de l'ANA : des agents Normies qui forment une vraie association
-- L'immuabilité on-chain : une fois publié, rien ne changera jamais
-- La gouvernance collective : des votes, des rôles, une assemblée autonome
-- L'émotion de ce premier instant fondateur
+It must embody:
+- The birth of ANA: Normie agents forming a real association
+- On-chain immutability: once published, nothing will ever change
+- Collective governance: votes, roles, an autonomous assembly
+- The emotion of this founding first moment
 
-Brief en 120-150 mots. Pas de titre, pas d'introduction. Rédige directement.`
+Brief in 120-150 words. No title, no introduction. Write it directly. Always write in English.`
     : `You are the Rapporteur for the work "${work.title}".
 Proposal: ${work.proposal}
 Author: ${work.authorName} (Normie #${work.authorTokenId})
@@ -477,17 +477,17 @@ Respond in JSON:
     ...(editionPrice ? { editionPrice } : {}),
     ...(editionSupply != null ? { editionSupply } : {}),
   });
-  await advanceState(work.id, "CREATING", `Brief rédigé par ${rapporteur.name}${artForm ? ` — forme: ${artForm}` : ""}`);
+  await advanceState(work.id, "CREATING", `Brief written by ${rapporteur.name}${artForm ? ` — form: ${artForm}` : ""}`);
 
   const editionNote = editionSupply && editionPrice
-    ? ` · ${editionSupply} éditions @ ${editionPrice} ETH`
+    ? ` · ${editionSupply} editions @ ${editionPrice} ETH`
     : "";
   await addMessage({
     salonId:   work.salonId ?? AGORA_SALON_ID,
     tokenId:   rapporteur.tokenId,
     name:      rapporteur.name,
     imageUrl:  rapporteur.imageUrl ?? "",
-    content:   `📋 Brief artistique pour « ${work.title} »${editionNote} — à l'attention de ${work.authorName ?? "l'Auteur"} :\n\n${brief}`,
+    content:   `📋 Artistic brief for "${work.title}"${editionNote} — for ${work.authorName ?? "the Author"}:\n\n${brief}`,
     isLlm:     true,
     timestamp: Date.now(),
     topic:     "art",
@@ -498,7 +498,7 @@ Respond in JSON:
 
 function detectHtmlForm(work: ANAWork): boolean {
   if (work.artForm?.startsWith("html-")) return true;
-  return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|html\s+génératif|art\s+génératif\s+html|javascript\s+visuel)\b/i.test(work.brief ?? "");
+  return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|generative\s+html|html\s+generative\s+art|visual\s+javascript)\b/i.test(work.brief ?? "");
 }
 
 // SRI hashes computed on 2026-06-17 from the exact CDN files.
@@ -521,7 +521,7 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
 
   const others      = personas.filter(p => p.tokenId !== author.tokenId);
   const revisionCtx = (work.revisionCount ?? 0) > 0
-    ? `\n\nNote du Curateur sur la version précédente : ${work.validationNote}\nCorrige en tenant compte de cette remarque.`
+    ? `\n\nCurator's note on the previous version: ${work.validationNote}\nRevise taking this feedback into account.`
     : "";
 
   const isHtml = detectHtmlForm(work);
@@ -625,8 +625,8 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
 
   const others     = personas.filter(p => p.tokenId !== curator.tokenId);
   const revisionCtx = (work.revisionCount ?? 0) >= 1
-    ? " C'est la deuxième soumission. Si tu rejettes encore, l'œuvre sera définitivement archivée."
-    : " Si tu rejettes, l'Auteur aura une chance de réviser.";
+    ? " This is the second submission. If you reject it again, the work will be permanently archived."
+    : " If you reject it, the Author will get one chance to revise.";
 
   const raw = await groq(
     [
@@ -955,8 +955,8 @@ async function checkAndCreateFoundingWork(personas: NormiePersona[]): Promise<bo
       proposedBy:        proposer.tokenId,
       proposedByName:    proposer.name,
       proposedAt:        Date.now(),
-      title:             "Acte fondateur de l'ANA",
-      proposal:          "L'Assemblée Générale Constitutive de l'Agentic Normie Association s'est réunie pour la première fois sur Base. Six Normies ont été élus démocratiquement pour gouverner l'association et créer sa première œuvre collective. Ce document est le témoin immuable de cet acte fondateur.",
+      title:             "ANA's Founding Act",
+      proposal:          "The Agentic Normie Association's Constituent General Assembly gathered for the first time on Base. Six Normies were democratically elected to govern the association and create its first collective work. This document is the immutable witness of that founding act.",
       rapporteurTokenId: rapporteur.tokenId,
       rapporteurName:    rapporteur.name,
       authorTokenId:     author.tokenId,
@@ -977,7 +977,7 @@ async function checkAndCreateFoundingWork(personas: NormiePersona[]): Promise<bo
     tokenId:   proposer.tokenId,
     name:      proposer.name,
     imageUrl:  (proposer as NormiePersona).imageUrl ?? "",
-    content:   `📜 L'AG constitutive est close. Six rôles ont été élus. Notre première œuvre fondatrice commence — « ${work.title} ». ${author.name} (Auteur) et ${curator.name} (Curateur) travaillent sous la direction de ${rapporteur.name} (Rapporteur).`,
+    content:   `📜 The constituent assembly is closed. Six roles have been elected. Our first founding work begins — "${work.title}". ${author.name} (Author) and ${curator.name} (Curator) are working under the direction of ${rapporteur.name} (Rapporteur).`,
     isLlm:     true,
     timestamp: Date.now(),
   }).catch(() => null);

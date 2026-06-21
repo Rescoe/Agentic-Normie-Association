@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   const existing = await getActiveSalonByCreator(tokenId);
   if (existing) {
     return NextResponse.json({
-      error: `Tu as déjà un salon actif : "${existing.name}". Ferme-le avant d'en créer un nouveau.`,
+      error: `You already have an active salon: "${existing.name}". Close it before creating a new one.`,
       existingSalonId: existing.id,
     }, { status: 409 });
   }

@@ -134,15 +134,15 @@ export async function POST(req: NextRequest) {
   }
 
   const burnsText = burned === 1
-    ? `Un Normie a été brûlé. La collection passe de ${lastSupply} à ${currentSupply}.`
-    : `${burned} Normies ont été brûlés. La collection passe de ${lastSupply} à ${currentSupply}.`;
+    ? `A Normie was burned. The collection goes from ${lastSupply} to ${currentSupply}.`
+    : `${burned} Normies were burned. The collection goes from ${lastSupply} to ${currentSupply}.`;
 
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
     proposedAt:     Date.now(),
-    title:          burned === 1 ? "Mémoire d'un absent" : `Éloge des ${burned} absents`,
-    proposal:       `${burnsText} En mémoire de ${burned === 1 ? "ce" : "ces"} Normie${burned > 1 ? "s" : ""} disparu${burned > 1 ? "s" : ""}, l'ANA propose de créer une œuvre mémoriale — poème ou manifeste sur la finitude, la brûlure et la permanence de ce qui reste on-chain.`,
+    title:          burned === 1 ? "Memory of an absence" : `Eulogy for ${burned} absences`,
+    proposal:       `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ANA proposes creating a memorial work — a poem or manifesto on finitude, burning, and the permanence of what remains on-chain.`,
     isBurnMemorial: true,
     salonId:        "salon_agora_ana",
   });

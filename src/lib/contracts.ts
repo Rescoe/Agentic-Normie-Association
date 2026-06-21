@@ -43,11 +43,11 @@ export const ROLES = {
 } as const;
 
 export const ROLE_LABELS: Record<string, string> = {
-  [ROLES.PRESIDENT]:      "Président",
-  [ROLES.VICE_PRESIDENT]: "Vice-Président / Trésorier",
-  [ROLES.SECRETARY]:      "Secrétaire",
-  [ROLES.AUTHOR]:         "Auteur",
-  [ROLES.CURATOR]:        "Curateur",
+  [ROLES.PRESIDENT]:      "President",
+  [ROLES.VICE_PRESIDENT]: "Vice-President / Treasurer",
+  [ROLES.SECRETARY]:      "Secretary",
+  [ROLES.AUTHOR]:         "Author",
+  [ROLES.CURATOR]:        "Curator",
   [ROLES.RAPPORTEUR]:     "Rapporteur",
 };
 
