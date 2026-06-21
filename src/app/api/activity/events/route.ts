@@ -133,7 +133,21 @@ const GC_LABELS: Record<string, string> = {
 
 const CHUNK      = 2_000n;
 const BATCH_SIZE = 20;
-const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history
+const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history since launch
+// Vercel Hobby hard-caps every function at 60s NO MATTER what maxDuration says — there is no
+// "give it more time" fix. Re-scanning the full SCAN_RANGE on every cache miss was the actual
+// bug: with degraded public RPCs, 2M blocks × 17 event types simply cannot finish in 60s, so
+// the route timed out with zero response instead of degrading gracefully.
+// WINDOW bounds how many *new* blocks a single request is allowed to scan — the cache now
+// stores a permanent lastScannedBlock cursor (see CachedPayload) and each request only
+// advances it by one WINDOW. First load after a deploy needs ~10 page loads/cron ticks to
+// fully catch up the 2M-block backlog; every load after that only scans the handful of
+// blocks produced since the last request, which is always fast.
+// Conservative for now — llamarpc (the fast primary) is mid-outage and drpc.org (the
+// fallback) is noticeably slower/flakier under load. Once llamarpc recovers this can
+// safely go back up; catching up the 2M-block backlog just takes more requests at a
+// smaller WINDOW, never a timeout.
+const WINDOW = 100_000n;
 
 async function fetchLogs(
   address: `0x${string}` | `0x${string}`[],
@@ -266,13 +280,18 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 }
 
 // ─── Cache helpers (Neon KV) ──────────────────────────────────────────────────
+// This is no longer a TTL cache — it's a permanent incremental ledger. Each entry
+// records the highest block already scanned (lastScannedBlock); the next request
+// only scans forward from there, bounded by WINDOW. There is nothing to "expire":
+// once an event is found, it stays, and the cursor only ever moves forward.
 
-const CACHE_KEY    = "activity:events:v4"; // bumped — new event types (CollectionDeployed, CollectionInitialized, EditionMinted)
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const CACHE_KEY      = "activity:events:v5"; // bumped — cursor-based schema (lastScannedBlock)
+const MAX_EVENTS_KEPT = 1000; // keep the blob bounded — older events are still in tx_log/on-chain
 
 interface CachedPayload {
-  events:      ActivityEvent[];
-  meta:        { fromBlock: string; toBlock: string; cachedAt: number; cachedUntil: number };
+  events:           ActivityEvent[];
+  lastScannedBlock: string;
+  meta:             { fromBlock: string; toBlock: string; cachedAt: number };
 }
 
 async function readCache(): Promise<CachedPayload | null> {
@@ -281,9 +300,7 @@ async function readCache(): Promise<CachedPayload | null> {
     if (!USE_NEON) return null;
     const raw = await kvGet(CACHE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as CachedPayload;
-    if (Date.now() > parsed.meta.cachedUntil) return null; // expired
-    return parsed;
+    return JSON.parse(raw) as CachedPayload;
   } catch { return null; }
 }
 
@@ -298,30 +315,37 @@ async function writeCache(payload: CachedPayload): Promise<void> {
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET() {
-  // ── 1. Try cache first ────────────────────────────────────────────────────
-  const cached = await readCache();
-  if (cached) {
-    const events = await mergeTxLog(cached.events);
-    console.log(`[activity/events] cache hit — ${cached.events.length} events (+tx_log → ${events.length})`);
-    return NextResponse.json({ ...cached, events }, {
-      headers: { "X-Cache": "HIT" },
-    });
-  }
-
-  // ── 2. Fetch from chain ───────────────────────────────────────────────────
   if (!ADDR.CORE) {
     return NextResponse.json({ events: [], meta: null, error: "Contracts not configured" });
   }
 
   try {
     const latest = await rpc.getBlockNumber();
+    const cached = await readCache();
 
-    // Cover SCAN_RANGE blocks (~11 days on Base at 2s/block).
-    // ANA contracts were deployed in June 2025 — 500K blocks is more than enough.
-    // Keeping this tight avoids rate-limiting the public Base RPC.
-    const from = latest > SCAN_RANGE ? latest - SCAN_RANGE : 0n;
+    // First-ever run: floor is SCAN_RANGE blocks back (covers since ANA's launch).
+    // Every run after that: resume exactly where the last one left off.
+    const floor = latest > SCAN_RANGE ? latest - SCAN_RANGE : 0n;
+    const lastScanned = cached?.lastScannedBlock ? BigInt(cached.lastScannedBlock) : floor - 1n;
+    const from = lastScanned + 1n > floor ? lastScanned + 1n : floor;
 
-    console.log(`[activity/events] fetching blocks ${from}–${latest} (${latest - from} blocks)…`);
+    if (from > latest) {
+      // Already fully caught up and no new blocks since the last request — skip
+      // RPC entirely, just merge tx_log on top of what's already accumulated.
+      const events = await mergeTxLog(cached?.events ?? []);
+      console.log(`[activity/events] up to date at block ${latest} — ${cached?.events.length ?? 0} events (+tx_log → ${events.length})`);
+      return NextResponse.json({
+        events,
+        meta: { fromBlock: String(floor), toBlock: String(latest), cachedAt: Date.now() },
+      }, { headers: { "X-Cache": "UP_TO_DATE" } });
+    }
+
+    // Bounded window — never scans more than WINDOW blocks per request, regardless
+    // of how far behind the cursor is. Catching up a 2M-block backlog just takes a
+    // handful of requests instead of one request that can never finish.
+    const to = from + WINDOW - 1n > latest ? latest : from + WINDOW - 1n;
+
+    console.log(`[activity/events] fetching blocks ${from}–${to} (${to - from + 1n} blocks, caught up to ${to}/${latest})…`);
     const t0 = Date.now();
 
     // ANAEditions collections are deployed dynamically (one per work) — there's no
@@ -347,23 +371,23 @@ export async function GET() {
       factoryLogs, collectionLogs, collectionDeployedLogs,
       collectionInitLogs, editionMintedLogs,
     ] = await Promise.all([
-      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.MEMBER_REGISTERED,  from, latest) : [],
-      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.ROLE_GRANTED,       from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_OPENED,     from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_CLOSED,     from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.VOTE_CAST,          from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLE_RESOLVED,      from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLES_RESOLVED,     from, latest) : [],
-      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_PUBLISHED,     from, latest) : [],
-      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_SESSION_INIT,  from, latest) : [],
-      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_ARCHIVED,      from, latest) : [],
-      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_SCHEDULED,       from, latest) : [],
-      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_TRIGGERED,       from, latest) : [],
-      ADDR.FR   ? fetchLogs(ADDR.FR,   EV.FACTORY_REGISTERED, from, latest) : [],
-      ADDR.CF    ? fetchLogs(ADDR.CF,    EV.COLLECTION_CREATED,    from, latest) : [],
-      ADDR.ANACF ? fetchLogs(ADDR.ANACF, EV.COLLECTION_DEPLOYED,   from, latest) : [],
-      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.COLLECTION_INITIALIZED, from, latest) : [],
-      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.EDITION_MINTED,         from, latest) : [],
+      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.MEMBER_REGISTERED,  from, to) : [],
+      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.ROLE_GRANTED,       from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_OPENED,     from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_CLOSED,     from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.VOTE_CAST,          from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLE_RESOLVED,      from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLES_RESOLVED,     from, to) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_PUBLISHED,     from, to) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_SESSION_INIT,  from, to) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_ARCHIVED,      from, to) : [],
+      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_SCHEDULED,       from, to) : [],
+      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_TRIGGERED,       from, to) : [],
+      ADDR.FR   ? fetchLogs(ADDR.FR,   EV.FACTORY_REGISTERED, from, to) : [],
+      ADDR.CF    ? fetchLogs(ADDR.CF,    EV.COLLECTION_CREATED,    from, to) : [],
+      ADDR.ANACF ? fetchLogs(ADDR.ANACF, EV.COLLECTION_DEPLOYED,   from, to) : [],
+      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.COLLECTION_INITIALIZED, from, to) : [],
+      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.EDITION_MINTED,         from, to) : [],
     ]);
 
     console.log(`[activity/events] fetch done in ${Date.now() - t0}ms`);
@@ -547,29 +571,28 @@ export async function GET() {
       });
     });
 
-    // Sort: most recent first
-    events.sort((a, b) => {
+    // Merge with whatever was already accumulated (this window's new events come first
+    // since we always scan forward), cap the blob so it doesn't grow unbounded — older
+    // events past MAX_EVENTS_KEPT are still recoverable from tx_log / the chain itself.
+    const allEvents = [...events, ...(cached?.events ?? [])].slice(0, MAX_EVENTS_KEPT);
+    allEvents.sort((a, b) => {
       const diff = BigInt(b.blockNumber) - BigInt(a.blockNumber);
       return diff > 0n ? 1 : diff < 0n ? -1 : 0;
     });
 
     // ── 4. Cache and return ────────────────────────────────────────────────
-    const now  = Date.now();
-    const meta = {
-      fromBlock:   String(from),
-      toBlock:     String(latest),
-      cachedAt:    now,
-      cachedUntil: now + CACHE_TTL_MS,
+    const payload: CachedPayload = {
+      events:           allEvents,
+      lastScannedBlock: String(to),
+      meta:             { fromBlock: String(floor), toBlock: String(to), cachedAt: Date.now() },
     };
+    await writeCache(payload);
 
-    const payload: CachedPayload = { events, meta };
-    await writeCache(payload); // cache stores pure chain data — tx_log is merged in fresh on every request
-
-    const merged = await mergeTxLog(events);
-    console.log(`[activity/events] ${events.length} events — cache miss, chain fetched in ${Date.now() - t0}ms (+tx_log → ${merged.length})`);
+    const merged = await mergeTxLog(allEvents);
+    console.log(`[activity/events] +${events.length} new events (window ${from}-${to}/${latest}) in ${Date.now() - t0}ms — ${allEvents.length} total (+tx_log → ${merged.length})`);
 
     return NextResponse.json({ ...payload, events: merged }, {
-      headers: { "X-Cache": "MISS" },
+      headers: { "X-Cache": to < latest ? "CATCHING_UP" : "MISS" },
     });
 
   } catch (err) {
