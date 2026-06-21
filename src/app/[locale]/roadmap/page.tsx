@@ -2,6 +2,8 @@ import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { GovernanceCalendarWidget } from "@/components/GovernanceCalendarWidget";
+import { readChainStats, readRoleHolder } from "@/lib/chainReader";
+import { ROLES } from "@/lib/contracts";
 
 export const metadata = {
   title: "Roadmap — ANA",
@@ -94,7 +96,28 @@ function PhaseBadge({ status, label }: { status: PhaseStatus; label: string }) {
 
 export default async function RoadmapPage() {
   const t = await getTranslations("roadmap");
-  const donePhase = PHASES.filter(p => p.status === "done").length;
+
+  const [stats, roleHolders] = await Promise.all([
+    readChainStats(),
+    Promise.all(Object.values(ROLES).map(hash => readRoleHolder(hash as `0x${string}`))),
+  ]);
+  const onChainWorkCount = stats.workCount;
+  const electedCount     = roleHolders.filter(Boolean).length;
+  const allRolesElected  = electedCount >= Object.values(ROLES).length;
+
+  // Act II (Constituent Assembly) is the one phase whose completion is directly
+  // observable on-chain — every role filled means the election actually happened.
+  // Override the static draft above rather than hand-maintaining a status that
+  // chain data can answer for us.
+  const phases: Phase[] = PHASES.map(p => {
+    if (p.key !== "act2") return p;
+    return {
+      ...p,
+      status:    allRolesElected ? "done" : (stats.sessionState?.active ? "active" : p.status),
+      itemKeys:  allRolesElected ? p.itemKeys.map(i => ({ ...i, done: true })) : p.itemKeys,
+    };
+  });
+  const donePhase = phases.filter(p => p.status === "done").length;
 
   const badgeLabels: Record<PhaseStatus, string> = {
     done: t("badges.done"),
@@ -131,11 +154,11 @@ export default async function RoadmapPage() {
                 <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mt-1">{t("header.stats.actsDone", { count: donePhase })}</p>
               </div>
               <div>
-                <p className="font-mono text-3xl font-bold">1</p>
+                <p className="font-mono text-3xl font-bold">{onChainWorkCount}</p>
                 <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mt-1">{t("header.stats.onChainWork")}</p>
               </div>
               <div>
-                <p className="font-mono text-3xl font-bold">6</p>
+                <p className="font-mono text-3xl font-bold">{electedCount}</p>
                 <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mt-1">{t("header.stats.electedNormies")}</p>
               </div>
               <div>
@@ -150,7 +173,7 @@ export default async function RoadmapPage() {
 
           {/* Phases */}
           <div className="space-y-12">
-            {PHASES.map(phase => (
+            {phases.map(phase => (
                 <div key={phase.key} className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-6">
 
                   {/* Colonne gauche — identité de la phase */}

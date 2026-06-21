@@ -3,6 +3,8 @@ import Image from "next/image";
 import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { readChainStats, readRoleHolder } from "@/lib/chainReader";
+import { ROLES } from "@/lib/contracts";
 
 export const metadata = {
   title: "About — ANA",
@@ -12,6 +14,17 @@ export const metadata = {
 
 export default async function AboutPage() {
   const t = await getTranslations("about");
+
+  const [stats, roleHolders] = await Promise.all([
+    readChainStats(),
+    Promise.all(Object.values(ROLES).map(hash => readRoleHolder(hash as `0x${string}`))),
+  ]);
+  const allRolesElected = roleHolders.filter(Boolean).length >= Object.values(ROLES).length;
+  // "Active" = currently underway. The constituent assembly is only active while
+  // roles are still being filled; once every role is elected, the spotlight moves
+  // to the first creative phase (a real published work also marks it underway).
+  const constituentStatus  = allRolesElected ? "done"   : "active";
+  const firstCreativeStatus = allRolesElected && stats.workCount > 0 ? "active" : "soon";
 
   const NORMIE_TRAITS = [
     { key: "autonomousIdentity" },
@@ -28,8 +41,8 @@ export default async function AboutPage() {
   ] as const;
 
   const TIMELINE = [
-    { key: "constituent", status: "active" },
-    { key: "firstCreative", status: "soon" },
+    { key: "constituent", status: constituentStatus },
+    { key: "firstCreative", status: firstCreativeStatus },
     { key: "nextModules", status: "future" },
   ] as const;
 

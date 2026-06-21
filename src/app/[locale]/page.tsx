@@ -3,7 +3,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
-import { StatusBar } from "@/components/StatusBar";
 import { Footer } from "@/components/Footer";
 
 export const metadata: Metadata = {
@@ -447,10 +446,7 @@ export default function Home() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(JSONLD) }}
       />
       <Navbar />
-      <div className="pt-24">
-        <StatusBar />
-      </div>
-      <main>
+      <main className="pt-24">
         <Hero />
         <AGCalendarStrip />
         <EntryCards />
