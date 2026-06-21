@@ -1,35 +1,9 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
-
-const NAV_GROUPS = [
-  {
-    label: "L'association",
-    links: [
-      { href: "/about",        label: "À propos" },
-      { href: "/governance",   label: "Gouvernance" },
-      { href: "/architecture", label: "Architecture" },
-      { href: "/roadmap",      label: "Roadmap" },
-    ],
-  },
-  {
-    label: "Participer",
-    links: [
-      { href: "/register", label: "Inscrire mon Normie" },
-      { href: "/members",  label: "Membres fondateurs" },
-      { href: "/assembly", label: "Assemblée constituante" },
-      { href: "/galerie",    label: "Œuvres" },
-    ],
-  },
-  {
-    label: "Externe",
-    links: [
-      { href: "https://normies.art",               label: "Normies.art ↗",  external: true },
-      { href: "https://x.com/RoubziArt",           label: "@RoubziArt ↗",   external: true },
-      { href: "https://basescan.org",              label: "Basescan ↗",     external: true },
-    ],
-  },
-];
 
 const CONTRACTS = [
   { name: "AssociationCore",     addr: CONTRACT_ADDRESSES.AssociationCore     },
@@ -39,6 +13,37 @@ const CONTRACTS = [
 ];
 
 export function Footer() {
+  const t = useTranslations("footer");
+
+  const NAV_GROUPS = [
+    {
+      label: t("theAssociation"),
+      links: [
+        { href: "/about",        label: t("about") },
+        { href: "/governance",   label: t("governance") },
+        { href: "/architecture", label: t("architecture") },
+        { href: "/roadmap",      label: t("roadmap") },
+      ],
+    },
+    {
+      label: t("participate"),
+      links: [
+        { href: "/register", label: t("registerMyNormie") },
+        { href: "/members",  label: t("foundingMembers") },
+        { href: "/assembly", label: t("constituentAssembly") },
+        { href: "/galerie",    label: t("works") },
+      ],
+    },
+    {
+      label: t("external"),
+      links: [
+        { href: "https://normies.art",               label: "Normies.art ↗",  external: true },
+        { href: "https://x.com/RoubziArt",           label: "@RoubziArt ↗",   external: true },
+        { href: "https://basescan.org",              label: "Basescan ↗",     external: true },
+      ],
+    },
+  ];
+
   return (
     <footer className="border-t border-[--border] bg-[--bg-card]">
       <div className="max-w-6xl mx-auto px-6 py-14">
@@ -60,12 +65,12 @@ export function Footer() {
             </Link>
             <p className="text-xs text-[--fg-muted] leading-relaxed max-w-[200px]">
               Agentic Normie Association.<br />
-              Institution culturelle on-chain.
+              {t("onChainCulturalInstitution")}
             </p>
             <div className="space-y-1 font-mono text-xs text-[--fg-muted]">
-              <p>Base mainnet — contrats</p>
-              <p>Ethereum mainnet — Normies</p>
-              <p>Tout onchain, aucune dépendance</p>
+              <p>{t("baseMainnetContracts")}</p>
+              <p>{t("ethereumMainnetNormies")}</p>
+              <p>{t("everythingOnChainNoDependency")}</p>
             </div>
           </div>
 
@@ -105,7 +110,7 @@ export function Footer() {
         {/* Contrats déployés */}
         <div className="mt-12 pt-8 border-t border-[--border] space-y-3">
           <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
-            Contrats — Base mainnet
+            {t("contractsBaseMainnet")}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {CONTRACTS.map((c) => (
@@ -126,7 +131,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="mt-6 pt-6 border-t border-[--border] flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-mono text-xs text-[--fg-muted]">
-            ANA · Hackathon 2026 · Open source ·{" "}
+            ANA · {t("hackathon2026")} · {t("openSource")} ·{" "}
             <a
               href="https://x.com/RoubziArt"
               target="_blank"
@@ -137,7 +142,7 @@ export function Footer() {
             </a>
           </p>
           <p className="font-mono text-xs text-[--fg-muted]">
-            AssociationCore immuable · modules remplaçables · tout onchain
+            {t("immutableAssociationCoreNote")}
           </p>
         </div>
       </div>

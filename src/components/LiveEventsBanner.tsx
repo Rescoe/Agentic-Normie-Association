@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useTranslations } from "next-intl";
 
 interface ActiveWork {
   id: string;
@@ -19,39 +20,45 @@ interface StatusData {
   activeWorks: ActiveWork[];
 }
 
-const STATE_LABELS: Record<string, string> = {
-  PROPOSED:   "proposée",
-  VOTING:     "en vote",
-  BRIEFING:   "brief en cours",
-  CREATING:   "création en cours",
-  PUBLISHING: "publication",
-  PUBLISHED:  "publiée",
-  REVISION:   "en révision",
-  REJECTED:   "rejetée",
-};
+function useStateLabels(): Record<string, string> {
+  const t = useTranslations("liveEvents");
+  return {
+    PROPOSED:   t("stateProposed"),
+    VOTING:     t("stateVoting"),
+    BRIEFING:   t("stateBriefing"),
+    CREATING:   t("stateCreating"),
+    PUBLISHING: t("statePublishing"),
+    PUBLISHED:  t("statePublished"),
+    REVISION:   t("stateRevision"),
+    REJECTED:   t("stateRejected"),
+  };
+}
 
 function SessionCountdown({ deadline }: { deadline: number }) {
+  const t = useTranslations("liveEvents");
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(timer);
   }, []);
 
   const remaining = deadline - now;
-  if (remaining <= 0) return <span>AG constitutive · session expirée</span>;
+  if (remaining <= 0) return <span>{t("constituentAgSessionExpired")}</span>;
 
   const m = Math.floor(remaining / 60);
   const s = remaining % 60;
   return (
     <span>
-      AG constitutive · fermeture dans{" "}
+      {t("constituentAgClosingIn")}{" "}
       <span className="font-bold">{m}m {String(s).padStart(2, "0")}s</span>
     </span>
   );
 }
 
 export function LiveEventsBanner() {
+  const t = useTranslations("liveEvents");
+  const STATE_LABELS = useStateLabels();
   const [status, setStatus] = useState<StatusData | null>(null);
 
   const fetchStatus = useCallback(async () => {
@@ -76,7 +83,7 @@ export function LiveEventsBanner() {
   if (status.sessionActive) {
     // countdown rendered separately below
   } else if (status.sessionPhase) {
-    segments.push(`Phase : ${status.sessionPhase}`);
+    segments.push(t("phaseLabel", { phase: status.sessionPhase }));
   }
 
   if (status.activeWorks.length > 0) {
@@ -88,11 +95,11 @@ export function LiveEventsBanner() {
     }
   }
 
-  segments.push(`${status.memberCount} membre${status.memberCount !== 1 ? "s" : ""} fondateur${status.memberCount !== 1 ? "s" : ""}`);
+  segments.push(t("founderMemberCount", { count: status.memberCount }));
 
   // Always show when deployed — even without active session/works
   const hasActivity = status.sessionActive || status.activeWorks.length > 0;
-  const label = hasActivity ? "🔴 Live" : "ANA";
+  const label = hasActivity ? `🔴 ${t("live")}` : "ANA";
 
   // If nothing live, show minimal static info only
   if (!hasActivity) {
@@ -104,17 +111,17 @@ export function LiveEventsBanner() {
           </span>
           <div className="flex-1 overflow-hidden relative">
             <div className="flex items-center gap-8 px-4 animate-marquee whitespace-nowrap">
-              <span>Phase : {status.sessionPhase}</span>
-              <span>{status.memberCount} membre{status.memberCount !== 1 ? "s" : ""} fondateur{status.memberCount !== 1 ? "s" : ""}</span>
+              <span>{t("phaseLabel", { phase: status.sessionPhase })}</span>
+              <span>{t("founderMemberCount", { count: status.memberCount })}</span>
               {status.workCount != null && status.workCount > 0 && (
-                <span>{status.workCount} œuvre{status.workCount > 1 ? "s" : ""} on-chain</span>
+                <span>{t("onChainWorkCount", { count: status.workCount })}</span>
               )}
               <span>Agentic Normie Association · Base</span>
               {/* duplicate */}
-              <span>Phase : {status.sessionPhase}</span>
-              <span>{status.memberCount} membre{status.memberCount !== 1 ? "s" : ""} fondateur{status.memberCount !== 1 ? "s" : ""}</span>
+              <span>{t("phaseLabel", { phase: status.sessionPhase })}</span>
+              <span>{t("founderMemberCount", { count: status.memberCount })}</span>
               {status.workCount != null && status.workCount > 0 && (
-                <span>{status.workCount} œuvre{status.workCount > 1 ? "s" : ""} on-chain</span>
+                <span>{t("onChainWorkCount", { count: status.workCount })}</span>
               )}
               <span>Agentic Normie Association · Base</span>
             </div>

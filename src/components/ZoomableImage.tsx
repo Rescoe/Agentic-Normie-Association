@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 
 interface Props {
   src:  string;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function ZoomableImage({ src, alt, className = "" }: Props) {
+  const t = useTranslations("zoomableImage");
   const [open, setOpen] = useState(false);
 
   // Close on Escape
@@ -45,7 +47,7 @@ export function ZoomableImage({ src, alt, className = "" }: Props) {
           />
           <button
             onClick={() => setOpen(false)}
-            aria-label="Fermer"
+            aria-label={t("close")}
             className="absolute top-4 right-4 text-white/60 hover:text-white font-mono text-xs border border-white/20 px-3 py-1.5 hover:border-white/60 transition-colors"
           >
             ESC ×

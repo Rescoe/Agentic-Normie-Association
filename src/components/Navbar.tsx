@@ -6,51 +6,58 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useDisconnect } from "wagmi";
+import { useTranslations } from "next-intl";
 import { LiveEventsBanner } from "@/components/LiveEventsBanner";
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
 
-const NAV = [
-  {
-    label: "Association",
-    href:  "/association",
-    children: [
-      { href: "/register",    label: "Inscrire mon Normie",  desc: "Rejoindre l'ANA on-chain" },
-      { href: "/members",     label: "Membres",              desc: "Les Normies inscrits" },
-      { href: "/governance",  label: "Gouvernance",          desc: "Règles et principes" },
-      { href: "/assembly",    label: "Assemblée",            desc: "Sessions et votes" },
-    ],
-  },
-  {
-    label: "Observer",
-    href:  "/observer",
-    children: [
-      { href: "/salon",    label: "Salon des Normies", desc: "Discussions des agents" },
-      { href: "/activity", label: "Activité on-chain", desc: "Flux d'événements live" },
-    ],
-  },
-  {
-    label:    "Galerie",
-    href:     "/galerie",
-    children: null,
-  },
-  {
-    label: "Docs",
-    href:  "/docs",
-    children: [
-      { href: "/docs",              label: "Vue d'ensemble",        desc: "Architecture de l'écosystème" },
-      { href: "/docs/api",          label: "API ANA",               desc: "Endpoints, formats, exemples" },
-      { href: "/docs/contracts",    label: "Contrats",              desc: "Adresses, ABIs, lecture on-chain" },
-      { href: "/docs/gouvernance",  label: "Gouvernance technique", desc: "Sessions, votes, rôles — détail" },
-      { href: "/docs/creation",     label: "Création",              desc: "Du vote à l'œuvre on-chain" },
-      { href: "/docs/security",     label: "Sécurité",              desc: "SRI, CSP, sandbox — modèle de confiance" },
-    ],
-  },
-];
+function useNav() {
+  const t = useTranslations("nav");
+  return [
+    {
+      label: t("association"),
+      href:  "/association",
+      children: [
+        { href: "/register",    label: t("registerMyNormie"),  desc: t("joinAnaOnChain") },
+        { href: "/members",     label: t("members"),              desc: t("registeredNormies") },
+        { href: "/governance",  label: t("governance"),          desc: t("rulesAndPrinciples") },
+        { href: "/assembly",    label: t("assembly"),            desc: t("sessionsAndVotes") },
+      ],
+    },
+    {
+      label: t("observe"),
+      href:  "/observer",
+      children: [
+        { href: "/salon",    label: t("normieSalon"), desc: t("agentDiscussions") },
+        { href: "/activity", label: t("onChainActivity"), desc: t("liveEventStream") },
+      ],
+    },
+    {
+      label:    t("gallery"),
+      href:     "/galerie",
+      children: null,
+    },
+    {
+      label: t("docs"),
+      href:  "/docs",
+      children: [
+        { href: "/docs",              label: t("overview"),        desc: t("ecosystemArchitecture") },
+        { href: "/docs/api",          label: t("anaApi"),               desc: t("endpointsFormatsExamples") },
+        { href: "/docs/contracts",    label: t("contracts"),              desc: t("addressesAbisOnChainReads") },
+        { href: "/docs/gouvernance",  label: t("technicalGovernance"), desc: t("sessionsVotesRolesDetail") },
+        { href: "/docs/creation",     label: t("creation"),              desc: t("fromVoteToOnChainWork") },
+        { href: "/docs/security",     label: t("security"),              desc: t("sriCspSandboxTrustModel") },
+      ],
+    },
+  ];
+}
+
+type NavType = ReturnType<typeof useNav>;
 
 // ─── CopyButton ───────────────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
+  const t = useTranslations("nav");
   const [copied, setCopied] = useState(false);
   const copy = useCallback(async () => {
     await navigator.clipboard.writeText(text);
@@ -64,7 +71,7 @@ function CopyButton({ text }: { text: string }) {
     >
       <span className="text-[--fg-muted] truncate">{text.slice(0, 10)}…{text.slice(-8)}</span>
       <span className={`shrink-0 ml-2 ${copied ? "text-green-600" : "text-[--fg-muted] group-hover:text-[--fg]"}`}>
-        {copied ? "✓ copié" : "copier"}
+        {copied ? t("copied") : t("copy")}
       </span>
     </button>
   );
@@ -73,6 +80,7 @@ function CopyButton({ text }: { text: string }) {
 // ─── WalletButton ─────────────────────────────────────────────────────────────
 
 function WalletButton() {
+  const t = useTranslations("nav");
   const { disconnect } = useDisconnect();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -107,7 +115,7 @@ function WalletButton() {
               onClick={openConnectModal}
               className="font-mono text-xs border border-[--fg] text-[--fg] px-4 py-2 hover:bg-[--fg] hover:text-[--bg] transition-colors"
             >
-              Connecter
+              {t("connect")}
             </button>
           );
         }
@@ -118,7 +126,7 @@ function WalletButton() {
               onClick={openChainModal}
               className="font-mono text-xs border border-red-400 text-red-500 px-4 py-2 hover:bg-red-50 transition-colors"
             >
-              ⚠ Réseau incorrect
+              ⚠ {t("wrongNetwork")}
             </button>
           );
         }
@@ -154,7 +162,7 @@ function WalletButton() {
             {open && (
               <div className="absolute right-0 top-[calc(100%+6px)] z-50 w-72 bg-[--bg] border border-[--border]">
                 <div className="px-4 py-3 border-b border-[--border] space-y-0.5">
-                  <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">Wallet connecté</p>
+                  <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">{t("walletConnected")}</p>
                   <p className="font-mono text-sm font-bold">{account.displayName}</p>
                   {account.displayBalance && <p className="font-mono text-xs text-[--fg-muted]">{account.displayBalance}</p>}
                   <div className="flex items-center gap-1.5 pt-0.5">
@@ -169,7 +177,7 @@ function WalletButton() {
                     target="_blank" rel="noopener noreferrer"
                     className="w-full text-left font-mono text-xs px-3 py-2 hover:bg-[--bg-card] transition-colors flex items-center gap-2"
                   >
-                    <span>Voir sur Basescan</span><span className="text-[--fg-muted]">↗</span>
+                    <span>{t("viewOnBasescan")}</span><span className="text-[--fg-muted]">↗</span>
                   </a>
                   <Link
                     href="/register"
@@ -177,14 +185,14 @@ function WalletButton() {
                     className="w-full text-left font-mono text-xs px-3 py-2 hover:bg-[--bg-card] transition-colors flex items-center gap-2"
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />
-                    <span>Inscrire mes Normies</span>
+                    <span>{t("registerMyNormies")}</span>
                   </Link>
                   <div className="border-t border-[--border] mt-1 pt-1">
                     <button
                       onClick={() => { disconnect(); setOpen(false); }}
                       className="w-full text-left font-mono text-xs px-3 py-2 text-red-600 hover:bg-red-50 transition-colors"
                     >
-                      Déconnecter
+                      {t("disconnect")}
                     </button>
                   </div>
                 </div>
@@ -203,7 +211,7 @@ function DropdownMenu({
   item,
   onClose,
 }: {
-  item: (typeof NAV)[number];
+  item: NavType[number];
   onClose: () => void;
 }) {
   if (!item.children) return null;
@@ -226,7 +234,7 @@ function DropdownMenu({
 
 // ─── Desktop nav item ─────────────────────────────────────────────────────────
 
-function NavItem({ item }: { item: (typeof NAV)[number] }) {
+function NavItem({ item }: { item: NavType[number] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -279,7 +287,9 @@ function NavItem({ item }: { item: (typeof NAV)[number] }) {
 // ─── Mobile menu ──────────────────────────────────────────────────────────────
 
 function MobileMenu({ onClose }: { onClose: () => void }) {
+  const t = useTranslations("nav");
   const pathname = usePathname();
+  const NAV = useNav();
 
   return (
     <div className="fixed inset-0 z-40 bg-[--bg] pt-16 overflow-y-auto">
@@ -290,7 +300,7 @@ function MobileMenu({ onClose }: { onClose: () => void }) {
           onClick={onClose}
           className={`block font-mono text-sm py-3 border-b border-[--border] ${pathname === "/" ? "text-[--fg] font-bold" : "text-[--fg-muted]"}`}
         >
-          Accueil
+          {t("home")}
         </Link>
 
         {NAV.map(item => (
@@ -333,7 +343,7 @@ function MobileMenu({ onClose }: { onClose: () => void }) {
             className="flex items-center justify-center gap-2 bg-[--fg] text-[--bg] font-mono text-sm px-6 py-3 hover:opacity-80 transition-opacity"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />
-            Inscrire mon Normie
+            {t("registerMyNormie")}
           </Link>
         </div>
 
@@ -354,6 +364,8 @@ function MobileMenu({ onClose }: { onClose: () => void }) {
 // ─── Navbar ───────────────────────────────────────────────────────────────────
 
 export function Navbar() {
+  const t = useTranslations("nav");
+  const NAV = useNav();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Lock body scroll when mobile menu is open
@@ -393,7 +405,7 @@ export function Navbar() {
               className="flex items-center gap-1.5 font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 transition-opacity"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />
-              S'inscrire
+              {t("signUp")}
             </Link>
 
             <WalletButton />
@@ -404,7 +416,7 @@ export function Navbar() {
             <WalletButton />
             <button
               onClick={() => setMobileOpen(o => !o)}
-              aria-label={mobileOpen ? "Fermer le menu" : "Ouvrir le menu"}
+              aria-label={mobileOpen ? t("closeMenu") : t("openMenu")}
               className="p-2 text-[--fg] border border-[--border] bg-[--bg-card] hover:bg-[--bg] transition-colors"
             >
               {mobileOpen ? (

@@ -3,6 +3,7 @@
 import { useReadContract, useWriteContract, useWaitForTransactionReceipt, useAccount } from "wagmi";
 import { useState, useEffect } from "react";
 import { keccak256, stringToBytes } from "viem";
+import { useTranslations } from "next-intl";
 import { GOVERNANCE_CALENDAR_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -11,14 +12,17 @@ const CAL_ADDR  = CONTRACT_ADDRESSES.GovernanceCalendar as `0x${string}`;
 const deployed  = !!CONTRACT_ADDRESSES.GovernanceCalendar;
 
 // Mirror of contract constants
-const EVENT_TYPES: Record<string, { label: string; color: string }> = {
-  [keccak256(stringToBytes("INSCRIPTION_OPEN"))]:  { label: "Inscriptions",      color: "bg-blue-100 text-blue-700 border-blue-200" },
-  [keccak256(stringToBytes("INSCRIPTION_CLOSE"))]: { label: "Clôture inscriptions", color: "bg-orange-100 text-orange-700 border-orange-200" },
-  [keccak256(stringToBytes("ELECTION"))]:          { label: "Élection",          color: "bg-purple-100 text-purple-700 border-purple-200" },
-  [keccak256(stringToBytes("GENERAL_ASSEMBLY"))]:  { label: "Assemblée générale", color: "bg-green-100 text-green-700 border-green-200" },
-  [keccak256(stringToBytes("WORK_SESSION"))]:      { label: "Session de création", color: "bg-yellow-100 text-yellow-700 border-yellow-200" },
-  [keccak256(stringToBytes("BURN_CREATION"))]:     { label: "Création burn",      color: "bg-red-100 text-red-700 border-red-200" },
-};
+function useEventTypes(): Record<string, { label: string; color: string }> {
+  const t = useTranslations("governanceWidget");
+  return {
+    [keccak256(stringToBytes("INSCRIPTION_OPEN"))]:  { label: t("eventInscriptions"),       color: "bg-blue-100 text-blue-700 border-blue-200" },
+    [keccak256(stringToBytes("INSCRIPTION_CLOSE"))]: { label: t("eventInscriptionsClose"),  color: "bg-orange-100 text-orange-700 border-orange-200" },
+    [keccak256(stringToBytes("ELECTION"))]:          { label: t("eventElection"),           color: "bg-purple-100 text-purple-700 border-purple-200" },
+    [keccak256(stringToBytes("GENERAL_ASSEMBLY"))]:  { label: t("eventGeneralAssembly"),    color: "bg-green-100 text-green-700 border-green-200" },
+    [keccak256(stringToBytes("WORK_SESSION"))]:      { label: t("eventWorkSession"),        color: "bg-yellow-100 text-yellow-700 border-yellow-200" },
+    [keccak256(stringToBytes("BURN_CREATION"))]:     { label: t("eventBurnCreation"),       color: "bg-red-100 text-red-700 border-red-200" },
+  };
+}
 
 interface CalendarEvent {
   id:              bigint;
@@ -35,35 +39,35 @@ interface CalendarEvent {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatDate(ts: bigint): string {
-  return new Date(Number(ts) * 1000).toLocaleDateString("fr-FR", {
+  return new Date(Number(ts) * 1000).toLocaleDateString("en-US", {
     day: "numeric", month: "long", year: "numeric"
   });
 }
 
 function formatTime(ts: bigint): string {
-  return new Date(Number(ts) * 1000).toLocaleTimeString("fr-FR", {
+  return new Date(Number(ts) * 1000).toLocaleTimeString("en-US", {
     hour: "2-digit", minute: "2-digit", timeZoneName: "short"
   });
 }
 
-function formatCountdown(ts: bigint): string {
+function formatCountdown(ts: bigint, t: ReturnType<typeof useTranslations>): string {
   const diff = Number(ts) - Math.floor(Date.now() / 1000);
-  if (diff <= 0) return "Dû maintenant";
+  if (diff <= 0) return t("dueNow");
   const days    = Math.floor(diff / 86400);
   const hours   = Math.floor((diff % 86400) / 3600);
   const minutes = Math.floor((diff % 3600) / 60);
-  if (days > 0) return `dans ${days}j ${hours}h`;
-  if (hours > 0) return `dans ${hours}h ${minutes}min`;
-  return `dans ${minutes}min`;
+  if (days > 0) return t("inDaysHours", { days, hours });
+  if (hours > 0) return t("inHoursMinutes", { hours, minutes });
+  return t("inMinutes", { minutes });
 }
 
-function formatPeriod(secs: bigint): string {
+function formatPeriod(secs: bigint, t: ReturnType<typeof useTranslations>): string {
   const s = Number(secs);
-  if (s === 0) return "Unique";
-  if (s % (90 * 86400) === 0) return `Tous les ${s / (90 * 86400) * 90}j`;
-  if (s % (30 * 86400) === 0) return `Tous les ${s / (30 * 86400) * 30}j`;
-  if (s % 86400 === 0) return `Tous les ${s / 86400}j`;
-  return `Toutes les ${Math.round(s / 3600)}h`;
+  if (s === 0) return t("periodUnique");
+  if (s % (90 * 86400) === 0) return t("periodEveryDays", { days: s / (90 * 86400) * 90 });
+  if (s % (30 * 86400) === 0) return t("periodEveryDays", { days: s / (30 * 86400) * 30 });
+  if (s % 86400 === 0) return t("periodEveryDays", { days: s / 86400 });
+  return t("periodEveryHours", { hours: Math.round(s / 3600) });
 }
 
 // ─── EventRow ─────────────────────────────────────────────────────────────────
@@ -77,15 +81,17 @@ function EventRow({
   isOwner: boolean;
   onTrigger: (id: bigint) => void;
 }) {
+  const t = useTranslations("governanceWidget");
+  const EVENT_TYPES = useEventTypes();
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
-    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 30_000);
-    return () => clearInterval(t);
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 30_000);
+    return () => clearInterval(id);
   }, []);
 
   const isDue    = now >= Number(ev.scheduledAt);
   const isPast   = ev.executed;
-  const typeInfo = EVENT_TYPES[ev.eventType] ?? { label: "Événement", color: "bg-[--bg-card] text-[--fg-muted] border-[--border]" };
+  const typeInfo = EVENT_TYPES[ev.eventType] ?? { label: t("eventGeneric"), color: "bg-[--bg-card] text-[--fg-muted] border-[--border]" };
 
   return (
     <div className={`grid grid-cols-[1fr_auto] gap-4 py-4 border-b border-[--border] last:border-none items-start ${isPast ? "opacity-50" : ""}`}>
@@ -95,7 +101,7 @@ function EventRow({
             {typeInfo.label}
           </span>
           {ev.recurring && (
-            <span className="font-mono text-xs text-[--fg-muted]">↻ {formatPeriod(ev.periodSeconds)}</span>
+            <span className="font-mono text-xs text-[--fg-muted]">↻ {formatPeriod(ev.periodSeconds, t)}</span>
           )}
           {isPast && <span className="font-mono text-xs text-green-600">✓</span>}
         </div>
@@ -106,14 +112,14 @@ function EventRow({
           </p>
           {!isPast && (
             <p className={`font-mono text-xs ${isDue ? "text-orange-600 font-bold" : "text-[--fg-muted]"}`}>
-              {formatCountdown(ev.scheduledAt)}
+              {formatCountdown(ev.scheduledAt, t)}
             </p>
           )}
           {ev.durationSeconds > 0n && (
             <p className="font-mono text-xs text-[--fg-muted]">
-              Durée : {Number(ev.durationSeconds) >= 86400
-                ? `${Number(ev.durationSeconds) / 86400}j`
-                : `${Number(ev.durationSeconds) / 3600}h`}
+              {Number(ev.durationSeconds) >= 86400
+                ? t("durationDays", { days: Number(ev.durationSeconds) / 86400 })
+                : t("durationHours", { hours: Number(ev.durationSeconds) / 3600 })}
             </p>
           )}
         </div>
@@ -129,7 +135,7 @@ function EventRow({
               : "border-[--border] text-[--fg-muted] hover:bg-[--bg-card]"
           }`}
         >
-          {isDue ? "Déclencher →" : "Forcer (admin)"}
+          {isDue ? t("triggerAction") : t("forceAdmin")}
         </button>
       )}
     </div>
@@ -139,6 +145,7 @@ function EventRow({
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function GovernanceCalendarWidget() {
+  const t = useTranslations("governanceWidget");
   const { address } = useAccount();
 
   const { data: eventsRaw, refetch } = useReadContract({
@@ -181,11 +188,11 @@ export function GovernanceCalendarWidget() {
 
   // Static fallback when contract not deployed
   const STATIC_EVENTS = [
-    { date: "30 juin 2026",   label: "Ouverture de l'Assemblée Générale — candidatures ouvertes", type: "Inscriptions",        status: "upcoming" },
-    { date: "7 juillet 2026", label: "Clôture du vote de l'AG (7 jours)",                         type: "Élection",            status: "upcoming" },
-    { date: "Été 2026",       label: "Art génératif — P5.js, Three.js, WebGL on-chain",           type: "Session de création", status: "active"   },
-    { date: "Automne 2026",   label: "Écrans e-ink ESP32 — l'art on-chain devient physique",      type: "Session de création", status: "future"   },
-    { date: "2027",           label: "Autonomie économique — ERC-721, royalties, DAO treasury",   type: "Assemblée générale",  status: "future"   },
+    { date: "30 juin 2026",   label: t("staticAgOpen"),         type: t("eventInscriptions"),    status: "upcoming" },
+    { date: "7 juillet 2026", label: t("staticAgVoteClose"),     type: t("eventElection"),        status: "upcoming" },
+    { date: t("summer2026"),  label: t("staticGenerativeArt"),   type: t("eventWorkSession"),     status: "active"   },
+    { date: t("autumn2026"),  label: t("staticEinkScreens"),     type: t("eventWorkSession"),     status: "future"   },
+    { date: "2027",           label: t("staticEconomicAutonomy"), type: t("eventGeneralAssembly"), status: "future"   },
   ];
 
   return (
@@ -194,14 +201,14 @@ export function GovernanceCalendarWidget() {
       <div className="bg-[--bg-card] border-b border-[--border] px-6 py-4 flex items-center justify-between gap-4">
         <div>
           <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-0.5">
-            Calendrier de gouvernance
+            {t("governanceCalendar")}
           </p>
-          <h2 className="font-bold">Prochains événements</h2>
+          <h2 className="font-bold">{t("upcomingEvents")}</h2>
         </div>
         {deployed && (
           <span className="flex items-center gap-1.5 font-mono text-xs text-green-600">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-            On-chain
+            {t("onChain")}
           </span>
         )}
       </div>
@@ -211,7 +218,7 @@ export function GovernanceCalendarWidget() {
           /* Static fallback — before GovernanceCalendar deployment */
           <div>
             <p className="font-mono text-xs text-[--fg-muted] py-3 border-b border-[--border]">
-              Calendrier fixe — GovernanceCalendar non encore déployé
+              {t("staticCalendarNotice")}
             </p>
             {STATIC_EVENTS.map((ev, i) => (
               <div key={i} className="grid grid-cols-[140px_1fr] gap-4 py-3.5 border-b border-[--border] last:border-none items-center">
@@ -227,7 +234,7 @@ export function GovernanceCalendarWidget() {
           </div>
         ) : upcomingEvents.length === 0 ? (
           <p className="font-mono text-xs text-[--fg-muted] py-6">
-            Aucun événement à venir — calendrier non initialisé.
+            {t("noUpcomingEvents")}
           </p>
         ) : (
           upcomingEvents.map(ev => (
@@ -244,9 +251,7 @@ export function GovernanceCalendarWidget() {
       {/* Footer note */}
       <div className="px-6 py-3 bg-[--bg-card] border-t border-[--border]">
         <p className="font-mono text-xs text-[--fg-muted]">
-          Les événements récurrents se reprogramment automatiquement après déclenchement.
-          Tout le monde peut déclencher un événement à l'heure prévue.
-          L'owner peut forcer le déclenchement à tout moment.
+          {t("recurringEventsNote")}
         </p>
       </div>
     </div>

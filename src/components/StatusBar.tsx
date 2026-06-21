@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 
 interface StatusData {
   deployed:      boolean;
@@ -16,7 +17,7 @@ function useClock() {
   const [time, setTime] = useState("——:——:——");
   useEffect(() => {
     const fmt = () =>
-      new Date().toLocaleTimeString("fr-FR", {
+      new Date().toLocaleTimeString("en-US", {
         hour: "2-digit", minute: "2-digit", second: "2-digit",
       });
     setTime(fmt());
@@ -55,6 +56,7 @@ function Sep() {
 }
 
 export function StatusBar() {
+  const t = useTranslations("statusBar");
   const [data, setData] = useState<StatusData | null>(null);
   const clock           = useClock();
 
@@ -69,7 +71,7 @@ export function StatusBar() {
   const memberCount = data?.memberCount ?? 0;
   const workCount   = data?.workCount   ?? 0;
   const activeWorks = data?.activeWorks ?? 0;
-  const phase       = data?.sessionPhase ?? "inscription";
+  const phase       = data?.sessionPhase ?? t("registrationPhase");
   const chain       = data?.chain        ?? "Base";
   const isActive    = data?.sessionActive ?? false;
 
@@ -117,13 +119,13 @@ export function StatusBar() {
       <Sep />
 
       {/* Work counts */}
-      <Label t="Œuvres" />
+      <Label t={t("works")} />
       <Val t={data ? String(workCount) : "—"} />
 
       {activeWorks > 0 && (
         <>
           <Sep />
-          <Label t="En cours" />
+          <Label t={t("inProgress")} />
           <Val t={String(activeWorks)} green />
         </>
       )}
@@ -131,7 +133,7 @@ export function StatusBar() {
       <Sep />
 
       {/* Network */}
-      <Label t="Réseau" />
+      <Label t={t("network")} />
       <Val t={chain} />
 
       {/* Trailing gap before next copy */}
