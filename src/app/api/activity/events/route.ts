@@ -21,6 +21,7 @@
  */
 
 export const dynamic = "force-dynamic"; // never pre-render at build time
+export const maxDuration = 60; // Vercel Hobby plan cap — was unset (10s default), far too short for a full chain scan
 
 import { NextResponse }     from "next/server";
 import {
@@ -44,17 +45,24 @@ import { listTxLog, type TxLogRow } from "@/lib/txLog";
 const RPC_URL = process.env.BASE_RPC_URL ?? "https://base.llamarpc.com";
 const rpc = createPublicClient({
   chain:     baseChain,
+  // retryCount: 0 on each leg — viem's fallback() already retries by moving to the
+  // next transport. Leaving the default retryCount (3) on every leg meant a single
+  // chunk request against a *dead* primary (llamarpc's HTTP 521 outage) retried 3x
+  // with backoff before fallback() even tried the next URL — multiplied across
+  // ~1000 chunks × 17 event types, that's what took the whole route from a few
+  // seconds to a full timeout with zero response in production.
   transport: fallback([
-    http(RPC_URL),
+    http(RPC_URL, { retryCount: 0 }),
     // base.publicnode.com and mainnet.base.org both reject getLogs on block ranges
     // older than their free-tier window ("Archive requests require a personal
     // token" / outright rate-limit) — verified by hand against this exact
     // 2M-block range. drpc.org is the one public Base RPC that actually serves
     // full archive history for free, so it's the real fallback; the others are
     // kept after it only in case drpc.org itself has an outage.
-    http("https://base.drpc.org"),
-    http("https://mainnet.base.org"),
-  ]),
+    http("https://base.drpc.org", { retryCount: 0 }),
+    http("https://mainnet.base.org", { retryCount: 0 }),
+  ], { rank: true }), // periodically re-ranks transports by health/latency so a
+                      // recovered llamarpc gets used again without a redeploy
 });
 
 // ─── Contract addresses ───────────────────────────────────────────────────────
