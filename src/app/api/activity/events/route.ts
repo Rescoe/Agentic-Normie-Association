@@ -9,45 +9,76 @@
  *      → 14 event types × parallel batches ≈ 5–15s instead of 5 min
  *
  * Contracts covered:
- *   AssociationCore      → MemberRegistered, RoleGranted
- *   ConstituentAssembly  → SessionOpened/Closed, VoteCast, RoleResolved, RolesResolved
- *   WorkRegistry         → WorkPublished, WorkSessionInitiated, WorkArchived
- *   GovernanceCalendar   → EventScheduled, EventTriggered
- *   FactoryRegistry      → FactoryRegistered
- *   CollectionFactory    → CollectionCreated
+ *   AssociationCore       → MemberRegistered, RoleGranted
+ *   ConstituentAssembly   → SessionOpened/Closed, VoteCast, RoleResolved, RolesResolved
+ *   WorkRegistry          → WorkPublished, WorkSessionInitiated, WorkArchived
+ *   GovernanceCalendar    → EventScheduled, EventTriggered
+ *   FactoryRegistry       → FactoryRegistered
+ *   CollectionFactory     → CollectionCreated (legacy factory — kept in case of old history)
+ *   ANACollectionFactory  → CollectionDeployed (the factory actually used by workPublisher.ts)
+ *   ANAEditions (dynamic) → CollectionInitialized, EditionMinted — one contract per work,
+ *                           addresses discovered via ANACollectionFactory.getAllCollections()
  */
 
 export const dynamic = "force-dynamic"; // never pre-render at build time
+export const maxDuration = 60; // Vercel Hobby plan cap — was unset (10s default), far too short for a full chain scan
 
 import { NextResponse }     from "next/server";
 import {
-  createPublicClient, http, parseAbiItem,
+  createPublicClient, http, fallback, parseAbiItem,
   keccak256, stringToBytes,
   type Log, type AbiEvent,
 } from "viem";
 import { base as baseChain } from "viem/chains";
-import { CONTRACT_ADDRESSES, ROLE_LABELS } from "@/lib/contracts";
+import { CONTRACT_ADDRESSES, ROLE_LABELS, ANA_COLLECTION_FACTORY_ABI } from "@/lib/contracts";
 import { listTxLog, type TxLogRow } from "@/lib/txLog";
 
 // ─── RPC client ───────────────────────────────────────────────────────────────
 
 // LlamaRPC supports up to 10 000 blocks per eth_getLogs (vs 2 000 for mainnet.base.org).
 // Override with BASE_RPC_URL env var to use Alchemy/QuickNode/etc.
+// fallback() retries against the next URL when one is down — llamarpc had a full
+// outage (HTTP 521) that silently zeroed out every event in production, because
+// fetchLogs() swallows per-chunk errors to keep one bad provider from killing the
+// whole scan. Without a fallback transport, "swallow the error" became "swallow
+// the entire chain's history" the moment the primary RPC went down.
 const RPC_URL = process.env.BASE_RPC_URL ?? "https://base.llamarpc.com";
 const rpc = createPublicClient({
   chain:     baseChain,
-  transport: http(RPC_URL),
+  // retryCount: 0 on each leg — viem's fallback() already retries by moving to the
+  // next transport. Leaving the default retryCount (3) on every leg meant a single
+  // chunk request against a *dead* primary (llamarpc's HTTP 521 outage) retried 3x
+  // with backoff before fallback() even tried the next URL — multiplied across
+  // ~1000 chunks × 17 event types, that's what took the whole route from a few
+  // seconds to a full timeout with zero response in production.
+  transport: fallback([
+    http(RPC_URL, { retryCount: 0 }),
+    // base.publicnode.com and mainnet.base.org both reject getLogs on block ranges
+    // older than their free-tier window ("Archive requests require a personal
+    // token" / outright rate-limit) — verified by hand against this exact
+    // 2M-block range. drpc.org is the one public Base RPC that actually serves
+    // full archive history for free, so it's the real fallback; the others are
+    // kept after it only in case drpc.org itself has an outage.
+    http("https://base.drpc.org", { retryCount: 0 }),
+    http("https://mainnet.base.org", { retryCount: 0 }),
+  ], { rank: true }), // periodically re-ranks transports by health/latency so a
+                      // recovered llamarpc gets used again without a redeploy
 });
 
 // ─── Contract addresses ───────────────────────────────────────────────────────
 
 const ADDR = {
-  CORE: CONTRACT_ADDRESSES.AssociationCore     as `0x${string}` | undefined,
-  CA:   CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined,
-  WR:   CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}` | undefined,
-  GC:   CONTRACT_ADDRESSES.GovernanceCalendar  as `0x${string}` | undefined,
-  FR:   CONTRACT_ADDRESSES.FactoryRegistry     as `0x${string}` | undefined,
-  CF:   CONTRACT_ADDRESSES.CollectionFactory   as `0x${string}` | undefined,
+  CORE:  CONTRACT_ADDRESSES.AssociationCore     as `0x${string}` | undefined,
+  CA:    CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}` | undefined,
+  WR:    CONTRACT_ADDRESSES.WorkRegistry        as `0x${string}` | undefined,
+  GC:    CONTRACT_ADDRESSES.GovernanceCalendar  as `0x${string}` | undefined,
+  FR:    CONTRACT_ADDRESSES.FactoryRegistry     as `0x${string}` | undefined,
+  CF:    CONTRACT_ADDRESSES.CollectionFactory   as `0x${string}` | undefined,
+  // ANACollectionFactory is the contract workPublisher.ts actually calls
+  // (CollectionFactory above is an older/legacy factory contract). They emit
+  // different events (CollectionDeployed vs CollectionCreated) — both are
+  // scanned since either could hold real history depending on deployment era.
+  ANACF: CONTRACT_ADDRESSES.ANACollectionFactory as `0x${string}` | undefined,
 };
 
 // ─── Event signatures ─────────────────────────────────────────────────────────
@@ -67,6 +98,13 @@ const EV = {
   GC_TRIGGERED:         parseAbiItem("event EventTriggered(uint256 indexed eventId, bytes32 indexed eventType, address indexed triggeredBy, uint256 timestamp)") as AbiEvent,
   FACTORY_REGISTERED:   parseAbiItem("event FactoryRegistered(bytes32 indexed factoryType, address indexed factory)")                      as AbiEvent,
   COLLECTION_CREATED:   parseAbiItem("event CollectionCreated(uint256 indexed normieTokenId, address indexed collection, string name, string symbol, address minter, uint256 timestamp)") as AbiEvent,
+  // ANACollectionFactory.createCollection() — the contract actually used in production —
+  // emits this, NOT CollectionCreated above (see contracts/factory/ANACollectionFactory.sol:43).
+  COLLECTION_DEPLOYED:  parseAbiItem("event CollectionDeployed(uint256 indexed normieTokenId, address indexed collectionAddr, string name, address minter)") as AbiEvent,
+  // Per-ANAEditions-instance events — these contracts are deployed dynamically (one per
+  // work), so there's no single fixed address to scan; see getAllCollections() fetch below.
+  COLLECTION_INITIALIZED: parseAbiItem("event CollectionInitialized(string artworkTitle, uint256 workId)") as AbiEvent,
+  EDITION_MINTED:          parseAbiItem("event EditionMinted(uint256 indexed tokenId, address indexed buyer, uint256 priceWei)") as AbiEvent,
 };
 
 // ─── GovernanceCalendar event type labels ─────────────────────────────────────
@@ -81,26 +119,43 @@ const GC_LABELS: Record<string, string> = {
 };
 
 // ─── Parallel log fetcher ─────────────────────────────────────────────────────
-// Uses LlamaRPC (base.llamarpc.com) which supports up to 10 000 blocks per
-// getLogs request — 5× larger than mainnet.base.org (2 000 limit).
+// CHUNK is capped at 2 000 — the limit of the *narrowest* provider in the fallback
+// chain (mainnet.base.org). LlamaRPC alone tolerates up to 10 000, but a chunk
+// size that only works on the primary defeats the point of having a fallback:
+// if llamarpc is down and we fail over to mainnet.base.org mid-scan, a 5 000-block
+// request would just fail there too.
 //
-// Math with CHUNK=5 000 and SCAN_RANGE=2 000 000:
-//   2 000 000 / 5 000 = 400 chunks per type
-//   400 / BATCH_SIZE(20) = 20 sequential batches per type
-//   All 14 event types run in parallel → dominated by slowest ≈ 5–10s
-//   Well within Vercel Hobby 60s limit.
+// Math with CHUNK=2 000 and SCAN_RANGE=2 000 000:
+//   2 000 000 / 2 000 = 1000 chunks per type
+//   1000 / BATCH_SIZE(20) = 50 sequential batches per type
+//   All event types run in parallel → dominated by slowest ≈ 15–25s
+//   Within Vercel Hobby 60s limit.
 
-const CHUNK      = 5_000n;    // LlamaRPC supports up to 10 000 — 5 000 is safe
-const BATCH_SIZE = 20;        // 14 types × 20 = 280 max concurrent — OK for llamarpc
-const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history
+const CHUNK      = 2_000n;
+const BATCH_SIZE = 20;
+const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history since launch
+// Vercel Hobby hard-caps every function at 60s NO MATTER what maxDuration says — there is no
+// "give it more time" fix. Re-scanning the full SCAN_RANGE on every cache miss was the actual
+// bug: with degraded public RPCs, 2M blocks × 17 event types simply cannot finish in 60s, so
+// the route timed out with zero response instead of degrading gracefully.
+// WINDOW bounds how many *new* blocks a single request is allowed to scan — the cache now
+// stores a permanent lastScannedBlock cursor (see CachedPayload) and each request only
+// advances it by one WINDOW. First load after a deploy needs ~10 page loads/cron ticks to
+// fully catch up the 2M-block backlog; every load after that only scans the handful of
+// blocks produced since the last request, which is always fast.
+// Conservative for now — llamarpc (the fast primary) is mid-outage and drpc.org (the
+// fallback) is noticeably slower/flakier under load. Once llamarpc recovers this can
+// safely go back up; catching up the 2M-block backlog just takes more requests at a
+// smaller WINDOW, never a timeout.
+const WINDOW = 100_000n;
 
 async function fetchLogs(
-  address: `0x${string}`,
+  address: `0x${string}` | `0x${string}`[],
   event:   AbiEvent,
   from:    bigint,
   to:      bigint,
 ): Promise<Log[]> {
-  if (!address) return [];
+  if (!address || (Array.isArray(address) && address.length === 0)) return [];
 
   // Parallel chunk fetching — no optimistic single call (it hangs on range errors
   // for 10-30s on public RPCs, wasting our Vercel budget)
@@ -225,13 +280,18 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 }
 
 // ─── Cache helpers (Neon KV) ──────────────────────────────────────────────────
+// This is no longer a TTL cache — it's a permanent incremental ledger. Each entry
+// records the highest block already scanned (lastScannedBlock); the next request
+// only scans forward from there, bounded by WINDOW. There is nothing to "expire":
+// once an event is found, it stays, and the cursor only ever moves forward.
 
-const CACHE_KEY    = "activity:events:v3";
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const CACHE_KEY      = "activity:events:v5"; // bumped — cursor-based schema (lastScannedBlock)
+const MAX_EVENTS_KEPT = 1000; // keep the blob bounded — older events are still in tx_log/on-chain
 
 interface CachedPayload {
-  events:      ActivityEvent[];
-  meta:        { fromBlock: string; toBlock: string; cachedAt: number; cachedUntil: number };
+  events:           ActivityEvent[];
+  lastScannedBlock: string;
+  meta:             { fromBlock: string; toBlock: string; cachedAt: number };
 }
 
 async function readCache(): Promise<CachedPayload | null> {
@@ -240,9 +300,7 @@ async function readCache(): Promise<CachedPayload | null> {
     if (!USE_NEON) return null;
     const raw = await kvGet(CACHE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as CachedPayload;
-    if (Date.now() > parsed.meta.cachedUntil) return null; // expired
-    return parsed;
+    return JSON.parse(raw) as CachedPayload;
   } catch { return null; }
 }
 
@@ -257,31 +315,52 @@ async function writeCache(payload: CachedPayload): Promise<void> {
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET() {
-  // ── 1. Try cache first ────────────────────────────────────────────────────
-  const cached = await readCache();
-  if (cached) {
-    const events = await mergeTxLog(cached.events);
-    console.log(`[activity/events] cache hit — ${cached.events.length} events (+tx_log → ${events.length})`);
-    return NextResponse.json({ ...cached, events }, {
-      headers: { "X-Cache": "HIT" },
-    });
-  }
-
-  // ── 2. Fetch from chain ───────────────────────────────────────────────────
   if (!ADDR.CORE) {
     return NextResponse.json({ events: [], meta: null, error: "Contracts not configured" });
   }
 
   try {
     const latest = await rpc.getBlockNumber();
+    const cached = await readCache();
 
-    // Cover SCAN_RANGE blocks (~11 days on Base at 2s/block).
-    // ANA contracts were deployed in June 2025 — 500K blocks is more than enough.
-    // Keeping this tight avoids rate-limiting the public Base RPC.
-    const from = latest > SCAN_RANGE ? latest - SCAN_RANGE : 0n;
+    // First-ever run: floor is SCAN_RANGE blocks back (covers since ANA's launch).
+    // Every run after that: resume exactly where the last one left off.
+    const floor = latest > SCAN_RANGE ? latest - SCAN_RANGE : 0n;
+    const lastScanned = cached?.lastScannedBlock ? BigInt(cached.lastScannedBlock) : floor - 1n;
+    const from = lastScanned + 1n > floor ? lastScanned + 1n : floor;
 
-    console.log(`[activity/events] fetching blocks ${from}–${latest} (${latest - from} blocks)…`);
+    if (from > latest) {
+      // Already fully caught up and no new blocks since the last request — skip
+      // RPC entirely, just merge tx_log on top of what's already accumulated.
+      const events = await mergeTxLog(cached?.events ?? []);
+      console.log(`[activity/events] up to date at block ${latest} — ${cached?.events.length ?? 0} events (+tx_log → ${events.length})`);
+      return NextResponse.json({
+        events,
+        meta: { fromBlock: String(floor), toBlock: String(latest), cachedAt: Date.now() },
+      }, { headers: { "X-Cache": "UP_TO_DATE" } });
+    }
+
+    // Bounded window — never scans more than WINDOW blocks per request, regardless
+    // of how far behind the cursor is. Catching up a 2M-block backlog just takes a
+    // handful of requests instead of one request that can never finish.
+    const to = from + WINDOW - 1n > latest ? latest : from + WINDOW - 1n;
+
+    console.log(`[activity/events] fetching blocks ${from}–${to} (${to - from + 1n} blocks, caught up to ${to}/${latest})…`);
     const t0 = Date.now();
+
+    // ANAEditions collections are deployed dynamically (one per work) — there's no
+    // fixed address to scan, so we list them via the factory first, then pass the
+    // whole array to getLogs() in one shot for CollectionInitialized/EditionMinted.
+    let collectionAddrs: `0x${string}`[] = [];
+    if (ADDR.ANACF) {
+      try {
+        collectionAddrs = await rpc.readContract({
+          address: ADDR.ANACF, abi: ANA_COLLECTION_FACTORY_ABI, functionName: "getAllCollections",
+        }) as `0x${string}`[];
+      } catch (e) {
+        console.warn(`[activity/events] getAllCollections failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
 
     // Fetch ALL event types in parallel
     const [
@@ -289,22 +368,26 @@ export async function GET() {
       sessOpenLogs, sessCloseLogs, voteLogs, roleResLogs, rolesResLogs,
       workPubLogs, workSessLogs, workArcLogs,
       gcSchedLogs, gcTrigLogs,
-      factoryLogs, collectionLogs,
+      factoryLogs, collectionLogs, collectionDeployedLogs,
+      collectionInitLogs, editionMintedLogs,
     ] = await Promise.all([
-      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.MEMBER_REGISTERED,  from, latest) : [],
-      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.ROLE_GRANTED,       from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_OPENED,     from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_CLOSED,     from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.VOTE_CAST,          from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLE_RESOLVED,      from, latest) : [],
-      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLES_RESOLVED,     from, latest) : [],
-      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_PUBLISHED,     from, latest) : [],
-      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_SESSION_INIT,  from, latest) : [],
-      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_ARCHIVED,      from, latest) : [],
-      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_SCHEDULED,       from, latest) : [],
-      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_TRIGGERED,       from, latest) : [],
-      ADDR.FR   ? fetchLogs(ADDR.FR,   EV.FACTORY_REGISTERED, from, latest) : [],
-      ADDR.CF   ? fetchLogs(ADDR.CF,   EV.COLLECTION_CREATED, from, latest) : [],
+      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.MEMBER_REGISTERED,  from, to) : [],
+      ADDR.CORE ? fetchLogs(ADDR.CORE, EV.ROLE_GRANTED,       from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_OPENED,     from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.SESSION_CLOSED,     from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.VOTE_CAST,          from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLE_RESOLVED,      from, to) : [],
+      ADDR.CA   ? fetchLogs(ADDR.CA,   EV.ROLES_RESOLVED,     from, to) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_PUBLISHED,     from, to) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_SESSION_INIT,  from, to) : [],
+      ADDR.WR   ? fetchLogs(ADDR.WR,   EV.WORK_ARCHIVED,      from, to) : [],
+      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_SCHEDULED,       from, to) : [],
+      ADDR.GC   ? fetchLogs(ADDR.GC,   EV.GC_TRIGGERED,       from, to) : [],
+      ADDR.FR   ? fetchLogs(ADDR.FR,   EV.FACTORY_REGISTERED, from, to) : [],
+      ADDR.CF    ? fetchLogs(ADDR.CF,    EV.COLLECTION_CREATED,    from, to) : [],
+      ADDR.ANACF ? fetchLogs(ADDR.ANACF, EV.COLLECTION_DEPLOYED,   from, to) : [],
+      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.COLLECTION_INITIALIZED, from, to) : [],
+      collectionAddrs.length ? fetchLogs(collectionAddrs, EV.EDITION_MINTED,         from, to) : [],
     ]);
 
     console.log(`[activity/events] fetch done in ${Date.now() - t0}ms`);
@@ -455,29 +538,61 @@ export async function GET() {
       });
     });
 
-    // Sort: most recent first
-    events.sort((a, b) => {
+    // ANACollectionFactory.createCollection() — the actual production path.
+    collectionDeployedLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "COLLECTION_CREATED", i),
+        tokenId: Number(a.normieTokenId ?? 0),
+        address: String(a.collectionAddr ?? ""),
+        extra:   { name: String(a.name ?? "") },
+      });
+    });
+
+    // Per-collection ANAEditions.initialize() — links artwork content to the collection.
+    collectionInitLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "COLLECTION_INITIALIZED", i),
+        address: String(log.address ?? ""),
+        workId:  Number(a.workId ?? 0),
+        extra:   { name: String(a.artworkTitle ?? ""), collectionAddress: String(log.address ?? "") },
+      });
+    });
+
+    // buyAndMint() on any deployed ANAEditions collection.
+    editionMintedLogs.forEach((log, i) => {
+      const a = args(log);
+      events.push({ ...makeEv(log, "EDITION_MINTED", i),
+        address: String(a.buyer ?? ""),
+        extra: {
+          collectionAddress: String(log.address ?? ""),
+          tokenId:            Number(a.tokenId  ?? 0),
+          priceWei:           String(a.priceWei  ?? "0"),
+        },
+      });
+    });
+
+    // Merge with whatever was already accumulated (this window's new events come first
+    // since we always scan forward), cap the blob so it doesn't grow unbounded — older
+    // events past MAX_EVENTS_KEPT are still recoverable from tx_log / the chain itself.
+    const allEvents = [...events, ...(cached?.events ?? [])].slice(0, MAX_EVENTS_KEPT);
+    allEvents.sort((a, b) => {
       const diff = BigInt(b.blockNumber) - BigInt(a.blockNumber);
       return diff > 0n ? 1 : diff < 0n ? -1 : 0;
     });
 
     // ── 4. Cache and return ────────────────────────────────────────────────
-    const now  = Date.now();
-    const meta = {
-      fromBlock:   String(from),
-      toBlock:     String(latest),
-      cachedAt:    now,
-      cachedUntil: now + CACHE_TTL_MS,
+    const payload: CachedPayload = {
+      events:           allEvents,
+      lastScannedBlock: String(to),
+      meta:             { fromBlock: String(floor), toBlock: String(to), cachedAt: Date.now() },
     };
+    await writeCache(payload);
 
-    const payload: CachedPayload = { events, meta };
-    await writeCache(payload); // cache stores pure chain data — tx_log is merged in fresh on every request
-
-    const merged = await mergeTxLog(events);
-    console.log(`[activity/events] ${events.length} events — cache miss, chain fetched in ${Date.now() - t0}ms (+tx_log → ${merged.length})`);
+    const merged = await mergeTxLog(allEvents);
+    console.log(`[activity/events] +${events.length} new events (window ${from}-${to}/${latest}) in ${Date.now() - t0}ms — ${allEvents.length} total (+tx_log → ${merged.length})`);
 
     return NextResponse.json({ ...payload, events: merged }, {
-      headers: { "X-Cache": "MISS" },
+      headers: { "X-Cache": to < latest ? "CATCHING_UP" : "MISS" },
     });
 
   } catch (err) {

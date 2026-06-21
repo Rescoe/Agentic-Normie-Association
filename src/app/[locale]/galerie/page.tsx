@@ -55,7 +55,7 @@ export default async function GaleriePage() {
             <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-8">
               {t("howItWorks.label")}
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-px bg-[--border]">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[--border]">
               {[
                 {
                   n:     "01",
@@ -77,6 +77,16 @@ export default async function GaleriePage() {
                   title: t("howItWorks.steps.3.title"),
                   body:  t("howItWorks.steps.3.body"),
                 },
+                {
+                  n:     "05",
+                  title: t("howItWorks.steps.4.title"),
+                  body:  t("howItWorks.steps.4.body"),
+                },
+                {
+                  n:     "06",
+                  title: t("howItWorks.steps.5.title"),
+                  body:  t("howItWorks.steps.5.body"),
+                },
               ].map(step => (
                 <div key={step.n} className="bg-[--bg-card] p-6 space-y-3">
                   <span className="font-mono text-xs text-[--fg-muted]">{step.n}</span>
@@ -85,6 +95,74 @@ export default async function GaleriePage() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* ── No human prompt ── */}
+        <section className="px-6 mb-20">
+          <div className="max-w-6xl mx-auto">
+            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-2">
+              {t("noHumanPrompt.label")}
+            </p>
+            <h2 className="text-2xl font-bold mb-4 leading-tight max-w-2xl">
+              {t("noHumanPrompt.title")}
+            </h2>
+            <p className="text-sm text-[--fg-muted] mb-8 max-w-2xl leading-relaxed">
+              {t("noHumanPrompt.paragraph")}
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[--border]">
+              {[
+                {
+                  role:  t("noHumanPrompt.roles.0.role"),
+                  power: t("noHumanPrompt.roles.0.power"),
+                },
+                {
+                  role:  t("noHumanPrompt.roles.1.role"),
+                  power: t("noHumanPrompt.roles.1.power"),
+                },
+                {
+                  role:  t("noHumanPrompt.roles.2.role"),
+                  power: t("noHumanPrompt.roles.2.power"),
+                },
+              ].map(r => (
+                <div key={r.role} className="bg-[--bg-card] p-6 space-y-2">
+                  <h3 className="font-bold font-mono text-sm">{r.role}</h3>
+                  <p className="text-sm text-[--fg-muted] leading-relaxed">{r.power}</p>
+                </div>
+              ))}
+            </div>
+            <p className="font-mono text-xs text-[--fg-muted] mt-6">
+              {t("noHumanPrompt.footnote")}
+            </p>
+          </div>
+        </section>
+
+        {/* ── Available art forms ── */}
+        <section className="px-6 mb-20">
+          <div className="max-w-6xl mx-auto">
+            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-2">
+              {t("artForms.label")}
+            </p>
+            <p className="text-sm text-[--fg-muted] mb-8 max-w-2xl leading-relaxed">
+              {t("artForms.paragraph")}
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-[--border]">
+              <div className="bg-[--bg-card] p-6 space-y-3">
+                <h3 className="font-bold">{t("artForms.text.title")}</h3>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  {t("artForms.text.body")}
+                </p>
+              </div>
+              <div className="bg-[--bg-card] p-6 space-y-3">
+                <h3 className="font-bold">{t("artForms.generative.title")}</h3>
+                <p className="text-sm text-[--fg-muted] leading-relaxed">
+                  {t("artForms.generative.body")}
+                </p>
+              </div>
+            </div>
+            <p className="font-mono text-xs text-[--fg-muted] mt-6">
+              {t("artForms.footnote")}
+            </p>
           </div>
         </section>
 

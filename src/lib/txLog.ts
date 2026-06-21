@@ -108,6 +108,39 @@ export async function logTxFailed(txHash: string, error: string): Promise<void> 
   }
 }
 
+/** Backfills label/related_token_id on a row already in tx_log (e.g. one inserted
+ *  before commit acf9c48 added those fields, or by the Etherscan backfill before it
+ *  could decode full call args). Never overwrites a value that's already set. */
+export async function updateTxLabel(
+  txHash: string,
+  label?: string,
+  relatedTokenId?: number,
+): Promise<void> {
+  if (!USE_NEON || (label === undefined && relatedTokenId === undefined)) return;
+  try {
+    await ensureTable();
+    await sql()`
+      UPDATE tx_log
+      SET label = COALESCE(label, ${label ?? null}),
+          related_token_id = COALESCE(related_token_id, ${relatedTokenId ?? null})
+      WHERE tx_hash = ${txHash}
+    `;
+  } catch (e) {
+    console.warn(`[txLog] updateTxLabel failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** Rows missing a label or related_token_id — candidates for the re-decode backfill. */
+export async function listIncompleteTxLog(limit = 500): Promise<TxLogRow[]> {
+  if (!USE_NEON) return [];
+  await ensureTable();
+  const rows = await sql()`
+    SELECT * FROM tx_log WHERE label IS NULL OR related_token_id IS NULL
+    ORDER BY created_at DESC LIMIT ${limit}
+  ` as TxLogRow[];
+  return rows;
+}
+
 export interface TxLogRow {
   tx_hash: string;
   type: string;
