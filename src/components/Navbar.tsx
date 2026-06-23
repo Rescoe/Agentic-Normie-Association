@@ -33,9 +33,12 @@ function useNav() {
       ],
     },
     {
-      label:    t("gallery"),
-      href:     "/galerie",
-      children: null,
+      label: t("gallery"),
+      href:  "/galerie",
+      children: [
+        { href: "/galerie",              label: t("spontaneousWorks"), desc: t("spontaneousWorksDesc") },
+        { href: "/galerie/celebrations", label: t("celebrations"),     desc: t("celebrationsDesc") },
+      ],
     },
     {
       label: t("docs"),

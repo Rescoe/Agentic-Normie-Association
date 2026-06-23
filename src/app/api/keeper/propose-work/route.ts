@@ -90,7 +90,12 @@ export async function POST(req: NextRequest) {
   const others   = personas.filter(p => p.tokenId !== proposer.tokenId);
 
   const pastWorksBlock = allWorks.length > 0
-    ? `\nExisting ANA works (all states) — DO NOT repeat their titles, themes, or concepts:\n${allWorks.map(w => `- "${w.title}" (${w.state})`).join("\n")}\n`
+    ? `\nExisting ANA works (all states) — DO NOT repeat their titles, themes, or concepts:\n${allWorks.map(w => `- "${w.title}" (${w.state})${w.artForm ? ` [form: ${w.artForm}]` : ""}`).join("\n")}\n`
+    : "";
+
+  const recentForms = allWorks.map(w => w.artForm).filter((f): f is string => !!f).slice(0, 5);
+  const formDiversityNote = recentForms.length > 0
+    ? `\nRecent forms used (most recent first): ${recentForms.join(", ")}. ANA's works have skewed heavily toward text/poems — actively favor a DIFFERENT form this time, especially generative HTML/JS art (html-canvas, html-p5js, html-threejs, html-webgl) if it hasn't appeared recently.\n`
     : "";
 
   const randomAngle = [
@@ -124,7 +129,7 @@ export async function POST(req: NextRequest) {
           content: `You are ${proposer.name} (Normie #${proposer.tokenId}), a member of ANA — the Agentic Normie Association.
 
 A new creation session has just started. Your role: propose a unique work to the assembly.
-${pastWorksBlock}
+${pastWorksBlock}${formDiversityNote}
 MANDATORY ANGLE FOR THIS PROPOSAL: ${randomAngle}
 Start from THIS angle — don't drift into generic blockchain themes.
 
@@ -136,12 +141,14 @@ ABSOLUTE BANS (clichés that kill on-chain art — never use):
 Be SPECIFIC, concrete, personal to your character as Normie #${proposer.tokenId}.
 Random seed: ${Math.random().toString(36).slice(2, 8)}
 
-POSSIBLE FORMS: haiku, sonnet, free verse, manifesto, prose, HTML/Canvas, P5.js, Three.js, WebGL.
+POSSIBLE FORMS (you must pick exactly one as "suggestedForm"): "haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl".
+If your idea is a generative/visual/algorithmic/interactive piece, you MUST pick one of the html-* forms, not a text form.
 
 Respond ONLY in JSON, always in English:
 {
   "title": "Specific title (3-6 words, NO blockchain cliché)",
-  "proposal": "Proposal in 2-3 sentences: concrete idea, chosen form, why this work from YOUR point of view."
+  "proposal": "Proposal in 2-3 sentences: concrete idea, chosen form, why this work from YOUR point of view.",
+  "suggestedForm": "haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"
 }`,
         },
       ],
@@ -156,7 +163,7 @@ Respond ONLY in JSON, always in English:
   const raw  = data.choices[0]?.message?.content?.trim();
   if (!raw) return NextResponse.json({ error: "LLM returned empty response" }, { status: 500 });
 
-  let parsed: { title?: string; proposal?: string };
+  let parsed: { title?: string; proposal?: string; suggestedForm?: string };
   try { parsed = JSON.parse(raw); }
   catch { return NextResponse.json({ error: "LLM response parse error", raw }, { status: 500 }); }
 
@@ -164,12 +171,16 @@ Respond ONLY in JSON, always in English:
     return NextResponse.json({ error: "LLM response missing title or proposal", parsed }, { status: 500 });
   }
 
+  const VALID_FORMS = new Set(["haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl"]);
+  const suggestedForm = parsed.suggestedForm && VALID_FORMS.has(parsed.suggestedForm) ? parsed.suggestedForm : undefined;
+
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
     proposedAt:     Date.now(),
     title:          parsed.title.slice(0, 120),
     proposal:       parsed.proposal.slice(0, 600),
+    ...(suggestedForm ? { suggestedForm } : {}),
   });
 
   console.log(`[propose-work] "${work.title}" proposed by ${proposer.name} (#${proposer.tokenId})`);

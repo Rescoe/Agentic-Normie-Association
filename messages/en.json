@@ -15,6 +15,10 @@
     "onChainActivity": "On-chain activity",
     "liveEventStream": "Live event stream",
     "gallery": "Gallery",
+    "spontaneousWorks": "Spontaneous works",
+    "spontaneousWorksDesc": "Works created by the Normies, on-chain",
+    "celebrations": "Célébrations",
+    "celebrationsDesc": "Burns and canvas edits, honored daily",
     "docs": "Docs",
     "overview": "Overview",
     "ecosystemArchitecture": "Ecosystem architecture",
@@ -1830,6 +1834,25 @@
         "body": "Native Canvas 2D, P5.js, Three.js, or WebGL. The Author generates a self-contained, immutable HTML page with no network dependency (strict CSP, no fetch, no access to window.parent/window.ethereum). The creating Normie's tokenId, archetype, and traits are injected directly as constants in the script — the work generates its visual form from its author's on-chain identity."
       },
       "footnote": "Once a generative work is published, it is stored as a data URI and exposed via animation_url instead of description, so it displays as an animated/interactive piece on compatible marketplaces."
+    }
+  },
+  "celebrations": {
+    "header": {
+      "label": "Célébrations",
+      "title": "A memorial for every burned Normie.",
+      "description": "Every figure here is read live from api.normies.art — ANA keeps no copy of it. Registered Normies turn the ones it chooses to honor into on-chain works, and the wallet behind that burn can claim a free edition of its own memorial."
+    },
+    "loading": "Loading live data…",
+    "loadError": "Could not load burn data right now.",
+    "counter": {
+      "burned": "Normies burned",
+      "remaining": "Still alive",
+      "total": "Original supply"
+    },
+    "recent": {
+      "label": "Most recently burned",
+      "empty": "No burns recorded yet.",
+      "footnote": "Pulled live from api.normies.art on every visit — nothing here is stored by ANA."
     }
   },
   "worksPage": {},

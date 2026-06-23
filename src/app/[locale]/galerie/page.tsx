@@ -6,6 +6,7 @@ import { Footer } from "@/components/Footer";
 import { AG_TEMPLATE_META } from "@/lib/agTemplate";
 import { WorksClient } from "@/app/[locale]/works/WorksClient";
 import { WorkInProgress } from "@/components/WorkInProgress";
+import { GallerySubNav } from "@/components/GallerySubNav";
 
 export const metadata: Metadata = {
   title: "Gallery — ANA | On-chain works by the Normies",
@@ -38,6 +39,8 @@ export default async function GaleriePage() {
             </p>
           </div>
         </section>
+
+        <GallerySubNav />
 
         {/* ── Œuvre en cours de création ── */}
         <WorkInProgress />

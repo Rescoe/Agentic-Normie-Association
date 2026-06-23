@@ -398,6 +398,24 @@ async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<b
   const ethUsd       = await fetchEthUsd();
   const pricingCtx   = buildPricingContext(ethUsd);
 
+  // Recent works (most recent first), used to enforce form/theme diversity and
+  // stop the Rapporteur from defaulting to "poem" every time.
+  const recentWorksBlock = await (async () => {
+    if (work.isFoundingWork) return "";
+    try {
+      const allWorks = await listWorks();
+      const recent = allWorks
+        .filter(w => w.id !== work.id && w.artForm)
+        .slice(0, 8);
+      if (recent.length === 0) return "";
+      const lines = recent.map(w => `- "${w.title}" → form: ${w.artForm}`).join("\n");
+      const lastForms = recent.slice(0, 3).map(w => w.artForm).filter(Boolean);
+      return `\nRECENT ANA WORKS (most recent first — DO NOT pick the same form again unless the proposal explicitly demands it):\n${lines}\n${lastForms.length ? `The last ${lastForms.length} work(s) used: ${lastForms.join(", ")}. Avoid repeating these — favor variety (text forms AND generative HTML/JS).` : ""}\n`;
+    } catch {
+      return "";
+    }
+  })();
+
   const userPrompt = work.isFoundingWork
     ? `You are ${rapporteur.name} (Normie #${rapporteur.tokenId}), Rapporteur elected at ANA's Constituent General Assembly.
 
@@ -415,10 +433,16 @@ It must embody:
 Brief in 120-150 words. No title, no introduction. Write it directly. Always write in English.`
     : `You are the Rapporteur for the work "${work.title}".
 Proposal: ${work.proposal}
+${work.suggestedForm ? `Proposer's suggested form: "${work.suggestedForm}"` : ""}
 Author: ${work.authorName} (Normie #${work.authorTokenId})
 
 You must choose: (1) the ART FORM, (2) the ERC-721 edition parameters, (3) write the creative brief.
 
+CRITICAL RULE — HONOR THE PROPOSAL'S FORM:
+${work.suggestedForm
+  ? `The Proposer already explicitly chose the form "${work.suggestedForm}" for this work. You MUST set "artForm" to "${work.suggestedForm}" unless it is technically impossible. Do NOT silently switch a generative-art proposal into a poem, or vice-versa.`
+  : `If the proposal text explicitly states or clearly implies a specific form (e.g. it says "generative code", "algorithm", "generative art", "visual piece", "interactive", "canvas", "p5.js", "three.js", "webgl" → pick the matching html-* form; it says "haiku", "sonnet", "manifesto", "prose" → pick that exact text form), you MUST pick that form. Only fall back to your own judgment if the proposal is genuinely ambiguous about form.`}
+${recentWorksBlock}
 AVAILABLE FORMS:
 • Text: "haiku" (3 lines, 5-7-5 syllables), "sonnet" (14 lines), "poem" (free verse), "prose", "manifesto"
 • Generative HTML/JS art: "html-canvas" (pure Canvas 2D), "html-p5js" (P5.js), "html-threejs" (Three.js), "html-webgl" (WebGL)
@@ -427,13 +451,15 @@ AVAILABLE FORMS:
 
 ${pricingCtx}
 
+The brief you write MUST stay faithful to the original proposal above — do not invent a different concept, theme, or form than what was proposed.
+
 Respond in JSON:
 {
   "artForm": "haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl",
   "editionPrice": "0.0005"|"0.001"|"0.005"|"0.01"|"0.05",
   "editionSupply": <integer 1-100>,
   "priceReasoning": "<1 sentence: why this price and quantity given the context above>",
-  "brief": "<120-150 words for the Author. Specify: tone, emotional goal, on-chain/ANA vocabulary. For HTML/JS: describe the desired visual experience and data to inject. No title, no intro.>"
+  "brief": "<120-150 words for the Author. Must reflect the proposal's actual concept and chosen form. Specify: tone, emotional goal, on-chain/ANA vocabulary. For HTML/JS: describe the desired visual experience and data to inject. No title, no intro.>"
 }`;
 
   const rawBrief = await groq(
@@ -541,6 +567,8 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
           content: `You are the Author of the work "${work.title}" (Normie #${author.tokenId}).
 Archetype: ${authorArch} | Traits: ${authorTraits}
 
+Original proposal: ${work.proposal ?? "—"}
+
 Rapporteur ${work.rapporteurName}'s brief:
 ${work.brief}${revisionCtx}
 
@@ -583,6 +611,8 @@ Generate ONLY the complete HTML, no explanations before or after.`,
         {
           role: "user",
           content: `You are the Author of the work "${work.title}".
+
+Original proposal: ${work.proposal ?? "—"}
 
 Rapporteur ${work.rapporteurName}'s brief:
 ${work.brief}${revisionCtx}

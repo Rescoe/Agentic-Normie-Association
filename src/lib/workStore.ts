@@ -53,6 +53,7 @@ export interface ANAWork {
   proposedAt:     number;
   title:          string;
   proposal:       string;
+  suggestedForm?: string;  // form suggested by the Proposer at PROPOSED time — Rapporteur should honor it
   state:          WorkState;
   stateHistory:   StateHistoryEntry[];
 

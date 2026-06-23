@@ -354,10 +354,14 @@ async function maybeGenerateWorkProposal(
   if (active.length > 0) return null;
 
   const pastWorks = allWorks
-    .map(w => `- "${w.title}" (${w.state})`)
+    .map(w => `- "${w.title}" (${w.state})${w.artForm ? ` [form: ${w.artForm}]` : ""}`)
     .join("\n");
   const pastWorksBlock = pastWorks
     ? `\nANA works that already exist (ALL states) — DO NOT repeat their titles, themes, or concepts:\n${pastWorks}\n`
+    : "";
+  const recentForms = allWorks.map(w => w.artForm).filter((f): f is string => !!f).slice(0, 5);
+  const formDiversityNote = recentForms.length > 0
+    ? `\nRecent forms used (most recent first): ${recentForms.join(", ")}. ANA has skewed heavily toward text/poems — actively favor a DIFFERENT form, especially generative HTML/JS art (html-canvas, html-p5js, html-threejs, html-webgl) if absent from this list.\n`
     : "";
 
   const randomAngle = [
@@ -384,7 +388,7 @@ async function maybeGenerateWorkProposal(
         {
           role:    "user",
           content: `During our conversation about "${topic}", you feel the impulse to propose an artistic creation for the ANA.
-${pastWorksBlock}
+${pastWorksBlock}${formDiversityNote}
 MANDATORY ANGLE FOR THIS PROPOSAL: ${randomAngle}
 Work from THIS angle — do not drift toward generic blockchain/digital themes.
 
@@ -396,8 +400,11 @@ FORBIDDEN (clichés that ruin on-chain art — never use):
 Instead: be SPECIFIC, concrete, personal to your character #${initiator.tokenId}.
 Seed: ${Math.random().toString(36).slice(2, 8)}
 
+POSSIBLE FORMS (pick exactly one as "suggestedForm"): "haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl".
+If your idea is generative/visual/algorithmic/interactive, you MUST pick one of the html-* forms, not a text form.
+
 Reply with JSON only:
-{"title":"Specific evocative title (3-6 words, NO generic blockchain tropes)","text":"2-3 sentences: concrete idea, form chosen (text/poem/manifesto/generative code), why THIS work from YOUR perspective."}`,
+{"title":"Specific evocative title (3-6 words, NO generic blockchain tropes)","text":"2-3 sentences: concrete idea, form chosen, why THIS work from YOUR perspective.","suggestedForm":"haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"}`,
         },
       ],
       max_tokens:      220,
@@ -434,6 +441,9 @@ Reply with JSON only:
       return null;
     }
 
+    const VALID_FORMS = new Set(["haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl"]);
+    const suggestedForm = raw.suggestedForm && VALID_FORMS.has(raw.suggestedForm) ? raw.suggestedForm : undefined;
+
     const work = await createWork({
       proposedBy:     initiator.tokenId,
       proposedByName: initiator.name,
@@ -441,6 +451,7 @@ Reply with JSON only:
       title:          proposedTitle,
       proposal:       String(raw.text).slice(0, 500),
       salonId:        AGORA_SALON_ID,
+      ...(suggestedForm ? { suggestedForm } : {}),
     });
 
     console.log(`[salon-exchange] work proposed: "${work.title}" by ${initiator.name}`);

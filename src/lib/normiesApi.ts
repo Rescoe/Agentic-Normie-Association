@@ -174,6 +174,48 @@ export async function getNormieMemberCard(tokenId: number) {
   };
 }
 
+// ─── Burns / History ──────────────────────────────────────────────────────────
+
+export interface BurnedToken {
+  tokenId:     string;
+  txHash:      string;
+  blockNumber: string;
+  timestamp:   string; // unix seconds, as string
+}
+
+export interface HistoryStats {
+  totalBurnCommitments:         number;
+  totalBurnedTokens:            number;
+  totalTransforms:              number;
+  totalTokenData:               number;
+  totalZombies:                 number;
+  totalLegendaryCanvases:       number;
+  totalActionPointsDistributed: string;
+}
+
+/** Indexer-wide summary counts — includes the live total of burned Normies. */
+export async function getHistoryStats(): Promise<HistoryStats> {
+  return fetchApi<HistoryStats>("/history/stats", 60);
+}
+
+/**
+ * Paginated burned-token records, newest first.
+ * Endpoint: GET /history/burned-tokens
+ */
+export async function getBurnedTokens(limit = 50, offset = 0): Promise<BurnedToken[]> {
+  return fetchApi<BurnedToken[]>(`/history/burned-tokens?limit=${limit}&offset=${offset}`, 60);
+}
+
+/** Original SVG of a burned token (last known image before it was burned). */
+export function getBurnedTokenSvgUrl(tokenId: number | string): string {
+  return `${BASE_URL}/history/burned/${tokenId}/image.svg`;
+}
+
+/** Original PNG of a burned token. */
+export function getBurnedTokenImageUrl(tokenId: number | string): string {
+  return `${BASE_URL}/history/burned/${tokenId}/image.png`;
+}
+
 /**
  * Seed pour le moteur génératif : traits + level + actionPoints.
  */
