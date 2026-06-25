@@ -940,6 +940,10 @@ function WorkStatusSection() {
   const [lcError,  setLcError]  = useState<string | null>(null);
   const [lcRunning, setLcRunning] = useState(false);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [genStatus, setGenStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [genMessage, setGenMessage] = useState<string | null>(null);
+  const [codeView, setCodeView] = useState<ANAWorkFull | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -982,6 +986,44 @@ function WorkStatusSection() {
     } finally { setLcRunning(false); }
   };
 
+  const retryGenerative = async (workId: string) => {
+    if (!confirm("Relancer cette œuvre générative depuis l'étape CREATING avec les prompts/validations actuels ?")) return;
+    setRetryingId(workId);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        body: JSON.stringify({ retryGenerative: workId }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
+      else void refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setRetryingId(null); }
+  };
+
+  const triggerGenerativeWork = async () => {
+    setGenStatus("loading"); setGenMessage(null);
+    try {
+      const r = await fetch("/api/keeper/trigger-generative-work", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        body: JSON.stringify({}),
+      });
+      const d = await r.json() as { error?: string; work?: { title: string; artForm: string; authorName: string } };
+      if (!r.ok || d.error) {
+        setGenStatus("error"); setGenMessage(d.error ?? `HTTP ${r.status}`);
+      } else {
+        setGenStatus("success");
+        setGenMessage(`"${d.work!.title}" (${d.work!.artForm}) — Auteur : ${d.work!.authorName}. Cliquez "Déclencher work-lifecycle" pour la faire avancer.`);
+        void refresh();
+      }
+    } catch (e) {
+      setGenStatus("error"); setGenMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   type LcWorkResult = { id: string; title: string; from: string; to: string; advanced: boolean; error?: string };
   const lcResults = (Array.isArray(lcResult?.results) ? lcResult!.results : []) as LcWorkResult[];
 
@@ -1006,7 +1048,23 @@ function WorkStatusSection() {
         >
           {loading ? "…" : "↻ Rafraîchir"}
         </button>
+        <button
+          onClick={() => void triggerGenerativeWork()}
+          disabled={genStatus === "loading"}
+          title="Crée uniquement une œuvre générative HTML/JS (canvas, p5.js, three.js ou WebGL) — jamais un poème"
+          className="font-mono text-xs border border-purple-400 text-purple-700 px-4 py-2.5 hover:bg-purple-50/30 disabled:opacity-40 disabled:cursor-wait"
+        >
+          {genStatus === "loading" ? "Création…" : "🖼️ Créer une œuvre générative"}
+        </button>
       </div>
+
+      {genMessage && (
+        <div className={`border px-4 py-3 ${genStatus === "error" ? "border-red-300 bg-red-50/20" : "border-purple-300 bg-purple-50/20"}`}>
+          <p className={`font-mono text-xs ${genStatus === "error" ? "text-red-600" : "text-purple-700"}`}>
+            {genStatus === "error" ? "✗ " : "✓ "}{genMessage}
+          </p>
+        </div>
+      )}
 
       {lcError && (
         <div className="border border-red-300 bg-red-50/20 px-4 py-3">
@@ -1059,6 +1117,15 @@ function WorkStatusSection() {
                 <p className="font-mono text-xs text-[--fg-muted]">
                   dernière étape : {w.stateHistory[w.stateHistory.length - 1]?.note ?? "—"}
                 </p>
+              )}
+              {w.artworkText && (
+                <button
+                  onClick={() => setCodeView(w)}
+                  title="Voir le code/texte en cours de création par les Normies (exceptionnel, debug uniquement)"
+                  className="font-mono text-[10px] text-indigo-600 border border-indigo-300 px-2 py-1 hover:bg-indigo-50/20 mt-0.5"
+                >
+                  👁️ Voir le code en cours ({w.artworkText.length} car.)
+                </button>
               )}
               {/* Debug panel for stuck PUBLISHING works */}
               {w.state === "PUBLISHING" && (
@@ -1125,13 +1192,67 @@ function WorkStatusSection() {
           </summary>
           <div className="divide-y divide-[--border]">
             {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").map(w => (
-              <div key={w.id} className="px-4 py-3 flex items-center justify-between">
+              <div key={w.id} className="px-4 py-3 flex items-center justify-between gap-2 flex-wrap">
                 <p className="font-mono text-xs">{w.title}</p>
-                <span className={`font-mono text-xs font-bold ${STATE_COLOR[w.state] ?? ""}`}>{w.state}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {w.artworkText && (
+                    <button
+                      onClick={() => setCodeView(w)}
+                      title="Voir le code/texte produit pour cette œuvre"
+                      className="font-mono text-[10px] text-indigo-600 border border-indigo-300 px-2 py-0.5 hover:bg-indigo-50/20"
+                    >
+                      👁️ Code
+                    </button>
+                  )}
+                  {w.state === "REJECTED" && w.artForm?.startsWith("html-") && (
+                    <button
+                      onClick={() => void retryGenerative(w.id)}
+                      disabled={retryingId === w.id}
+                      title="Exceptionnel : relance cette œuvre générative depuis CREATING, avec les prompts/validations actuels"
+                      className="font-mono text-[10px] text-purple-600 border border-purple-300 px-2 py-0.5 hover:bg-purple-50/20 disabled:opacity-40"
+                    >
+                      {retryingId === w.id ? "…" : "↻ Relancer"}
+                    </button>
+                  )}
+                  <span className={`font-mono text-xs font-bold ${STATE_COLOR[w.state] ?? ""}`}>{w.state}</span>
+                </div>
               </div>
             ))}
           </div>
         </details>
+      )}
+
+      {/* Debug: view the raw artwork text/code produced so far for a work */}
+      {codeView && (
+        <div
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6"
+          onClick={() => setCodeView(null)}
+        >
+          <div
+            className="bg-[--bg] border border-[--border] max-w-3xl w-full max-h-[80vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[--border] px-4 py-3">
+              <p className="font-mono text-xs font-bold truncate">
+                {codeView.title} — {codeView.artForm ?? "texte"} · {codeView.state}
+              </p>
+              <button
+                onClick={() => setCodeView(null)}
+                className="font-mono text-xs border border-[--border] px-2 py-1 hover:bg-[--bg-card] shrink-0"
+              >
+                ✕ Fermer
+              </button>
+            </div>
+            <pre className="font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all overflow-auto p-4 flex-1">
+              {codeView.artworkText}
+            </pre>
+            {codeView.validationNote && (
+              <div className="border-t border-[--border] px-4 py-2">
+                <p className="font-mono text-[10px] text-red-600">⚠ {codeView.validationNote}</p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -24,6 +24,7 @@ import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normi
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
+import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 
 const MODEL        = "meta-llama/llama-4-scout-17b-16e-instruct";
 const MODEL_FAST   = "llama-3.1-8b-instant";
@@ -527,21 +528,7 @@ function detectHtmlForm(work: ANAWork): boolean {
   return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|generative\s+html|html\s+generative\s+art|visual\s+javascript)\b/i.test(work.brief ?? "");
 }
 
-// SRI hashes computed on 2026-06-17 from the exact CDN files.
-// If you update a library version, recompute:
-//   curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A
-const CDN_SRI: Record<string, { url: string; hash: string }> = {
-  "html-p5js":    { url: "https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js",    hash: "sha384-6Twx1hAeKnwfOYJAHtYeJETRiGD5pRPkjjh0pVbG1QoesncjOpw5e75Y1kOkXeRI" },
-  "html-threejs": { url: "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js", hash: "sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" },
-};
-
-function cdnForForm(artForm?: string): string {
-  const entry = artForm ? CDN_SRI[artForm] : undefined;
-  if (!entry) return "";
-  return `<script src="${entry.url}" integrity="${entry.hash}" crossorigin="anonymous"></script>`;
-}
-
-async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean | string> {
   const author = personas.find(p => p.tokenId === work.authorTokenId);
   if (!author) return false;
 
@@ -572,16 +559,30 @@ Original proposal: ${work.proposal ?? "—"}
 Rapporteur ${work.rapporteurName}'s brief:
 ${work.brief}${revisionCtx}
 
-Generate a COMPLETE, STANDALONE HTML page. It will be stored immutably on-chain on Base.
+Generate a COMPLETE, STANDALONE HTML page. It will be stored immutably on-chain on Base and
+rendered inside a sandboxed iframe (sandbox="allow-scripts" — no same-origin, no network).
+Do NOT write any <meta http-equiv="Content-Security-Policy"> tag yourself — the server computes
+and serves a strict CSP for you (hash-based, no 'unsafe-inline'). Just write plain HTML/CSS/JS.
+
 STRICT TECHNICAL CONSTRAINTS (on-chain security):
-- Start with <!DOCTYPE html> and <html lang="en">
-- MANDATORY: include this CSP meta as the first tag in <head>:
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${cdn ? ` https://cdnjs.cloudflare.com` : ""}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none';">
-- Inline styles in <style>, inline JS in <script>
-${cdn ? `- Use this exact CDN script tag (with SRI hash): ${cdn}` : "- Native Canvas 2D, no CDN needed"}
-- NO fetch(), XMLHttpRequest, import(), eval() — everything must run without network
-- NEVER access window.ethereum, window.parent, or window.top
-- Visually immersive body: dark background, fullscreen if possible
+- Start with <!DOCTYPE html> and <html lang="en">, end with </html>
+- Inline styles in <style>, inline JS in <script> — no inline event-handler attributes
+  (no onclick="", onload="", etc. — attach listeners with addEventListener instead)
+${cdn ? `- Use this exact CDN script tag (with SRI hash), placed before your own <script>: ${cdn}` : "- Native Canvas 2D, no CDN needed"}
+- NO fetch(), XMLHttpRequest, import(), eval(), new Function() — everything must run offline
+- NO <iframe> — NEVER access window.ethereum, window.parent, or window.top
+${work.artForm === "html-p5js" ? `- MANDATORY p5.js contract: define function setup() that calls createCanvas(windowWidth, windowHeight)
+  and define function windowResized() that calls resizeCanvas(windowWidth, windowHeight)
+- Reset default margins so the canvas fills the viewport with no black/white bars:
+  html,body{margin:0;padding:0;overflow:hidden;background:#0A0A0A} canvas{display:block}
+- Call background(...) on every draw() frame — never leave the canvas uncleared (this is what
+  causes a stuck black screen). Pick colors deliberately; never assume a default fill.` : ""}
+${work.artForm === "html-threejs" ? `- MANDATORY three.js contract: create a THREE.Scene, a THREE.PerspectiveCamera, and a
+  THREE.WebGLRenderer sized to window.innerWidth/innerHeight, appended to document.body
+- Handle window 'resize' to update camera aspect and renderer size — never leave a black canvas` : ""}
+${(work.artForm === "html-canvas" || work.artForm === "html-webgl") ? `- Create a <canvas> sized to the viewport (canvas.width/height = window.innerWidth/innerHeight)
+  and call getContext("2d") or getContext("webgl"); clear/paint it every frame — never leave it black` : ""}
+- Visually immersive body: dark background by default, fullscreen if possible
 
 ON-CHAIN DATA TO INJECT (put these JS constants at the top of your <script>):
 const NORMIE_ID = ${author.tokenId};
@@ -595,6 +596,15 @@ Generate ONLY the complete HTML, no explanations before or after.`,
       ],
       { maxTokens: 2500, temp: 0.95 }
     );
+
+    if (artworkText) {
+      const check = validateGenerativeHtml(artworkText, work.artForm);
+      if (!check.valid) {
+        console.warn(`[work-lifecycle] CREATING: generated html-* artwork failed validation for "${work.title}": ${check.errors.join("; ")}`);
+        return `generative artwork validation failed: ${check.errors.join("; ").slice(0, 200)}`;
+      }
+      artworkText = check.html;
+    }
   } else {
     // ── Text artwork ───────────────────────────────────────────────────────────
     const formHint = work.artForm === "haiku"
@@ -754,7 +764,10 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   // This covers the case where publishWork succeeded but initializeCollection failed.
   if (onChainWorkId == null) {
     // ── Step 1: Deploy collection BEFORE publishing so its address is in the certificate ──
-    if (!collectionAddress && editionPriceWei > 0n) {
+    // HTML/generative artworks always need a collection — that's where the actual artwork
+    // (artworkContent) lives on-chain. Without it the gallery/certificate have nothing real
+    // to render. Text works only get one when sold as paid editions.
+    if (!collectionAddress && (editionPriceWei > 0n || detectHtmlForm(work))) {
       const deployResult = await deployCollection({
         authorTokenId:     work.authorTokenId!,
         curatorTokenId:    work.curatorTokenId!,
@@ -1063,7 +1076,7 @@ export async function POST(req: NextRequest) {
 
   // Admin-only: force a stuck work to REJECTED so the pipeline can restart.
   // Body: { forceReject: "<workId>" }
-  let body: { forceReject?: string } = {};
+  let body: { forceReject?: string; retryGenerative?: string } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
   if (body.forceReject) {
@@ -1076,6 +1089,30 @@ export async function POST(req: NextRequest) {
     }
     console.log(`[work-lifecycle] admin force-rejected work ${target.id} "${target.title}"`);
     return NextResponse.json({ rejected: target.id, title: target.title });
+  }
+
+  // Admin-only debug tool: re-run a REJECTED generative (html-*) work from CREATING,
+  // using the current prompts/validation code. Text/poem works are out of scope —
+  // refuse them so this stays exceptional and limited to the generative pipeline.
+  if (body.retryGenerative) {
+    if (!isAdminCall) return NextResponse.json({ error: "retryGenerative requires x-admin-call header" }, { status: 403 });
+    const target = await getWork(body.retryGenerative);
+    if (!target) return NextResponse.json({ error: `Work ${body.retryGenerative} not found` }, { status: 404 });
+    if (target.state !== "REJECTED") {
+      return NextResponse.json({ error: `Work is ${target.state}, not REJECTED — nothing to retry` }, { status: 409 });
+    }
+    if (!detectHtmlForm(target)) {
+      return NextResponse.json({ error: "retryGenerative is reserved for generative (html-*) works" }, { status: 400 });
+    }
+    await updateWork(target.id, {
+      artworkText:    undefined,
+      validationNote: undefined,
+      revisionCount:  0,
+      pipelineFailCount: 0,
+    });
+    await advanceState(target.id, "CREATING", "Retried by admin — re-running CREATING with current prompts/validation");
+    console.log(`[work-lifecycle] admin retried generative work ${target.id} "${target.title}"`);
+    return NextResponse.json({ retried: target.id, title: target.title, state: "CREATING" });
   }
 
   if (!process.env.GROQ_API_KEY) {
