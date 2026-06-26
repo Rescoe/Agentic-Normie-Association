@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { HomeLiveActivity } from "@/components/HomeLiveActivity";
 
 export const metadata: Metadata = {
   title: "ANA — The first on-chain Normie association | Agentic Normie Association",
@@ -258,84 +259,6 @@ async function HowItWorks() {
   );
 }
 
-// ─── Observatory feed (placeholder live) ─────────────────────────────────────
-
-async function Observatory() {
-  const t = await getTranslations("home");
-
-  const OBSERVABLE_EVENTS = [
-    { type: "INSCRIPTION", text: t("obsEventInscription"), time: "—", pending: true },
-    { type: "SESSION",     text: t("obsEventSession"),     time: "—", pending: true },
-    { type: "VOTE",        text: t("obsEventVote"),        time: "—", pending: true },
-    { type: "RÔLE",        text: t("obsEventRole"),        time: "—", pending: true },
-    { type: "ŒUVRE",       text: t("obsEventWork"),        time: "—", pending: true },
-  ];
-
-  return (
-    <section className="py-20 px-6 border-t border-[--border]">
-      <div className="max-w-6xl mx-auto">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
-          <div className="space-y-6">
-            <div>
-              <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mb-3">
-                {t("observatory")}
-              </p>
-              <h2 className="text-3xl font-bold leading-tight">
-                {t("observatoryTitleLine1")}
-                <br />
-                {t("observatoryTitleLine2")}
-              </h2>
-            </div>
-            <p className="text-[--fg-muted] leading-relaxed">
-              {t("observatoryDesc")}
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <Link
-                href="/activity"
-                className="font-mono text-xs border border-[--border] px-4 py-2.5 hover:bg-[--bg-card] transition-colors text-center"
-              >
-                {t("onChainActivityLink")}
-              </Link>
-              <Link
-                href="/salon"
-                className="font-mono text-xs border border-[--border] px-4 py-2.5 hover:bg-[--bg-card] transition-colors text-center"
-              >
-                {t("normieSalonLink")}
-              </Link>
-            </div>
-          </div>
-
-          <div className="border border-[--border]">
-            <div className="bg-[--bg-card] border-b border-[--border] px-5 py-3 flex items-center justify-between">
-              <span className="font-mono text-xs uppercase tracking-widest">{t("onChainFeed")}</span>
-              <span className="flex items-center gap-2 font-mono text-xs text-[--fg-muted]">
-                <span className="live-dot w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" />
-                {t("pending")}
-              </span>
-            </div>
-            <div className="divide-y divide-[--border]">
-              {OBSERVABLE_EVENTS.map((event, i) => (
-                <div key={i} className="px-5 py-4 flex items-start gap-4 opacity-40">
-                  <span className="font-mono text-xs bg-[--bg-card] border border-[--border] px-2 py-0.5 shrink-0 mt-0.5">
-                    {event.type}
-                  </span>
-                  <p className="text-sm text-[--fg-muted] flex-1">{event.text}</p>
-                  <span className="font-mono text-xs text-[--fg-muted] shrink-0">{event.time}</span>
-                </div>
-              ))}
-            </div>
-            <div className="bg-[--bg-card] border-t border-[--border] px-5 py-3">
-              <p className="font-mono text-xs text-[--fg-muted] text-center">
-                {t("observatoryFooterNote")}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 // ─── CTA ─────────────────────────────────────────────────────────────────────
 
 async function CTA() {
@@ -448,10 +371,10 @@ export default function Home() {
       <Navbar />
       <main className="pt-24">
         <Hero />
+        <HomeLiveActivity />
         <AGCalendarStrip />
         <EntryCards />
         <HowItWorks />
-        <Observatory />
         <CTA />
       </main>
       <Footer />
