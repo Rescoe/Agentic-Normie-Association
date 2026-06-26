@@ -18,6 +18,7 @@ import {
   type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch } from "@/lib/groq";
 
@@ -481,7 +482,7 @@ export async function POST(req: NextRequest) {
     req.headers.get("x-cron-secret") === cronSecret ||
     req.headers.get("authorization") === `Bearer ${cronSecret}`
   );
-  const isAdminCall = req.headers.get("x-admin-call") === "1";
+  const isAdminCall = (await verifyAdminRequest(req)).ok;
 
   // Cron-triggered exchanges only run on production — never on preview deployments.
   // Admin calls (manual trigger from /admin) always run regardless of environment.

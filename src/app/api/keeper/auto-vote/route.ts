@@ -20,6 +20,7 @@ import {
 } from "@/lib/contracts";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "meta-llama/llama-4-scout-17b-16e-instruct";
@@ -250,6 +251,13 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  // This was previously completely unauthenticated — anyone could trigger LLM-driven
+  // candidacies/votes, or (mode=execute) have the relayer actually cast on-chain votes.
+  const { ok: isAdminCall } = await verifyAdminRequest(req);
+  if (!isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — a valid admin signature is required" }, { status: 401 });
+  }
+
   let body: { phase?: string; mode?: string; candidacies?: Candidacy[] };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
   const phase = body.phase ?? "vote";
@@ -282,10 +290,17 @@ export async function POST(req: NextRequest) {
       const voteSalon = all.find(s => s.name === salonName);
       if (voteSalon) await closeSalon(voteSalon.id, 0).catch(() => null);
 
-      // Auto-create work with the elected Auteur — fire-and-forget
+      // Auto-create work with the elected Auteur — fire-and-forget. Server-to-server,
+      // no wallet to sign with, so this uses the real shared secret (x-cron-secret),
+      // not the admin-signature path meant for browser-initiated calls.
       const proposeUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/api/keeper/propose-work`;
-      fetch(proposeUrl, { method: "POST", headers: { "x-admin-call": "1", "Content-Type": "application/json" }, body: "{}" })
-        .catch(() => null);
+      const cronSecret = process.env.CRON_SECRET;
+      if (cronSecret) {
+        fetch(proposeUrl, { method: "POST", headers: { "x-cron-secret": cronSecret, "Content-Type": "application/json" }, body: "{}" })
+          .catch(() => null);
+      } else {
+        console.warn("[auto-vote] CRON_SECRET not configured — skipping auto propose-work after session close");
+      }
 
       return NextResponse.json({ phase: "close", txHash: hash, postElection: "propose-work triggered" });
     } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }

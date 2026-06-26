@@ -5,11 +5,12 @@
  * Body: { since?: "2026-06-01" } — defaults to 2026-06-01T00:00:00Z if omitted.
  *
  * Auth follows the same convention as /api/keeper/work-lifecycle: x-cron-secret
- * (automation) or x-admin-call: 1 (manual trigger from the admin panel).
+ * (automation) or a wallet-signed admin proof (manual trigger from the admin panel).
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { backfillTxLog, blockNumberAtTimestamp, relabelIncompleteTxLog } from "@/lib/etherscanBackfill";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60; // Vercel Hobby plan cap — safe to call again, inserts are idempotent (ON CONFLICT DO NOTHING)
@@ -17,9 +18,9 @@ export const maxDuration = 60; // Vercel Hobby plan cap — safe to call again, 
 export async function POST(req: NextRequest) {
   const cronSecret  = process.env.CRON_SECRET;
   const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
-  const isAdminCall = req.headers.get("x-admin-call") === "1";
+  const isAdminCall = (await verifyAdminRequest(req)).ok;
   if (!isCron && !isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret or x-admin-call required" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
   }
 
   const apiKey = process.env.BASESCAN_API_KEY;

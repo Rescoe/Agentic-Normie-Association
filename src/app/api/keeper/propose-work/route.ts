@@ -2,7 +2,7 @@
  * POST /api/keeper/propose-work
  * Un Normie (persona LLM) génère un titre + proposition d'œuvre et la crée en Neon (PROPOSED).
  * Appelé par l'admin après initiateWorkSession() ou par le cron salon-exchange.
- * Protected by x-cron-secret or x-admin-call.
+ * Protected by x-cron-secret or a wallet-signed admin proof (see lib/adminAuth.ts).
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
@@ -11,6 +11,7 @@ import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROLES } from "@/lib/contracts";
 import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -49,10 +50,10 @@ async function getMemberIds(): Promise<number[]> {
 export async function POST(req: NextRequest) {
   const cronSecret  = process.env.CRON_SECRET;
   const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
-  const isAdminCall = req.headers.get("x-admin-call") === "1";
+  const isAdminCall = (await verifyAdminRequest(req)).ok;
 
   if (!isCron && !isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
   }
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });

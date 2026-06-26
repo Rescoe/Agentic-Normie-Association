@@ -371,6 +371,23 @@ export async function closeSalon(id: string, byTokenId: number): Promise<{ ok: b
   return { ok: true };
 }
 
+/**
+ * Reopens a previously-closed salon — used when an admin retries a REJECTED
+ * work from CREATING (see /api/keeper/work-lifecycle's retryGenerative): without
+ * this, the salon stays closed and every message the retry produces is silently
+ * dropped by addMessage(), making the retry look stuck even though it's running.
+ * Also clears any stale critique window, since the salon is back to active work.
+ */
+export async function reopenSalon(id: string): Promise<{ ok: boolean; error?: string }> {
+  const salon = await getSalon(id);
+  if (!salon) return { ok: false, error: "Salon not found" };
+  await mutate(s => {
+    s.salons[id].isOpen = true;
+    delete s.salons[id].critique;
+  });
+  return { ok: true };
+}
+
 export async function excludeMember(
   salonId: string, targetId: number, byTokenId: number
 ): Promise<{ ok: boolean; error?: string }> {

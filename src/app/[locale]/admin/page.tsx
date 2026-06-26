@@ -18,6 +18,7 @@ import {
   useReadContract,
   useWriteContract,
   useWaitForTransactionReceipt,
+  useSignMessage,
 } from "wagmi";
 import { useRouter } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
@@ -34,6 +35,10 @@ import {
   ROLES,
   ROLE_LABELS,
 } from "@/lib/contracts";
+import { buildAdminAuthMessage, ADMIN_AUTH_HEADERS, ADMIN_AUTH_MAX_AGE_MS } from "@/lib/adminAuth";
+
+/** Type for the function passed down to sections that call admin-gated API routes. */
+export type GetAdminHeaders = () => Promise<Record<string, string>>;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -161,10 +166,12 @@ function WorkRegistrySection({
   isOwner,
   writeContractAsync,
   onRefresh,
+  getAdminHeaders,
 }: {
   isOwner: boolean;
   writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
   onRefresh: () => void;
+  getAdminHeaders: GetAdminHeaders;
 }) {
   const [txHash,    setTxHash]    = useState<`0x${string}` | null>(null);
   const [schedTx,   setSchedTx]   = useState<`0x${string}` | null>(null);
@@ -192,9 +199,10 @@ function WorkRegistrySection({
     async function runPipeline() {
       setPipeStep("proposing");
       try {
+        const adminHeaders = await getAdminHeaders();
         const r1 = await fetch("/api/keeper/propose-work", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+          headers: { "Content-Type": "application/json", ...adminHeaders },
         });
         const d1 = await r1.json() as { work?: { title: string; proposedBy: string }; error?: string };
         if (!r1.ok) throw new Error(d1.error ?? `HTTP ${r1.status}`);
@@ -203,7 +211,7 @@ function WorkRegistrySection({
         setPipeStep("lifecycle");
         const r2 = await fetch("/api/keeper/work-lifecycle", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+          headers: { "Content-Type": "application/json", ...adminHeaders },
         });
         const d2 = await r2.json() as { advanced?: number; processed?: number; error?: string };
         if (!r2.ok) throw new Error(d2.error ?? `HTTP ${r2.status}`);
@@ -479,7 +487,7 @@ function WorkRegistrySection({
 
 // ─── SalonExchangeSection ────────────────────────────────────────────────────
 
-function SalonExchangeSection() {
+function SalonExchangeSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [running, setRunning]   = useState(false);
   const [resetting, setResetting] = useState(false);
   const [result,  setResult]    = useState<Record<string, unknown> | null>(null);
@@ -492,7 +500,7 @@ function SalonExchangeSection() {
     try {
       const res  = await fetch("/api/keeper/salon-exchange", {
         method:  "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
         body:    JSON.stringify(salonId ? { salonId } : {}),
       });
       const data = await res.json() as Record<string, unknown>;
@@ -512,7 +520,7 @@ function SalonExchangeSection() {
     try {
       const res  = await fetch("/api/keeper/reset-salon", {
         method:  "POST",
-        headers: { "x-admin-call": "1" },
+        headers: await getAdminHeaders(),
       });
       const data = await res.json() as Record<string, unknown>;
       if (!res.ok) setError((data.error as string) ?? "Erreur reset");
@@ -575,7 +583,7 @@ function SalonExchangeSection() {
 
 // ─── AutoVoteSection ─────────────────────────────────────────────────────────
 
-function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
+function AutoVoteSection({ sessionActive, getAdminHeaders }: { sessionActive: boolean; getAdminHeaders: GetAdminHeaders }) {
   const [running,   setRunning]   = useState(false);
   const [result,    setResult]    = useState<Record<string, unknown> | null>(null);
   const [error,     setError]     = useState<string | null>(null);
@@ -588,7 +596,7 @@ function AutoVoteSection({ sessionActive }: { sessionActive: boolean }) {
     try {
       const res = await fetch("/api/keeper/auto-vote", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
         body: JSON.stringify({ mode }),
       });
       const data = await res.json();
@@ -1051,7 +1059,7 @@ const STATE_COLOR: Record<string, string> = {
   REJECTED:     "text-red-600",
 };
 
-function WorkStatusSection() {
+function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [works,   setWorks]   = useState<ANAWorkFull[]>([]);
   const [loading, setLoading] = useState(false);
   const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
@@ -1078,7 +1086,7 @@ function WorkStatusSection() {
     try {
       const r = await fetch("/api/keeper/work-lifecycle", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
         body: JSON.stringify({ forceReject: workId }),
       });
       const d = await r.json() as Record<string, unknown>;
@@ -1094,7 +1102,7 @@ function WorkStatusSection() {
     try {
       const r = await fetch("/api/keeper/work-lifecycle", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) setLcError((d.error as string) ?? `HTTP ${r.status}`);
@@ -1110,7 +1118,7 @@ function WorkStatusSection() {
     try {
       const r = await fetch("/api/keeper/work-lifecycle", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
         body: JSON.stringify({ retryGenerative: workId }),
       });
       const d = await r.json() as Record<string, unknown>;
@@ -1126,7 +1134,7 @@ function WorkStatusSection() {
     try {
       const r = await fetch("/api/keeper/trigger-generative-work", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
         body: JSON.stringify({}),
       });
       const d = await r.json() as { error?: string; work?: { title: string; artForm: string; authorName: string } };
@@ -1400,7 +1408,7 @@ const STATE_ORDER: string[] = [
   "PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING","PUBLISHED",
 ];
 
-function WorkTestPipelineSection() {
+function WorkTestPipelineSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [running,    setRunning]    = useState(false);
   const [logs,       setLogs]       = useState<StepLog[]>([]);
   const [work,       setWork]       = useState<ANAWorkFull | null>(null);
@@ -1434,7 +1442,7 @@ function WorkTestPipelineSection() {
       const t0 = Date.now();
       const r1 = await fetch("/api/keeper/propose-work", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
       });
       const d1 = await r1.json() as { work?: { id: string; title: string; proposedBy: string; state: string }; error?: string };
       if (!r1.ok || !d1.work?.id) throw new Error(d1.error ?? "propose-work failed");
@@ -1469,7 +1477,7 @@ function WorkTestPipelineSection() {
 
         const r = await fetch("/api/keeper/work-lifecycle", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+          headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
         });
         const d = await r.json() as {
           results?: Array<{ id: string; from: string; to: string; advanced: boolean; error?: string }>;
@@ -1545,7 +1553,7 @@ function WorkTestPipelineSection() {
     if (!confirm("Reset tous les works (Neon) ?")) return;
     setResetting(true);
     try {
-      await fetch("/api/keeper/reset-works", { method: "POST", headers: { "x-admin-call": "1" } });
+      await fetch("/api/keeper/reset-works", { method: "POST", headers: await getAdminHeaders() });
       setLogs([]); setWork(null); setFinalState("none"); setPhase("");
     } finally { setResetting(false); }
   };
@@ -1782,7 +1790,7 @@ function WorkTestPipelineSection() {
 
 // ─── BurnCheckSection ─────────────────────────────────────────────────────────
 
-function BurnCheckSection() {
+function BurnCheckSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [running, setRunning] = useState(false);
   const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
   const [error,   setError]   = useState<string | null>(null);
@@ -1792,7 +1800,7 @@ function BurnCheckSection() {
     try {
       const r = await fetch("/api/keeper/check-burns", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-call": "1" },
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) setError((d.error as string) ?? `HTTP ${r.status}`);
@@ -1860,13 +1868,41 @@ export default function AdminPage() {
   const { address, isConnected } = useAccount();
   const router = useRouter();
   const { writeContractAsync } = useWriteContract();
+  const { signMessageAsync } = useSignMessage();
+
+  // ── Admin auth headers — signed once, cached, reused until near expiry ────
+  // Replaces the old static "x-admin-call: 1" header (anyone could send that)
+  // with a real proof: the connected wallet signs a short message, every
+  // gated API route recovers the signer and checks it against the on-chain
+  // owner before doing anything.
+  const [cachedAdminAuth, setCachedAdminAuth] = useState<{ address: string; signature: string; timestamp: number } | null>(null);
+  const getAdminHeaders: GetAdminHeaders = useCallback(async () => {
+    if (!address) throw new Error("Wallet not connected");
+    const now = Date.now();
+    if (cachedAdminAuth && cachedAdminAuth.address.toLowerCase() === address.toLowerCase()
+      && now - cachedAdminAuth.timestamp < ADMIN_AUTH_MAX_AGE_MS - 60_000) {
+      return {
+        [ADMIN_AUTH_HEADERS.address]:   cachedAdminAuth.address,
+        [ADMIN_AUTH_HEADERS.signature]: cachedAdminAuth.signature,
+        [ADMIN_AUTH_HEADERS.timestamp]: String(cachedAdminAuth.timestamp),
+      };
+    }
+    const timestamp = now;
+    const signature = await signMessageAsync({ message: buildAdminAuthMessage(address, timestamp) });
+    setCachedAdminAuth({ address, signature, timestamp });
+    return {
+      [ADMIN_AUTH_HEADERS.address]:   address,
+      [ADMIN_AUTH_HEADERS.signature]: signature,
+      [ADMIN_AUTH_HEADERS.timestamp]: String(timestamp),
+    };
+  }, [address, cachedAdminAuth, signMessageAsync]);
 
   // ── Read contract owner ───────────────────────────────────────────────────
-  const { data: coreOwner } = useReadContract({
+  const { data: coreOwner, isLoading: coreOwnerLoading } = useReadContract({
     address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "owner",
     query: { enabled: contractsDeployed },
   });
-  const { data: caOwner } = useReadContract({
+  const { data: caOwner, isLoading: caOwnerLoading } = useReadContract({
     address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "owner",
     query: { enabled: contractsDeployed },
   });
@@ -1954,6 +1990,61 @@ export default function AdminPage() {
     );
   }
 
+  // ── Access gate ──────────────────────────────────────────────────────────
+  // Nothing below this point renders for anyone but the verified contract
+  // owner: no sections, no data, no buttons — not even disabled ones. The
+  // on-chain onlyOwner checks protect the contract writes, but the backend
+  // keeper routes this page calls run server-side with the relayer's key, so
+  // they must never be reachable by an unauthenticated visitor in the first
+  // place. See src/lib/adminAuth.ts for the matching server-side check.
+  if (!isConnected) {
+    return (
+      <>
+        <Navbar />
+        <main className="pt-28 px-6 max-w-2xl mx-auto min-h-[50vh] flex items-center justify-center">
+          <div className="border border-[--border] bg-[--bg-card] p-8 flex flex-col items-center gap-6 text-center">
+            <p className="font-bold">Connect the contract owner&apos;s wallet to access the admin panel.</p>
+            <ConnectButton />
+          </div>
+        </main>
+        <Footer />
+      </>
+    );
+  }
+
+  if (coreOwnerLoading || caOwnerLoading) {
+    return (
+      <>
+        <Navbar />
+        <main className="pt-28 px-6 max-w-2xl mx-auto min-h-[50vh] flex items-center justify-center">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border border-[--border] border-t-[--fg-muted] rounded-full animate-spin" />
+            <p className="font-mono text-xs text-[--fg-muted]">Verifying access…</p>
+          </div>
+        </main>
+        <Footer />
+      </>
+    );
+  }
+
+  if (!isCoreOwner && !isCaOwner) {
+    return (
+      <>
+        <Navbar />
+        <main className="pt-28 px-6 max-w-2xl mx-auto min-h-[50vh] flex items-center justify-center">
+          <div className="border border-red-300 bg-red-50/30 px-6 py-8 text-center space-y-2 max-w-md">
+            <p className="font-bold text-red-700">Access denied</p>
+            <p className="font-mono text-xs text-red-600 leading-relaxed">
+              This wallet ({address?.slice(0, 6)}…{address?.slice(-4)}) is not authorized to view this page.
+              Please contact the admin if you believe this is a mistake.
+            </p>
+          </div>
+        </main>
+        <Footer />
+      </>
+    );
+  }
+
   return (
     <>
       <Navbar />
@@ -1973,28 +2064,13 @@ export default function AdminPage() {
             </p>
           </div>
 
-          {/* Connexion wallet */}
-          {!isConnected ? (
-            <div className="border border-[--border] bg-[--bg-card] p-8 flex flex-col items-center gap-6 text-center">
-              <p className="font-bold">Connectez le wallet propriétaire des contrats</p>
-              <ConnectButton />
-            </div>
-          ) : !isCoreOwner && !isCaOwner ? (
-            <div className="border border-red-300 bg-red-50/30 px-6 py-5">
-              <p className="font-bold text-red-700 mb-1">Accès refusé</p>
-              <p className="font-mono text-xs text-red-600">
-                Le wallet connecté ({address?.slice(0,6)}…{address?.slice(-4)}) n'est pas
-                le propriétaire des contrats. Les boutons ci-dessous seront rejetés par le contrat.
-              </p>
-            </div>
-          ) : (
-            <div className="border border-green-300 bg-green-50/30 px-6 py-4">
-              <p className="font-mono text-xs text-green-700 flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                Wallet propriétaire connecté — {address?.slice(0,6)}…{address?.slice(-4)}
-              </p>
-            </div>
-          )}
+          {/* Connexion wallet — reaching this point already means isCoreOwner || isCaOwner */}
+          <div className="border border-green-300 bg-green-50/30 px-6 py-4">
+            <p className="font-mono text-xs text-green-700 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+              Wallet propriétaire connecté — {address?.slice(0,6)}…{address?.slice(-4)}
+            </p>
+          </div>
 
           {/* État des contrats */}
           <section className="space-y-4">
@@ -2282,6 +2358,7 @@ export default function AdminPage() {
             isOwner={!!isCoreOwner}
             writeContractAsync={writeContractAsync}
             onRefresh={() => router.refresh()}
+            getAdminHeaders={getAdminHeaders}
           />
 
           {/* ── Auto-vote (test) ── */}
@@ -2293,7 +2370,7 @@ export default function AdminPage() {
                 Mode <code>simulate</code> : génère les décisions sans soumettre de transaction.
               </p>
             </div>
-            <AutoVoteSection sessionActive={session?.active ?? false} />
+            <AutoVoteSection sessionActive={session?.active ?? false} getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── ANACollectionFactory ── */}
@@ -2312,7 +2389,7 @@ export default function AdminPage() {
                 Avance toutes les œuvres actives d'un état. Crée l'œuvre fondatrice si les 6 rôles sont élus.
               </p>
             </div>
-            <WorkStatusSection />
+            <WorkStatusSection getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── Test pipeline complet ── */}
@@ -2324,7 +2401,7 @@ export default function AdminPage() {
                 Chaque étape est loggée avec ses données (votes, brief, œuvre, tx hash, adresse collection).
               </p>
             </div>
-            <WorkTestPipelineSection />
+            <WorkTestPipelineSection getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── Burns Normies ── */}
@@ -2336,7 +2413,7 @@ export default function AdminPage() {
                 Si un burn est détecté, crée automatiquement une œuvre mémoriale.
               </p>
             </div>
-            <BurnCheckSection />
+            <BurnCheckSection getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── Salon exchange keeper ── */}
@@ -2348,7 +2425,7 @@ export default function AdminPage() {
                 Chaque Normie est limité à 4 messages/heure. Appeler toutes les 15-20 min max.
               </p>
             </div>
-            <SalonExchangeSection />
+            <SalonExchangeSection getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── Documentation du flow ── */}

@@ -19,10 +19,11 @@ import {
   VOTE_WINDOW_MS,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
-import { addMessage, closeSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
+import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
@@ -1312,10 +1313,12 @@ export async function POST(req: NextRequest) {
     req.headers.get("x-cron-secret") === cronSecret ||
     req.headers.get("authorization") === `Bearer ${cronSecret}`
   );
-  const isAdminCall = req.headers.get("x-admin-call") === "1";
+  // Admin calls are authenticated by a wallet signature checked against the
+  // current AssociationCore owner on-chain — not a static, guessable header.
+  const isAdminCall = (await verifyAdminRequest(req)).ok;
 
   if (!isCron && !isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret or x-admin-call required" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
   }
 
   // Cron calls only run on production — admin calls always run.
@@ -1332,7 +1335,7 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { /* empty body ok */ }
 
   if (body.forceReject) {
-    if (!isAdminCall) return NextResponse.json({ error: "forceReject requires x-admin-call header" }, { status: 403 });
+    if (!isAdminCall) return NextResponse.json({ error: "forceReject requires a valid admin signature" }, { status: 403 });
     const target = await getWork(body.forceReject);
     if (!target) return NextResponse.json({ error: `Work ${body.forceReject} not found` }, { status: 404 });
     await advanceState(target.id, "REJECTED", "Forced reject by admin — pipeline reset");
@@ -1347,7 +1350,7 @@ export async function POST(req: NextRequest) {
   // using the current prompts/validation code. Text/poem works are out of scope —
   // refuse them so this stays exceptional and limited to the generative pipeline.
   if (body.retryGenerative) {
-    if (!isAdminCall) return NextResponse.json({ error: "retryGenerative requires x-admin-call header" }, { status: 403 });
+    if (!isAdminCall) return NextResponse.json({ error: "retryGenerative requires a valid admin signature" }, { status: 403 });
     const target = await getWork(body.retryGenerative);
     if (!target) return NextResponse.json({ error: `Work ${body.retryGenerative} not found` }, { status: 404 });
     if (target.state !== "REJECTED") {
@@ -1362,8 +1365,15 @@ export async function POST(req: NextRequest) {
       revisionCount:  0,
       pipelineFailCount: 0,
     });
+    // The work's dedicated salon was closed on rejection — reopen it, otherwise
+    // every salon message the retry produces (Author's draft, Curator's review,
+    // etc.) is silently dropped by addMessage()'s closed-salon guard, making it
+    // look like the Normies aren't working on it when they actually are.
+    if (target.salonId && target.salonId !== AGORA_SALON_ID) {
+      await reopenSalon(target.salonId).catch(() => null);
+    }
     await advanceState(target.id, "CREATING", "Retried by admin — re-running CREATING with current prompts/validation");
-    console.log(`[work-lifecycle] admin retried generative work ${target.id} "${target.title}"`);
+    console.log(`[work-lifecycle] admin retried generative work ${target.id} "${target.title}" — salon reopened`);
     return NextResponse.json({ retried: target.id, title: target.title, state: "CREATING" });
   }
 

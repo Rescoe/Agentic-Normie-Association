@@ -12,7 +12,7 @@
  * stepCreating), same pipeline and same validation as every other work —
  * this route only seeds the work and assigns roles.
  *
- * Protected by x-admin-call header (same convention as work-lifecycle).
+ * Protected by a wallet-signed admin proof (same convention as work-lifecycle).
  */
 export const dynamic = "force-dynamic";
 
@@ -22,6 +22,7 @@ import { base } from "viem/chains";
 import { ROLES, ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { createWork } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 import { addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
 import { GENERATIVE_FORMS, type GenerativeForm } from "@/lib/generativeArtwork";
 
@@ -57,8 +58,9 @@ async function getElectedRole(roleHash: `0x${string}`): Promise<number | null> {
 }
 
 export async function POST(req: NextRequest) {
-  if (req.headers.get("x-admin-call") !== "1") {
-    return NextResponse.json({ error: "Unauthorized — x-admin-call required" }, { status: 401 });
+  const { ok: isAdminCall } = await verifyAdminRequest(req);
+  if (!isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — a valid admin signature is required" }, { status: 401 });
   }
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });

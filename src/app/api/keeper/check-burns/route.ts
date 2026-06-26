@@ -21,6 +21,7 @@ import { getLastNormieSupply, updateNormieSupply, createWork, updateWork, getAct
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { getBurnedTokens } from "@/lib/normiesApi";
 import { registerCelebrationOnChain, CELEBRATION_TYPE } from "@/server/relayer/celebrationPublisher";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 
 // Minimal ERC721 ABI — totalSupply + the standard Transfer event
 const ERC721_SUPPLY_ABI = [
@@ -159,10 +160,10 @@ async function registerBurnCelebrations(burnedCount: number, workId: string): Pr
 export async function POST(req: NextRequest) {
   const cronSecret  = process.env.CRON_SECRET;
   const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
-  const isAdminCall = req.headers.get("x-admin-call") === "1";
+  const isAdminCall = (await verifyAdminRequest(req)).ok;
 
   if (!isCron && !isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret or x-admin-call required" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
   }
 
   const currentSupply = await getNormiesSupply();
