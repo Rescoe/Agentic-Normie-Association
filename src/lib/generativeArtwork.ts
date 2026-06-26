@@ -64,9 +64,12 @@ const MAX_HTML_BYTES = 20_000; // ~15KB authored + CDN tag + a margin
 // silently dropped on a revision).
 const REQUIRED_DATA_CONSTS = ["NORMIE_ID", "NORMIE_ARCHETYPE", "NORMIE_TRAITS", "WORK_TITLE", "CREATED_AT"];
 
-// At least one real drawing primitive must be present per form — catches the
-// "descriptive text dump instead of a visual artwork" rejection class (a piece
-// that only calls text()/fillText() to print data is not a generative artwork).
+// At least one real drawing primitive is *preferred* per form — flags the
+// "descriptive text dump instead of a visual artwork" case as a WARNING, not
+// a hard rejection: Normies are free to make text-centric work (glitched,
+// animated, reactive typography is a legitimate generative form), but the
+// curator should weigh in on whether a piece with none of these is genuinely
+// visual or should be reclassified as a literary work (poem/manifesto/prose).
 const VISUAL_PRIMITIVES_BY_FORM: Record<GenerativeForm, RegExp> = {
   "html-p5js":    /\b(ellipse|circle|rect|square|line\s*\(|point\s*\(|arc\s*\(|triangle|quad|curve|bezier|vertex|beginShape|image\s*\()/i,
   "html-threejs": /THREE\.(Mesh|Points|Line2?|Sprite|InstancedMesh)\b/,
@@ -76,7 +79,10 @@ const VISUAL_PRIMITIVES_BY_FORM: Record<GenerativeForm, RegExp> = {
 
 export interface ValidationResult {
   valid: boolean;
+  /** Hard technical-contract violations — block publication, trigger a revision. */
   errors: string[];
+  /** Soft signals (e.g. no shape primitives detected) — surfaced to the curator, never block on their own. */
+  warnings: string[];
   /** HTML with any author-supplied CSP meta stripped — the server sets CSP via header. */
   html: string;
 }
@@ -87,7 +93,8 @@ export interface ValidationResult {
  * anything that could escape the sandbox or rely on un-hashable inline handlers.
  */
 export function validateGenerativeHtml(rawHtml: string, artForm?: string): ValidationResult {
-  const errors: string[] = [];
+  const errors: string[]   = [];
+  const warnings: string[] = [];
   const trimmed = (rawHtml ?? "").trim();
 
   if (!/^<!DOCTYPE html>/i.test(trimmed)) {
@@ -122,7 +129,7 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
     }
 
     if (!VISUAL_PRIMITIVES_BY_FORM[artForm].test(trimmed)) {
-      errors.push(`${artForm}: no real visual drawing primitive found (shapes/geometry/motion) — printing text labels alone is not a generative artwork`);
+      warnings.push(`${artForm}: no real visual drawing primitive detected (shapes/geometry/motion) — looks text-centric; the curator should judge whether this is a worked/animated piece or should be reclassified as a literary work (poem/manifesto/prose)`);
     }
 
     for (const name of REQUIRED_DATA_CONSTS) {
@@ -135,7 +142,7 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
   // Strip any CSP meta tag the model added — we compute and serve our own via header.
   const normalized = trimmed.replace(CSP_META_RE, "");
 
-  return { valid: errors.length === 0, errors, html: normalized };
+  return { valid: errors.length === 0, errors, warnings, html: normalized };
 }
 
 // ─── CSP generation (hash-based, never 'unsafe-inline') ───────────────────

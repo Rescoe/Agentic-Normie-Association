@@ -31,10 +31,11 @@ function draw(){ background(10); ellipse(50,50,30,30); }
 }
 
 describe("generativeArtwork — validateGenerativeHtml", () => {
-  it("accepts a well-formed html-p5js artwork", () => {
+  it("accepts a well-formed html-p5js artwork with no warnings", () => {
     const result = validateGenerativeHtml(validP5Doc(), "html-p5js");
     expect(result.valid, result.errors.join("; ")).to.equal(true);
     expect(result.errors).to.have.length(0);
+    expect(result.warnings).to.have.length(0);
   });
 
   it("rejects an html-p5js artwork missing createCanvas (the reported black-screen bug)", () => {
@@ -106,9 +107,12 @@ function windowResized() { resizeCanvas(windowWidth, windowHeight); }
 </script>
 </body>
 </html>`;
+    // Text-only is now a WARNING, not a hard rejection — Normies may legitimately
+    // make text-driven generative art; the curator decides (approve, revise, or
+    // reclassify as a literary work), the validator just flags it for review.
     const result = validateGenerativeHtml(textOnly, "html-p5js");
-    expect(result.valid).to.equal(false);
-    expect(result.errors.some(e => e.includes("no real visual drawing primitive"))).to.equal(true);
+    expect(result.valid, result.errors.join("; ")).to.equal(true);
+    expect(result.warnings.some(w => w.includes("no real visual drawing primitive"))).to.equal(true);
   });
 
   it("rejects an artwork missing a brief-mandated on-chain data constant", () => {

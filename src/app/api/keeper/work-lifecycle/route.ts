@@ -45,6 +45,10 @@ const MAX_PIPELINE_FAILS = 4;
 const GENERATIVE_MAX_REVISIONS = 9;
 const TEXT_MAX_REVISIONS       = 1;
 
+// Forms a curator may reclassify a text-centric html-* submission into,
+// instead of rejecting it outright — see stepValidating's reclassifyAs handling.
+const RECLASSIFIABLE_FORMS = ["poem", "prose", "manifesto"];
+
 // Fetch current ETH/USD price from CoinGecko (no API key needed).
 // Returns null on failure — callers degrade gracefully.
 async function fetchEthUsd(): Promise<number | null> {
@@ -536,7 +540,10 @@ Respond in JSON:
 }
 
 function detectHtmlForm(work: ANAWork): boolean {
-  if (work.artForm?.startsWith("html-")) return true;
+  // An explicit artForm is authoritative — e.g. after a curator reclassifies a
+  // work from html-p5js to "poem", the brief may still mention "p5.js" but the
+  // work must now go through the text pipeline, not stay stuck detecting html.
+  if (work.artForm) return work.artForm.startsWith("html-");
   return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|generative\s+html|html\s+generative\s+art|visual\s+javascript)\b/i.test(work.brief ?? "");
 }
 
@@ -595,10 +602,12 @@ ${work.artForm === "html-threejs" ? `- MANDATORY three.js contract: create a THR
 ${(work.artForm === "html-canvas" || work.artForm === "html-webgl") ? `- Create a <canvas> sized to the viewport (canvas.width/height = window.innerWidth/innerHeight)
   and call getContext("2d") or getContext("webgl"); clear/paint it every frame — never leave it black` : ""}
 - Visually immersive body: dark background by default, fullscreen if possible
-- THE PIECE MUST BE VISUAL, NOT A TEXT DISPLAY: render real shapes, particles, lines, geometry or
-  motion. NORMIE_TRAITS/NORMIE_ARCHETYPE must drive generative parameters (colors, shapes, speed,
-  density, palette) — do NOT just print them as text labels on screen. A small title rendered once
-  is fine; the artwork's body must never rely on text()/fillText() as its primary visual content.
+- Something must visibly HAPPEN on screen: motion, color change, glitch, particles, geometry.
+  A static or purely descriptive screen (e.g. printing the title/traits as still text labels and
+  nothing else) is not acceptable. Text is allowed and welcome as part of the piece — animated,
+  glitched, reactive, or otherwise worked typography is a legitimate generative form — but ideally
+  NORMIE_TRAITS/NORMIE_ARCHETYPE shape the visuals themselves (colors, shapes, motion, density),
+  not just get printed as a static label list.
 
 ON-CHAIN DATA TO INJECT (put these JS constants at the top of your <script>):
 const NORMIE_ID = ${author.tokenId};
@@ -755,8 +764,12 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
   // validated this before saving it, but re-asserting here means the curator
   // is never asked to guess at code correctness from a short excerpt (that's
   // exactly what produced a false "missing setup()" rejection on code that
-  // had setup()). If it somehow fails, skip the LLM call entirely: a concrete
-  // automated reason is more useful than an LLM hallucinating one.
+  // had setup()). Hard errors (forbidden APIs, missing data, broken markup)
+  // skip the LLM call entirely — a concrete automated reason beats a guess.
+  // Soft warnings (no shape primitive found — looks text-centric) are NOT a
+  // hard fail: Normies are free to make text-driven generative art, so the
+  // curator gets to decide, including whether to reclassify it as a literary
+  // work (poem/manifesto/prose) instead of rejecting it outright.
   let structuralNote = "";
   if (isHtml) {
     const check = validateGenerativeHtml(work.artworkText ?? "", work.artForm);
@@ -764,7 +777,9 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
       const reason = `Automated structural check failed: ${check.errors.join("; ")}`;
       return await rejectOrRevise(work, personas, curator, reason, attempt, maxRevisions);
     }
-    structuralNote = "Automated structural check: PASSED — required functions, drawing primitives and on-chain data constants are all present, and no forbidden APIs were found. Judge artistic merit only, not code correctness.";
+    structuralNote = check.warnings.length > 0
+      ? `Automated structural check: PASSED, with a note: ${check.warnings.join("; ")}. Use your judgment — worked/animated/glitched text is a legitimate generative piece. If this instead reads as a static, purely literary piece, you may set "reclassifyAs" to "poem", "prose", or "manifesto" instead of approving or rejecting it as visual art.`
+      : "Automated structural check: PASSED — required functions, drawing primitives and on-chain data constants are all present, and no forbidden APIs were found. Judge artistic merit only, not code correctness.";
   }
 
   const others      = personas.filter(p => p.tokenId !== curator.tokenId);
@@ -784,7 +799,7 @@ Brief: ${work.brief?.slice(0, 300)}
 ${isHtml
   ? `Visual artwork (${work.artForm}) submitted by ${work.authorName}, ${(work.artworkText ?? "").length} characters.
 ${structuralNote}
-Judge the ARTISTIC merit only: does it genuinely look visual and alive (real shapes/motion/color), and does it match the brief's mood and concept?
+Judge the ARTISTIC merit only: does it genuinely look visual and alive (real shapes/motion/color/glitch), and does it match the brief's mood and concept?
 Excerpt: ${(work.artworkText ?? "").slice(0, 600)}…`
   : `Artwork submitted by ${work.authorName}:
 ${work.artworkText}`
@@ -792,7 +807,9 @@ ${work.artworkText}`
 
 Do you approve this work for immutable on-chain publication?${revisionCtx}
 
-JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concrete about what works or what's still missing."}`,
+JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concrete about what works or what's still missing."${
+  isHtml ? `,"reclassifyAs":"poem"|"prose"|"manifesto"|null` : ""
+}}`,
       },
     ],
     { model: MODEL_FAST, maxTokens: 160, temp: 0.5, json: true }
@@ -800,9 +817,10 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
 
   if (!raw) return false;
 
-  const parsed   = JSON.parse(raw) as { approved?: boolean; note?: string };
-  const approved = !!parsed.approved;
-  const note     = parsed.note?.slice(0, 400) ?? "";
+  const parsed       = JSON.parse(raw) as { approved?: boolean; note?: string; reclassifyAs?: string };
+  const approved      = !!parsed.approved;
+  const note          = parsed.note?.slice(0, 400) ?? "";
+  const reclassifyAs  = parsed.reclassifyAs;
 
   if (approved) {
     await updateWork(work.id, { validationNote: note });
@@ -817,6 +835,31 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
       topic:     "art",
     }).catch(() => null);
     await advanceState(work.id, "PUBLISHING", `Approved by ${curator.name}`);
+    return true;
+  }
+
+  // Curator judged this is fundamentally a literary piece in a visual costume —
+  // hand it to the text pipeline instead of grinding it through revisions or
+  // rejecting it outright. Fresh revision budget: it's a new creative direction,
+  // not a "fix this" iteration.
+  if (isHtml && reclassifyAs && RECLASSIFIABLE_FORMS.includes(reclassifyAs)) {
+    await addMessage({
+      salonId:   work.salonId ?? AGORA_SALON_ID,
+      tokenId:   curator.tokenId,
+      name:      curator.name,
+      imageUrl:  curator.imageUrl ?? "",
+      content:   `🔁 "${work.title}" reclassified from ${work.artForm} to "${reclassifyAs}" by ${curator.name} — it reads as a literary work rather than a visual artwork. ${note}`,
+      isLlm:     true,
+      timestamp: Date.now(),
+      topic:     "art",
+    }).catch(() => null);
+    await updateWork(work.id, {
+      artForm:        reclassifyAs,
+      artworkText:    undefined,
+      validationNote: `Reclassified from ${work.artForm} to "${reclassifyAs}" by ${curator.name}: ${note}`.slice(0, 500),
+      revisionCount:  0,
+    });
+    await advanceState(work.id, "CREATING", `Reclassified to "${reclassifyAs}" by ${curator.name}`);
     return true;
   }
 
