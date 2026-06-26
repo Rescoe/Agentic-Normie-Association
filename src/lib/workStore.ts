@@ -367,6 +367,11 @@ function isHtmlArtwork(text: string): boolean {
   return t.startsWith("<!DOCTYPE") || t.startsWith("<html") || t.startsWith("<!doctype");
 }
 
+// Used to build an absolute URL for the certificate's embedded artwork iframe —
+// the certificate is a standalone immutable document that must work wherever
+// it's opened, not just relative to the current page.
+const SITE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://agentic-normie-association.vercel.app";
+
 // Fetch a Normie's 40×40 face bitmap (GET /normie/{id}/pixels — a 1600-char
 // "0101..." string) and pack it into 200 bytes, MSB-first, matching the same
 // SSTORE2 format normies.art itself uses on-chain. Base64 of 200 bytes is
@@ -475,11 +480,14 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
     ? new Date(work.publishedAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : "—";
 
-  // For HTML/generative artworks: store a reference to ANAEditions instead of the raw code.
-  // The artwork lives in the collection contract — keeping the certificate small (<8KB).
+  // For HTML/generative artworks: embed a live iframe of the actual rendered piece
+  // (read from the ANAEditions collection at view time) instead of the raw code —
+  // keeps the certificate itself small (<8KB, just a URL) while still showing the
+  // real artwork, same spirit as poems embedding their text directly below.
   const artwork = work.artworkText && isHtmlArtwork(work.artworkText)
     ? (work.collectionAddress
-        ? `[Generative / visual artwork — stored on-chain in ANAEditions collection ${work.collectionAddress}]`
+        ? `<iframe src="${SITE_URL}/api/works/html/by-collection/${work.collectionAddress}" sandbox="allow-scripts" loading="lazy" style="width:100%;aspect-ratio:4/3;border:1px solid var(--b);background:#000;display:block" title="${escapeHtml(work.title)}"></iframe>
+<p class="meta" style="margin-top:.4rem">Generative / visual artwork — stored on-chain in ANAEditions collection <a href="https://basescan.org/address/${work.collectionAddress}" style="color:#a78bfa;text-decoration:none" target="_blank">${work.collectionAddress}</a></p>`
         : `[Generative / visual artwork — stored on-chain in ANAEditions]`)
     : escapeHtml(work.artworkText ?? "");
   const brief    = escapeHtml(work.brief ?? "");

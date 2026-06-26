@@ -393,11 +393,13 @@ function GovernanceReport({ work, onChainId }: { work: ANAWork; onChainId?: numb
 function ArtworkModal({
   work,
   certUrl,
+  certificateUrl,
   isHtml,
   onClose,
 }: {
   work: ANAWork;
   certUrl: string;
+  certificateUrl: string;
   isHtml: boolean;
   onClose: () => void;
 }) {
@@ -462,7 +464,7 @@ function ArtworkModal({
             {work.publishedAt ? ` · ${new Date(work.publishedAt).getFullYear()}` : ""}
           </p>
           <a
-            href={certUrl}
+            href={certificateUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors flex items-center gap-1 border border-[--border] px-2 py-1 hover:border-[--fg]"
@@ -591,7 +593,8 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
     { label: "Rapporteur", tid: work.rapporteurTokenId,  name: getName(work.rapporteurTokenId, work.rapporteurName) },
   ];
 
-  const certUrl = `/api/works/html/${onChainId}`;
+  const certUrl        = `/api/works/html/${onChainId}`;
+  const certificateUrl = `/api/works/certificate/${onChainId}`;
   const isHtml  = !!(work.artForm?.startsWith("html-") ||
     (work.artworkText && /^<!DOCTYPE|^<html/i.test(work.artworkText.trimStart())));
 
@@ -720,7 +723,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           </button>
           <div className="flex items-center gap-3">
             <a
-              href={certUrl}
+              href={certificateUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1"
@@ -749,6 +752,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
         <ArtworkModal
           work={work}
           certUrl={certUrl}
+          certificateUrl={certificateUrl}
           isHtml={isHtml}
           onClose={() => setShowModal(false)}
         />
@@ -904,7 +908,8 @@ function OnChainWorkCard({ workId }: { workId: number }) {
   const [showModal,  setShowModal]  = useState(false);
   const [showReport, setShowReport] = useState(false);
 
-  const certUrl = `/api/works/html/${workId}`;
+  const certUrl        = `/api/works/html/${workId}`;
+  const certificateUrl = `/api/works/certificate/${workId}`;
 
   useEffect(() => {
     fetch(certUrl)
@@ -977,7 +982,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
           <div className="flex items-center justify-between gap-2 pt-1 border-t border-[--border]">
             <p className="font-mono text-xs text-[--fg-muted]">on-chain · Base</p>
-            <a href={certUrl} target="_blank" rel="noopener noreferrer"
+            <a href={certificateUrl} target="_blank" rel="noopener noreferrer"
               className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1">
               <span>◈</span> Certificate
             </a>
@@ -996,7 +1001,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
               <iframe src={certUrl} className="flex-1 w-full border-0 bg-black" sandbox="allow-scripts" title={cert.title} />
               <div className="flex items-center justify-between px-5 py-3 border-t border-[--border] shrink-0">
                 <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">Artwork · ANA · Base</p>
-                <a href={certUrl} target="_blank" rel="noopener noreferrer"
+                <a href={certificateUrl} target="_blank" rel="noopener noreferrer"
                   className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors flex items-center gap-1 border border-[--border] px-2 py-1 hover:border-[--fg]">
                   ◈ Certificate immutable
                 </a>
@@ -1084,7 +1089,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
             {showReport ? "↑ Hide process" : "↓ How it was made"}
           </button>
           <div className="flex items-center gap-3">
-            <a href={certUrl} target="_blank" rel="noopener noreferrer"
+            <a href={certificateUrl} target="_blank" rel="noopener noreferrer"
               className="font-mono text-xs border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors flex items-center gap-1">
               <span>◈</span> Certificate
             </a>
@@ -1179,7 +1184,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
               <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">
                 Poem · ANA · Base{cert.publishedDate ? ` · ${cert.publishedDate}` : ""}
               </p>
-              <a href={certUrl} target="_blank" rel="noopener noreferrer"
+              <a href={certificateUrl} target="_blank" rel="noopener noreferrer"
                 className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors flex items-center gap-1 border border-[--border] px-2 py-1 hover:border-[--fg]">
                 ◈ Certificate immutable
               </a>
