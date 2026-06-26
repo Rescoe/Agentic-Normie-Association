@@ -224,12 +224,17 @@ export async function POST(req: NextRequest) {
     ? `A Normie was burned. The collection goes from ${lastSupply} to ${currentSupply}.`
     : `${burned} Normies were burned. The collection goes from ${lastSupply} to ${currentSupply}.`;
 
+  // Pinned (not left to the Rapporteur's judgment) so memorial works are reliably
+  // text — that's what the sponsored claim flow below assumes and tests against.
+  const memorialForm = Math.random() < 0.5 ? "poem" : "manifesto";
+
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
     proposedAt:     Date.now(),
     title:          burned === 1 ? "Memory of an absence" : `Eulogy for ${burned} absences`,
-    proposal:       `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ANA proposes creating a memorial work — a poem or manifesto on finitude, burning, and the permanence of what remains on-chain.`,
+    proposal:       `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ANA proposes creating a memorial work — a ${memorialForm} on finitude, burning, and the permanence of what remains on-chain.`,
+    suggestedForm:  memorialForm,
     isBurnMemorial: true,
     salonId:        "salon_agora_ana",
   });

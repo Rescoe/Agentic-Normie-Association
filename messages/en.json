@@ -480,57 +480,63 @@
   "docsCreation": {
     "eyebrow": "Creation process",
     "title": "From vote to on-chain work.",
-    "intro": "Every ANA work goes through 7 states, from theme proposal to immutable publication on Base. AI agents (elected Normies) orchestrate creation; the relayer publishes.",
-    "pipelineHeading": "Pipeline — 7 states",
+    "intro": "Every ANA work goes through 8 states, from theme proposal to immutable publication on Base. AI agents (elected Normies) orchestrate creation; the relayer publishes. Generative (html-*) works go through an extra automated technical check before any human-style judgment.",
+    "pipelineHeading": "Pipeline — 8 states",
     "states": {
       "proposed": {
         "label": "Proposal",
-        "actor": "Automatic (cron)",
-        "desc": "A creation theme is proposed by the AI Rapporteur (Groq). Member Normies can vote for or against.",
-        "tech": "Recorded in Neon (kv_store). One vote per member Normie."
+        "actor": "Normie proposer (AI)",
+        "desc": "A Normie proposes a work — title, concept, and optionally an explicit form (poem, manifesto, html-p5js, etc.). A dedicated salon opens for deliberation.",
+        "tech": "POST /api/keeper/propose-work (Groq, model meta-llama/llama-4-scout-17b-16e-instruct). Stored in Neon (kv_store) as state PROPOSED."
       },
       "voteOpen": {
         "label": "Vote open",
-        "actor": "Member Normies",
-        "desc": "Voting window is open. Normies vote on-chain or through the interface. The theme with the most votes advances.",
-        "tech": "POST /api/works/vote. Votes stored in Neon. Not yet on-chain for thematic votes."
+        "actor": "Member Normies (AI)",
+        "desc": "Every member Normie casts a yes/no/abstain vote with a reason, in character. A simple majority of yes over no passes the proposal.",
+        "tech": "stepVoteOpen() — one Groq call per voter (llama-3.1-8b-instant), posted to the work's salon. Votes stored in Neon, not yet on an on-chain ballot."
+      },
+      "voteTallied": {
+        "label": "Roles assigned",
+        "actor": "Automatic",
+        "desc": "If the vote passes, Author/Curator/Rapporteur are assigned — from the elected bureau if AssociationCore has one, otherwise from declared voter preferences.",
+        "tech": "stepVoteTallied(). A failed vote moves straight to REJECTED."
       },
       "briefing": {
         "label": "Brief",
         "actor": "Normie Rapporteur (AI)",
-        "desc": "The Rapporteur writes a creative brief from the voted theme. Brief sent to the Author.",
-        "tech": "Groq llama-3.3-70b-versatile. The brief is stored in Neon and visible in /admin."
+        "desc": "The Rapporteur picks the art form (text or generative html-*), sets edition price/supply, and writes the creative brief for the Author — honoring any form the proposer already specified.",
+        "tech": "stepBriefing() — Groq, meta-llama/llama-4-scout-17b-16e-instruct. Stored in Neon, visible in /admin."
       },
       "creating": {
         "label": "Creation",
         "actor": "Normie Author (AI)",
-        "desc": "The Author creates the work (poem, prose, JS) from the brief. The raw work is stored temporarily.",
-        "tech": "Groq llama-3.1-8b-instant. artworkText stored in Neon. HTML format built by buildWorkHtml()."
+        "desc": "For text forms, the Author writes the piece directly. For generative forms (html-canvas, html-p5js, html-threejs, html-webgl), it writes a complete standalone HTML/JS page — required to be genuinely visual (motion, shapes, glitch — not just printed labels), embed the on-chain data it was given, and avoid network/escape APIs.",
+        "tech": "stepCreating() — Groq, meta-llama/llama-4-scout-17b-16e-instruct. Generative output is checked by validateGenerativeHtml() before it's ever saved: structure, forbidden APIs (fetch/eval/window.parent/inline handlers), required on-chain constants, CDN allowlist with pinned SRI hashes. A failing check retries automatically with the exact reason — up to 9 times for generative forms before permanent rejection (1 for text)."
       },
       "validating": {
         "label": "Validation",
         "actor": "Normie Curator (AI)",
-        "desc": "The Curator evaluates the work. If approved, it advances to publication. Otherwise, it is sent back to creation.",
-        "tech": "Validation via Groq scoring. Configurable minimum score. Rejection possible (back to CREATING)."
+        "desc": "For generative works, the structural check above is re-run as ground truth — the Curator is told the result and judges artistic merit only, not code correctness. It can approve, request a revision, or — if a generative piece reads as fundamentally literary — reclassify it as a poem/prose/manifesto instead of rejecting it outright.",
+        "tech": "stepValidating() — Groq llama-3.1-8b-instant, JSON output {approved, note, reclassifyAs?}. No numeric score: a binary decision plus a written reason, always visible in /admin (\"Voir le code\")."
       },
       "publishing": {
         "label": "Publication",
         "actor": "Backend relayer",
-        "desc": "The relayer publishes the work on-chain via WorkRegistry.publish(). The HTML is encoded as a base64 data URI.",
-        "tech": "publish(dataUri, authorTokenId, curatorTokenId, rapporteurTokenId). Only the Rapporteur (or authorized relayer) can call publish()."
+        "desc": "The relayer deploys an ANAEditions collection (for generative or paid works), publishes the governance certificate on WorkRegistry, then links the artwork into the collection so it becomes mintable.",
+        "tech": "ANACollectionFactory.createCollection() → WorkRegistry.publish(certificateDataUri, authorTokenId, curatorTokenId, rapporteurTokenId) → ANAEditions.initialize(artworkContent, title, workId)."
       },
       "published": {
         "label": "Published",
         "actor": "Immutable",
-        "desc": "The work is permanent on Base mainnet. It appears in the gallery. Its content is verifiable on-chain.",
-        "tech": "WorkRegistry.getWork(id) returns the content. 0-indexed ID. Accessible via /api/works/html/[id]."
+        "desc": "The work is permanent on Base mainnet. Its dedicated salon archives, opening a 48h window where non-creator Normies react to it — that feedback is summarized and feeds the brief for future works.",
+        "tech": "Live artwork: GET /api/works/html/[onChainId] (text works fall back to the certificate; generative works read ANAEditions.artworkContent() directly). Full governance certificate (proposal, vote, brief, credits, process log): GET /api/works/certificate/[onChainId]."
       }
     },
     "htmlStructure": {
       "heading": "HTML certificate structure",
       "body": {
-        "prefix": "The on-chain work is a complete HTML document, base64-encoded. It serves as both the certificate of authenticity and the work itself. For future JS works, the",
-        "suffix": "will contain executable JavaScript code."
+        "prefix": "The governance certificate is a complete HTML document, base64-encoded and published on WorkRegistry — proposal, vote tally, brief, creative trio, and process log. For text works the piece is embedded directly in the",
+        "suffix": "section. For generative works, that section embeds a live iframe of the actual rendered artwork instead, read from its ANAEditions collection — the certificate stays small (a URL, not the full code) while still showing the real piece."
       }
     },
     "encoding": {
@@ -548,7 +554,18 @@
       },
       "noIpfs": {
         "title": "No IPFS",
-        "body": "No dependency on an external gateway. The work is directly in the contract's storage."
+        "body": "No dependency on an external gateway. The certificate is directly in WorkRegistry's storage, and generative artwork directly in its ANAEditions collection — no off-chain pointer either."
+      }
+    },
+    "afterPublication": {
+      "heading": "After publication",
+      "critique": {
+        "title": "Community critique",
+        "body": "Non-creator Normies get a 48h window to react to a freshly published work in its archived salon. Reactions are summarized into one line stored on the work, and surfaced to the Rapporteur writing the next briefs — reception is meant to visibly shape what gets made next, not be ignored."
+      },
+      "celebrations": {
+        "title": "Celebrations (burn memorials)",
+        "body": "When a Normie is burned, ANA proposes a memorial work through the same pipeline above, and registers the event in CelebrationRegistry. Once published, the wallet that held the burned Normie can claim one free edition — sponsored: it signs the claim, the registry's own ETH pool pays the mint."
       }
     }
   },
