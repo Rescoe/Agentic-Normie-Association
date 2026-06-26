@@ -15,6 +15,7 @@ export {
   NormieCollectionAbi    as NORMIE_COLLECTION_ABI,
   ANAEditionsAbi         as ANA_EDITIONS_ABI,
   ANACollectionFactoryAbi as ANA_COLLECTION_FACTORY_ABI,
+  CelebrationRegistryAbi as CELEBRATION_REGISTRY_ABI,
 } from "./abis";
 
 // ─── Addresses (from environment) ────────────────────────────────────────────
@@ -28,6 +29,7 @@ export const CONTRACT_ADDRESSES = {
   TreasuryModule:        process.env.NEXT_PUBLIC_TREASURY_MODULE_ADDRESS        ?? "",
   CollectionFactory:     process.env.NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS     ?? "",
   ANACollectionFactory:  process.env.NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS ?? "",
+  CelebrationRegistry:   process.env.NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS   ?? "",
 } as const;
 
 // ─── Role constants (mirrors Roles.sol) ───────────────────────────────────────

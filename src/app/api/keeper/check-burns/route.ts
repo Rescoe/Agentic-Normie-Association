@@ -2,7 +2,9 @@
  * POST /api/keeper/check-burns
  * Daily cron: compares current Normies NFT totalSupply (Ethereum mainnet)
  * with the last recorded count. If a burn is detected, creates a memorial
- * work proposal in the PROPOSED state for the ANA to process.
+ * work proposal in the PROPOSED state for the ANA to process, and registers
+ * a CelebrationRegistry entry per burned Normie (Base) so its last owner can
+ * later claim a free edition of the work made in its honor.
  *
  * Requires:
  *   NORMIES_CONTRACT_ADDRESS    — Normies ERC721 contract on Ethereum mainnet
@@ -12,13 +14,15 @@
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, decodeEventLog, keccak256, toHex } from "viem";
 import { mainnet, base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { getLastNormieSupply, updateNormieSupply, createWork, getActiveWorks, ACTIVE_STATES } from "@/lib/workStore";
+import { getLastNormieSupply, updateNormieSupply, createWork, updateWork, getActiveWorks } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
+import { getBurnedTokens } from "@/lib/normiesApi";
+import { registerCelebrationOnChain, CELEBRATION_TYPE } from "@/server/relayer/celebrationPublisher";
 
-// Minimal ERC721 ABI — only totalSupply
+// Minimal ERC721 ABI — totalSupply + the standard Transfer event
 const ERC721_SUPPLY_ABI = [
   {
     inputs:  [],
@@ -28,6 +32,20 @@ const ERC721_SUPPLY_ABI = [
     type:    "function",
   },
 ] as const;
+
+const TRANSFER_EVENT_ABI = [
+  {
+    type: "event",
+    name: "Transfer",
+    inputs: [
+      { indexed: true, name: "from",    type: "address" },
+      { indexed: true, name: "to",      type: "address" },
+      { indexed: true, name: "tokenId", type: "uint256" },
+    ],
+  },
+] as const;
+
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 
 const mainnetClient = createPublicClient({
   chain:     mainnet,
@@ -67,6 +85,75 @@ async function getMemberIds(): Promise<number[]> {
     });
     return (raw as bigint[]).map(Number);
   } catch { return []; }
+}
+
+/** Finds the wallet that held a burned token right before the burn, from its Transfer-to-zero tx. */
+async function getLastOwnerFromBurnTx(txHash: string, tokenId: string): Promise<string | null> {
+  const normiesAddr = process.env.NORMIES_CONTRACT_ADDRESS as `0x${string}` | undefined;
+  if (!normiesAddr) return null;
+  try {
+    const receipt = await mainnetClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== normiesAddr.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({ abi: TRANSFER_EVENT_ABI, data: log.data, topics: log.topics });
+        if (decoded.eventName !== "Transfer") continue;
+        const { from, to, tokenId: decodedTokenId } = decoded.args as { from: string; to: string; tokenId: bigint };
+        if (to.toLowerCase() === ZERO_ADDR && decodedTokenId.toString() === tokenId) {
+          return from;
+        }
+      } catch { /* not a Transfer log on this contract, skip */ }
+    }
+  } catch (e) {
+    console.error(`[check-burns] could not read burn tx ${txHash}:`, e);
+  }
+  return null;
+}
+
+/**
+ * Registers a CelebrationRegistry entry for each newly burned Normie so its last
+ * owner can later claim a free edition. Best-effort: failures here never block
+ * the memorial work itself — celebrations are a bonus, not a dependency.
+ */
+async function registerBurnCelebrations(burnedCount: number, workId: string): Promise<number[]> {
+  if (!CONTRACT_ADDRESSES.CelebrationRegistry) {
+    console.log("[check-burns] CelebrationRegistry not configured — skipping celebration registration");
+    return [];
+  }
+
+  let recent;
+  try {
+    recent = await getBurnedTokens(burnedCount, 0); // newest first
+  } catch (e) {
+    console.error("[check-burns] getBurnedTokens failed — skipping celebrations:", e);
+    return [];
+  }
+
+  const celebrationIds: number[] = [];
+  for (const token of recent) {
+    const lastOwner = await getLastOwnerFromBurnTx(token.txHash, token.tokenId);
+    if (!lastOwner) {
+      console.warn(`[check-burns] could not determine last owner of burned token #${token.tokenId} — skipping its celebration`);
+      continue;
+    }
+
+    const sourceRef = keccak256(toHex(token.txHash));
+    const result = await registerCelebrationOnChain({
+      eventType:         CELEBRATION_TYPE.BURN,
+      normieTokenId:     Number(token.tokenId),
+      eligibleRecipient: lastOwner,
+      sourceRef,
+      workId,
+    });
+
+    if (result.success && result.celebrationId != null) {
+      celebrationIds.push(result.celebrationId);
+      console.log(`[check-burns] registered celebration #${result.celebrationId} for burned Normie #${token.tokenId} → ${lastOwner}`);
+    } else if (!result.alreadyRegistered) {
+      console.warn(`[check-burns] registerCelebrationOnChain failed for #${token.tokenId}: ${result.error}`);
+    }
+  }
+  return celebrationIds;
 }
 
 export async function POST(req: NextRequest) {
@@ -147,13 +234,23 @@ export async function POST(req: NextRequest) {
     salonId:        "salon_agora_ana",
   });
 
+  // Best-effort — never blocks the memorial work if it fails.
+  const celebrationIds = await registerBurnCelebrations(burned, work.id).catch(e => {
+    console.error("[check-burns] registerBurnCelebrations error:", e);
+    return [] as number[];
+  });
+  if (celebrationIds.length > 0) {
+    await updateWork(work.id, { celebrationIds });
+  }
+
   await updateNormieSupply(currentSupply);
 
   return NextResponse.json({
-    supply:      currentSupply,
-    burns:       burned,
+    supply:       currentSupply,
+    burns:        burned,
     worksCreated: 1,
-    workId:      work.id,
-    workTitle:   work.title,
+    workId:       work.id,
+    workTitle:    work.title,
+    celebrationsRegistered: celebrationIds.length,
   });
 }

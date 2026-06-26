@@ -105,6 +105,12 @@ export interface ANAWork {
   isBurnMemorial?: boolean;
   burnedTokenId?:  number;
 
+  // Celebration sponsorship (CelebrationRegistry on-chain) — populated when this
+  // work honors one or more burned/transformed Normies. Each id is wired to this
+  // work's onChainWorkId/collectionAddress once published (see stepPublishing's
+  // linkCelebrations call), enabling the honored wallet(s) to claim a free edition.
+  celebrationIds?: number[];
+
   // Founding work (AG constitutive)
   isFoundingWork?:    boolean;
   foundingContext?:   Array<{ name: string; content: string; timestamp: number }>;

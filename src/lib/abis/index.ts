@@ -7,3 +7,4 @@ export { CollectionFactoryAbi } from "./CollectionFactory";
 export { NormieCollectionAbi } from "./NormieCollection";
 export { ANAEditionsAbi } from "./ANAEditions";
 export { ANACollectionFactoryAbi } from "./ANACollectionFactory";
+export { CelebrationRegistryAbi } from "./CelebrationRegistry";

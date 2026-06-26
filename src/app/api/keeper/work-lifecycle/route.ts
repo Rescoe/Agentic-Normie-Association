@@ -22,6 +22,7 @@ import {
 import { addMessage, closeSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
+import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
@@ -902,8 +903,11 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
     // ── Step 1: Deploy collection BEFORE publishing so its address is in the certificate ──
     // HTML/generative artworks always need a collection — that's where the actual artwork
     // (artworkContent) lives on-chain. Without it the gallery/certificate have nothing real
-    // to render. Text works only get one when sold as paid editions.
-    if (!collectionAddress && (editionPriceWei > 0n || detectHtmlForm(work))) {
+    // to render. Celebration-linked works need one too — the sponsored claim() mints from
+    // it, so a free memorial poem still gets a (free-priced) collection. Other text works
+    // only get one when sold as paid editions.
+    const needsCollection = editionPriceWei > 0n || detectHtmlForm(work) || !!(work.celebrationIds && work.celebrationIds.length > 0);
+    if (!collectionAddress && needsCollection) {
       const deployResult = await deployCollection({
         authorTokenId:     work.authorTokenId!,
         curatorTokenId:    work.curatorTokenId!,
@@ -1008,6 +1012,20 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
         return `initializeCollection failed: ${errMsg.slice(0, 200)}`;
       }
       console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
+    }
+  }
+
+  // ── Step 4.5: link any celebrations this work honors (best-effort) ──
+  // Activates the sponsored claim() for each honored wallet — never blocks
+  // publication if it fails, since sponsorship is a bonus, not a dependency.
+  if (work.celebrationIds && work.celebrationIds.length > 0 && collectionAddress && onChainWorkId != null) {
+    for (const celebrationId of work.celebrationIds) {
+      const linkResult = await linkCelebrationWork({
+        celebrationId, onChainWorkId, editionsAddr: collectionAddress, workId: work.id,
+      }).catch(e => ({ success: false, error: e instanceof Error ? e.message : String(e) }));
+      if (!linkResult.success) {
+        console.warn(`[work-lifecycle] linkCelebrationWork failed for celebration #${celebrationId}: ${linkResult.error}`);
+      }
     }
   }
 

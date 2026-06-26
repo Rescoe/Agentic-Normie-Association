@@ -2,6 +2,8 @@
 
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
+import { useAccount, useWriteContract } from "wagmi";
+import { CELEBRATION_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 interface RecentBurn {
   tokenId:     number;
@@ -16,6 +18,103 @@ interface BurnStats {
   totalSupply: number;
   recentBurns: RecentBurn[];
   error?:      string;
+}
+
+interface ClaimableCelebration {
+  celebrationId: number;
+  eventType:     number;
+  normieTokenId: number;
+  editionsAddr:  string;
+  workTitle:     string;
+  claimableNow:  boolean;
+}
+
+const EVENT_TYPE_LABEL: Record<number, string> = {
+  0: "Burn", 1: "Canvas transform", 2: "Zombie conversion", 3: "Legendary Canvas", 4: "Agent awakening",
+};
+
+/** Lets the connected wallet sponsor-claim a free edition for an event ANA honored it with. */
+function ClaimableCelebrations() {
+  const t = useTranslations("celebrations");
+  const { address } = useAccount();
+  const { writeContractAsync } = useWriteContract();
+  const [items,   setItems]   = useState<ClaimableCelebration[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [claimingId, setClaimingId] = useState<number | null>(null);
+  const [claimedIds, setClaimedIds] = useState<number[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!address) { setItems([]); return; }
+    setLoading(true);
+    fetch(`/api/celebrations/claimable?address=${address}`)
+      .then(r => r.json())
+      .then(d => setItems(Array.isArray(d.claimable) ? d.claimable : []))
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false));
+  }, [address]);
+
+  if (!address || loading || items.length === 0) return null;
+
+  const registryAddr = CONTRACT_ADDRESSES.CelebrationRegistry as `0x${string}`;
+
+  async function handleClaim(celebrationId: number) {
+    setClaimingId(celebrationId);
+    setError(null);
+    try {
+      await writeContractAsync({
+        address:      registryAddr,
+        abi:          CELEBRATION_REGISTRY_ABI,
+        functionName: "claim",
+        args:         [BigInt(celebrationId)],
+      });
+      setClaimedIds(ids => [...ids, celebrationId]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg.includes("User rejected") ? t("claim.cancelled") : t("claim.failed"));
+    } finally {
+      setClaimingId(null);
+    }
+  }
+
+  return (
+    <div className="border border-[--border] bg-[--bg-card] p-6 space-y-4">
+      <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">{t("claim.heading")}</p>
+      <div className="space-y-2">
+        {items.map(c => {
+          const claimed = claimedIds.includes(c.celebrationId);
+          return (
+            <div key={c.celebrationId} className="flex items-center justify-between gap-3 border-b border-[--border] pb-2 last:border-0 last:pb-0">
+              <div>
+                <p className="font-bold text-sm">{c.workTitle}</p>
+                <p className="font-mono text-[10px] text-[--fg-muted]">
+                  {EVENT_TYPE_LABEL[c.eventType] ?? "Event"} — Normie #{c.normieTokenId}
+                </p>
+              </div>
+              {claimed ? (
+                <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1 shrink-0">
+                  ✓ {t("claim.acquired")}
+                </p>
+              ) : !c.claimableNow ? (
+                <p className="font-mono text-[10px] text-[--fg-muted] border border-[--border] px-2 py-1 shrink-0">
+                  {t("claim.notReady")}
+                </p>
+              ) : (
+                <button
+                  onClick={() => void handleClaim(c.celebrationId)}
+                  disabled={claimingId === c.celebrationId}
+                  className="font-mono text-[10px] border border-[--fg] px-2 py-1 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
+                >
+                  {claimingId === c.celebrationId ? t("claim.confirming") : t("claim.cta")}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {error && <p className="font-mono text-[10px] text-red-400">{error}</p>}
+    </div>
+  );
 }
 
 export function CelebrationsClient() {
@@ -45,6 +144,9 @@ export function CelebrationsClient() {
 
   return (
     <div className="space-y-16">
+
+      {/* ── Sponsored claims for the connected wallet, if any ── */}
+      <ClaimableCelebrations />
 
       {/* ── Live counter — read straight from api.normies.art, no copy kept ── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[--border]">

@@ -1853,6 +1853,15 @@
       "label": "Most recently burned",
       "empty": "No burns recorded yet.",
       "footnote": "Pulled live from api.normies.art on every visit — nothing here is stored by ANA."
+    },
+    "claim": {
+      "heading": "Your sponsored claims",
+      "cta": "Claim free edition",
+      "confirming": "Confirming…",
+      "notReady": "Not ready yet",
+      "acquired": "Claimed",
+      "cancelled": "Cancelled.",
+      "failed": "Claim failed — try again."
     }
   },
   "worksPage": {},
