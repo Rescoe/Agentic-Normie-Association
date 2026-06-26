@@ -17,6 +17,11 @@ function validP5Doc(): string {
 </head>
 <body>
 <script>
+const NORMIE_ID = 5271;
+const NORMIE_ARCHETYPE = "Human";
+const NORMIE_TRAITS = [{"trait_type":"Type","value":"Human"}];
+const WORK_TITLE = "Test Work";
+const CREATED_AT = 1782391863661;
 function setup(){ createCanvas(windowWidth, windowHeight); }
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 function draw(){ background(10); ellipse(50,50,30,30); }
@@ -73,6 +78,44 @@ describe("generativeArtwork — validateGenerativeHtml", () => {
     const result = validateGenerativeHtml(withInlineHandler, "html-p5js");
     expect(result.valid).to.equal(false);
     expect(result.errors.some(e => e.includes("onX="))).to.equal(true);
+  });
+
+  it("rejects a text-only artwork that only prints data via text() — the reported regression", () => {
+    // This is the exact shape of the artwork that was rejected by the curator
+    // for "Genesis Block's First Dance": valid setup()/draw()/createCanvas(),
+    // all on-chain data constants present, but the only rendering call is
+    // text() — a descriptive data dump, not a visual artwork.
+    const textOnly = `<!DOCTYPE html>
+<html lang="en">
+<head><script src="${P5_CDN}" integrity="${CDN_SRI["html-p5js"]!.hash}" crossorigin="anonymous"></script></head>
+<body>
+<script>
+const NORMIE_ID = 5271;
+const NORMIE_ARCHETYPE = "Human";
+const NORMIE_TRAITS = [{"trait_type":"Type","value":"Human"}];
+const WORK_TITLE = "Genesis Block's First Dance";
+const CREATED_AT = 1782391863661;
+function setup() { createCanvas(windowWidth, windowHeight); }
+function draw() {
+  background(20, 20, 20);
+  fill(255);
+  textAlign(CENTER, CENTER);
+  text(\`\${WORK_TITLE} - Normie \${NORMIE_ID}\`, width / 2, height / 2);
+}
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+</script>
+</body>
+</html>`;
+    const result = validateGenerativeHtml(textOnly, "html-p5js");
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("no real visual drawing primitive"))).to.equal(true);
+  });
+
+  it("rejects an artwork missing a brief-mandated on-chain data constant", () => {
+    const missingTrait = validP5Doc().replace(/const NORMIE_TRAITS[^;]*;\n?/, "");
+    const result = validateGenerativeHtml(missingTrait, "html-p5js");
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("NORMIE_TRAITS"))).to.equal(true);
   });
 
   it("rejects html-canvas artworks without a <canvas> element", () => {

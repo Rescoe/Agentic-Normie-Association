@@ -59,6 +59,21 @@ const CSP_META_RE = /<meta[^>]*http-equiv\s*=\s*["']Content-Security-Policy["'][
 
 const MAX_HTML_BYTES = 20_000; // ~15KB authored + CDN tag + a margin
 
+// The Author prompt mandates injecting these as JS constants — checking for them
+// catches the "brief data not incorporated" rejection class (e.g. tokenId/traits
+// silently dropped on a revision).
+const REQUIRED_DATA_CONSTS = ["NORMIE_ID", "NORMIE_ARCHETYPE", "NORMIE_TRAITS", "WORK_TITLE", "CREATED_AT"];
+
+// At least one real drawing primitive must be present per form — catches the
+// "descriptive text dump instead of a visual artwork" rejection class (a piece
+// that only calls text()/fillText() to print data is not a generative artwork).
+const VISUAL_PRIMITIVES_BY_FORM: Record<GenerativeForm, RegExp> = {
+  "html-p5js":    /\b(ellipse|circle|rect|square|line\s*\(|point\s*\(|arc\s*\(|triangle|quad|curve|bezier|vertex|beginShape|image\s*\()/i,
+  "html-threejs": /THREE\.(Mesh|Points|Line2?|Sprite|InstancedMesh)\b/,
+  "html-canvas":  /\b(fillRect|strokeRect|arc\s*\(|lineTo|bezierCurveTo|quadraticCurveTo|drawImage|createLinearGradient|createRadialGradient)\s*\(/i,
+  "html-webgl":   /\b(drawArrays|drawElements|bufferData|createShader|createProgram)\s*\(/i,
+};
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
@@ -104,6 +119,16 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
       // html-canvas / html-webgl: native canvas, no CDN expected.
       if (!/<canvas[\s>]/i.test(trimmed)) errors.push(`${artForm}: missing <canvas> element`);
       if (!/getContext\s*\(/i.test(trimmed)) errors.push(`${artForm}: missing getContext() call`);
+    }
+
+    if (!VISUAL_PRIMITIVES_BY_FORM[artForm].test(trimmed)) {
+      errors.push(`${artForm}: no real visual drawing primitive found (shapes/geometry/motion) — printing text labels alone is not a generative artwork`);
+    }
+
+    for (const name of REQUIRED_DATA_CONSTS) {
+      if (!new RegExp(`\\b${name}\\b`).test(trimmed)) {
+        errors.push(`missing required on-chain data constant: ${name}`);
+      }
     }
   }
 

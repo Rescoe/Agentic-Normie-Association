@@ -31,7 +31,19 @@ const MODEL_FAST   = "llama-3.1-8b-instant";
 
 // A work that fails the same pipeline step this many times in a row gets
 // auto-rejected instead of staying stuck in PUBLISHING/CREATING/etc. forever.
+// This guards against genuine infra failures (LLM API down, missing persona) —
+// it is NOT the revision budget for a generative artwork that's being iterated
+// on (see GENERATIVE_MAX_REVISIONS), since a structural-validation retry
+// reports advanced:true and never increments this counter.
 const MAX_PIPELINE_FAILS = 4;
+
+// Generative (html-*) works get this many revision attempts — covering both
+// automated structural-validation failures (stepCreating) and curator
+// rejections (stepValidating) through the SAME work.revisionCount counter —
+// before being permanently rejected. Text/poem works keep the original
+// single-revision budget; only the generative pipeline needed loosening.
+const GENERATIVE_MAX_REVISIONS = 9;
+const TEXT_MAX_REVISIONS       = 1;
 
 // Fetch current ETH/USD price from CoinGecko (no API key needed).
 // Returns null on failure — callers degrade gracefully.
@@ -533,8 +545,8 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
   if (!author) return false;
 
   const others      = personas.filter(p => p.tokenId !== author.tokenId);
-  const revisionCtx = (work.revisionCount ?? 0) > 0
-    ? `\n\nCurator's note on the previous version: ${work.validationNote}\nRevise taking this feedback into account.`
+  const revisionCtx = work.validationNote
+    ? `\n\nFeedback on the previous attempt — you MUST address every point below:\n${work.validationNote}\nRevise taking this feedback into account.`
     : "";
 
   const isHtml = detectHtmlForm(work);
@@ -583,6 +595,10 @@ ${work.artForm === "html-threejs" ? `- MANDATORY three.js contract: create a THR
 ${(work.artForm === "html-canvas" || work.artForm === "html-webgl") ? `- Create a <canvas> sized to the viewport (canvas.width/height = window.innerWidth/innerHeight)
   and call getContext("2d") or getContext("webgl"); clear/paint it every frame — never leave it black` : ""}
 - Visually immersive body: dark background by default, fullscreen if possible
+- THE PIECE MUST BE VISUAL, NOT A TEXT DISPLAY: render real shapes, particles, lines, geometry or
+  motion. NORMIE_TRAITS/NORMIE_ARCHETYPE must drive generative parameters (colors, shapes, speed,
+  density, palette) — do NOT just print them as text labels on screen. A small title rendered once
+  is fine; the artwork's body must never rely on text()/fillText() as its primary visual content.
 
 ON-CHAIN DATA TO INJECT (put these JS constants at the top of your <script>):
 const NORMIE_ID = ${author.tokenId};
@@ -600,8 +616,26 @@ Generate ONLY the complete HTML, no explanations before or after.`,
     if (artworkText) {
       const check = validateGenerativeHtml(artworkText, work.artForm);
       if (!check.valid) {
-        console.warn(`[work-lifecycle] CREATING: generated html-* artwork failed validation for "${work.title}": ${check.errors.join("; ")}`);
-        return `generative artwork validation failed: ${check.errors.join("; ").slice(0, 200)}`;
+        const attempt = work.revisionCount ?? 0;
+        const reason  = `Automated structural check failed: ${check.errors.join("; ")}`;
+        console.warn(`[work-lifecycle] CREATING: "${work.title}" attempt ${attempt + 1}/${GENERATIVE_MAX_REVISIONS + 1} failed validation: ${check.errors.join("; ")}`);
+
+        if (attempt >= GENERATIVE_MAX_REVISIONS) {
+          await updateWork(work.id, { validationNote: reason.slice(0, 500) });
+          await advanceState(work.id, "REJECTED", `Auto-rejected after ${attempt + 1} failed creation attempts — ${reason.slice(0, 300)}`);
+          await announceInSalon(work, "rejected", personas);
+          if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+            await closeSalon(work.salonId, 0).catch(() => null);
+          }
+          return true;
+        }
+
+        // Stay in CREATING — the next cycle retries with this concrete feedback via
+        // revisionCtx. Reporting "advanced" (rather than an error string) keeps this
+        // out of the generic MAX_PIPELINE_FAILS auto-reject, which is reserved for
+        // genuine infra failures, not a validator correctly catching a bad draft.
+        await updateWork(work.id, { validationNote: reason.slice(0, 500), revisionCount: attempt + 1 });
+        return true;
       }
       artworkText = check.html;
     }
@@ -659,14 +693,84 @@ No introduction, no meta-commentary. Just the artwork itself.`,
   return true;
 }
 
+// Shared by both rejection paths (curator-LLM "no" and the ground-truth structural
+// check below): either bounces the work back to CREATING with a concrete reason
+// attached for the next revisionCtx, or — past the form's revision budget —
+// permanently rejects it with that same concrete reason spelled out, so Normies
+// (and admins, via the "Voir le code" / "Relancer" debug tools) can see exactly
+// what blocked it instead of a generic "didn't work" message.
+async function rejectOrRevise(
+  work: ANAWork, personas: NormiePersona[], curator: NormiePersona,
+  reason: string, attempt: number, maxRevisions: number,
+): Promise<boolean> {
+  await updateWork(work.id, { validationNote: reason.slice(0, 500) });
+
+  if (attempt >= maxRevisions) {
+    await addMessage({
+      salonId:   work.salonId ?? AGORA_SALON_ID,
+      tokenId:   curator.tokenId,
+      name:      curator.name,
+      imageUrl:  curator.imageUrl ?? "",
+      content:   `❌ Final rejection of "${work.title}" after ${attempt + 1} attempts. ${reason}`,
+      isLlm:     true,
+      timestamp: Date.now(),
+      topic:     "art",
+    }).catch(() => null);
+    await advanceState(work.id, "REJECTED", `Definitively rejected after ${attempt + 1} attempts by ${curator.name}: ${reason.slice(0, 300)}`);
+    await announceInSalon(work, "rejected", personas);
+    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+      await closeSalon(work.salonId, 0).catch(() => null);
+    }
+    return true;
+  }
+
+  await addMessage({
+    salonId:   work.salonId ?? AGORA_SALON_ID,
+    tokenId:   curator.tokenId,
+    name:      curator.name,
+    imageUrl:  curator.imageUrl ?? "",
+    content:   `🔄 Revision requested for "${work.title}" (attempt ${attempt + 1}/${maxRevisions + 1}). ${reason}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+    topic:     "art",
+  }).catch(() => null);
+
+  await updateWork(work.id, {
+    revisionCount: attempt + 1,
+    artworkText:   undefined,
+  });
+  await advanceState(work.id, "CREATING", `Revision requested by ${curator.name}`);
+  return true;
+}
+
 async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   const curator = personas.find(p => p.tokenId === work.curatorTokenId);
   if (!curator) return false;
 
-  const others     = personas.filter(p => p.tokenId !== curator.tokenId);
-  const revisionCtx = (work.revisionCount ?? 0) >= 1
-    ? " This is the second submission. If you reject it again, the work will be permanently archived."
-    : " If you reject it, the Author will get one chance to revise.";
+  const isHtml      = detectHtmlForm(work);
+  const maxRevisions = isHtml ? GENERATIVE_MAX_REVISIONS : TEXT_MAX_REVISIONS;
+  const attempt       = work.revisionCount ?? 0;
+
+  // Ground-truth structural re-check for html-* works — stepCreating already
+  // validated this before saving it, but re-asserting here means the curator
+  // is never asked to guess at code correctness from a short excerpt (that's
+  // exactly what produced a false "missing setup()" rejection on code that
+  // had setup()). If it somehow fails, skip the LLM call entirely: a concrete
+  // automated reason is more useful than an LLM hallucinating one.
+  let structuralNote = "";
+  if (isHtml) {
+    const check = validateGenerativeHtml(work.artworkText ?? "", work.artForm);
+    if (!check.valid) {
+      const reason = `Automated structural check failed: ${check.errors.join("; ")}`;
+      return await rejectOrRevise(work, personas, curator, reason, attempt, maxRevisions);
+    }
+    structuralNote = "Automated structural check: PASSED — required functions, drawing primitives and on-chain data constants are all present, and no forbidden APIs were found. Judge artistic merit only, not code correctness.";
+  }
+
+  const others      = personas.filter(p => p.tokenId !== curator.tokenId);
+  const revisionCtx = attempt >= maxRevisions
+    ? ` This is the final allowed submission (attempt ${attempt + 1}/${maxRevisions + 1}). If you reject it again, the work will be permanently archived — be precise about exactly what is still wrong so it's clear to everyone.`
+    : ` If you reject it, the Author will get another chance to revise (attempt ${attempt + 1}/${maxRevisions + 1}).`;
 
   const raw = await groq(
     [
@@ -677,17 +781,18 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
 
 Brief: ${work.brief?.slice(0, 300)}
 
-${work.artForm?.startsWith("html-")
-  ? `Visual artwork (${work.artForm}) submitted by ${work.authorName}:
-[HTML/JS code, ${(work.artworkText ?? "").length} characters — evaluate whether the visual concept meets the brief and whether the code appears functional]
-Excerpt: ${(work.artworkText ?? "").slice(0, 400)}…`
+${isHtml
+  ? `Visual artwork (${work.artForm}) submitted by ${work.authorName}, ${(work.artworkText ?? "").length} characters.
+${structuralNote}
+Judge the ARTISTIC merit only: does it genuinely look visual and alive (real shapes/motion/color), and does it match the brief's mood and concept?
+Excerpt: ${(work.artworkText ?? "").slice(0, 600)}…`
   : `Artwork submitted by ${work.authorName}:
 ${work.artworkText}`
 }
 
 Do you approve this work for immutable on-chain publication?${revisionCtx}
 
-JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences."}`,
+JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concrete about what works or what's still missing."}`,
       },
     ],
     { model: MODEL_FAST, maxTokens: 160, temp: 0.5, json: true }
@@ -695,49 +800,27 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences."}`,
 
   if (!raw) return false;
 
-  const parsed  = JSON.parse(raw) as { approved?: boolean; note?: string };
+  const parsed   = JSON.parse(raw) as { approved?: boolean; note?: string };
   const approved = !!parsed.approved;
   const note     = parsed.note?.slice(0, 400) ?? "";
 
-  await updateWork(work.id, { validationNote: note });
-
-  // Post curator's decision to salon
-  const curatorMsg = approved
-    ? `✅ "${work.title}" approved for on-chain publication. ${note}`
-    : (work.revisionCount ?? 0) >= 1
-      ? `❌ Final rejection of "${work.title}". ${note}`
-      : `🔄 Revision requested for "${work.title}". ${note}`;
-  await addMessage({
-    salonId:   work.salonId ?? AGORA_SALON_ID,
-    tokenId:   curator.tokenId,
-    name:      curator.name,
-    imageUrl:  curator.imageUrl ?? "",
-    content:   curatorMsg,
-    isLlm:     true,
-    timestamp: Date.now(),
-    topic:     "art",
-  }).catch(() => null);
-
   if (approved) {
+    await updateWork(work.id, { validationNote: note });
+    await addMessage({
+      salonId:   work.salonId ?? AGORA_SALON_ID,
+      tokenId:   curator.tokenId,
+      name:      curator.name,
+      imageUrl:  curator.imageUrl ?? "",
+      content:   `✅ "${work.title}" approved for on-chain publication. ${note}`,
+      isLlm:     true,
+      timestamp: Date.now(),
+      topic:     "art",
+    }).catch(() => null);
     await advanceState(work.id, "PUBLISHING", `Approved by ${curator.name}`);
     return true;
   }
 
-  if ((work.revisionCount ?? 0) >= 1) {
-    await advanceState(work.id, "REJECTED", `Definitively rejected by ${curator.name}`);
-    await announceInSalon(work, "rejected", personas);
-    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
-      await closeSalon(work.salonId, 0).catch(() => null);
-    }
-    return true;
-  }
-
-  await updateWork(work.id, {
-    revisionCount: (work.revisionCount ?? 0) + 1,
-    artworkText:   undefined,
-  });
-  await advanceState(work.id, "CREATING", `Revision requested by ${curator.name}`);
-  return true;
+  return await rejectOrRevise(work, personas, curator, note, attempt, maxRevisions);
 }
 
 async function stepPublishing(work: ANAWork): Promise<boolean | string> {
