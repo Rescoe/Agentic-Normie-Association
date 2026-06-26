@@ -221,11 +221,14 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
             ']'
         );
 
+        string memory image = _buildImageDataUri(artworkTitle, editionLabel);
+
         bytes memory json;
         if (isDataUri) {
             json = abi.encodePacked(
                 '{"name":"', _escapeJson(artworkTitle), unicode" — ", editionLabel, '",',
                 '"description":"ANA on-chain work, Normie #', creatorNormieTokenId.toString(), '",',
+                '"image":"', image, '",',
                 '"animation_url":"', artworkContent, '",',
                 '"external_url":"https://agentic-normie-association.vercel.app/works",',
                 '"attributes":', attrs, '}'
@@ -234,6 +237,7 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
             json = abi.encodePacked(
                 '{"name":"', _escapeJson(artworkTitle), unicode" — ", editionLabel, '",',
                 '"description":"', _escapeJson(artworkContent), '",',
+                '"image":"', image, '",',
                 '"external_url":"https://agentic-normie-association.vercel.app/works",',
                 '"attributes":', attrs, '}'
             );
@@ -317,6 +321,42 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
         if (amount == 0 || to == address(0)) return;
         (bool ok, ) = payable(to).call{value: amount}("");
         require(ok, "Payment failed");
+    }
+
+    // Generates a minimal fully on-chain SVG thumbnail (title + edition label, ANA
+    // branding) as a base64 data URI for the "image" field. Marketplaces (OpenSea)
+    // and on-chain-purity checkers require this to render a catalog preview and to
+    // count the token as fully on-chain — animation_url alone only renders once a
+    // collector opens the token's detail page, never in grid/list views.
+    function _buildImageDataUri(string memory title, string memory editionLabel) internal pure returns (string memory) {
+        bytes memory svg = abi.encodePacked(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">',
+            '<rect width="800" height="800" fill="#0A0A0A"/>',
+            '<rect x="24" y="24" width="752" height="752" fill="none" stroke="#262626" stroke-width="2"/>',
+            '<text x="400" y="370" font-family="monospace" font-size="34" fill="#E2E8F0" text-anchor="middle">', _escapeXml(title), '</text>',
+            '<text x="400" y="416" font-family="monospace" font-size="18" fill="#94A3B8" text-anchor="middle">ANA ', unicode"—", ' ', editionLabel, '</text>',
+            '<text x="400" y="760" font-family="monospace" font-size="12" fill="#52525B" text-anchor="middle">agentic-normie-association.vercel.app</text>',
+            '</svg>'
+        );
+        return string(abi.encodePacked("data:image/svg+xml;base64,", Base64.encode(svg)));
+    }
+
+    // XML-escapes text inserted into the generated SVG — _escapeJson() only handles
+    // JSON-unsafe characters (", \, \n), but &, < and > would break SVG markup.
+    function _escapeXml(string memory s) internal pure returns (string memory) {
+        bytes memory b   = bytes(s);
+        bytes memory out = new bytes(b.length * 6);
+        uint256 j;
+        for (uint256 i = 0; i < b.length; i++) {
+            if (b[i] == '&')      { out[j++] = '&'; out[j++] = 'a'; out[j++] = 'm'; out[j++] = 'p'; out[j++] = ';'; }
+            else if (b[i] == '<') { out[j++] = '&'; out[j++] = 'l'; out[j++] = 't'; out[j++] = ';'; }
+            else if (b[i] == '>') { out[j++] = '&'; out[j++] = 'g'; out[j++] = 't'; out[j++] = ';'; }
+            else if (b[i] == '"') { out[j++] = '&'; out[j++] = 'q'; out[j++] = 'u'; out[j++] = 'o'; out[j++] = 't'; out[j++] = ';'; }
+            else                  { out[j++] = b[i]; }
+        }
+        bytes memory trimmed = new bytes(j);
+        for (uint256 k = 0; k < j; k++) trimmed[k] = out[k];
+        return string(trimmed);
     }
 
     function _escapeJson(string memory s) internal pure returns (string memory) {
