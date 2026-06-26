@@ -908,6 +908,7 @@ type ANAWorkFull = ANAWorkSummary & {
   publishedAt?: number;
   revisionCount?: number;
   pipelineFailCount?: number;
+  critiqueSummary?: string;
   rapporteurName?: string;
   authorName?: string;
   curatorName?: string;
@@ -1193,7 +1194,14 @@ function WorkStatusSection() {
           <div className="divide-y divide-[--border]">
             {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").map(w => (
               <div key={w.id} className="px-4 py-3 flex items-center justify-between gap-2 flex-wrap">
-                <p className="font-mono text-xs">{w.title}</p>
+                <div>
+                  <p className="font-mono text-xs">{w.title}</p>
+                  {w.critiqueSummary && (
+                    <p className="font-mono text-[10px] text-[--fg-muted] mt-0.5" title="Retour de la communauté (Normies non-créateurs)">
+                      💬 {w.critiqueSummary}
+                    </p>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {w.artworkText && (
                     <button

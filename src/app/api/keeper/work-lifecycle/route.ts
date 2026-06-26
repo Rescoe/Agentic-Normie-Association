@@ -19,7 +19,7 @@ import {
   VOTE_WINDOW_MS,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
-import { addMessage, closeSalon, getSalon, createSalon, AGORA_SALON_ID } from "@/lib/salonStore";
+import { addMessage, closeSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { buildAGReportHtml } from "@/lib/agTemplate";
@@ -48,6 +48,13 @@ const TEXT_MAX_REVISIONS       = 1;
 // Forms a curator may reclassify a text-centric html-* submission into,
 // instead of rejecting it outright — see stepValidating's reclassifyAs handling.
 const RECLASSIFIABLE_FORMS = ["poem", "prose", "manifesto"];
+
+// Non-creator Normies may react/debate in a published work's archived salon
+// for this long afterwards — see runCritiquePhase() and openCritiqueWindow().
+const CRITIQUE_WINDOW_MS = 48 * 60 * 60 * 1000;
+// Cap on LLM-driven critique reactions posted per cron tick, across all works —
+// keeps a single work-lifecycle call cheap and fast regardless of backlog size.
+const CRITIQUE_REACTIONS_PER_TICK = 3;
 
 // Fetch current ETH/USD price from CoinGecko (no API key needed).
 // Returns null on failure — callers degrade gracefully.
@@ -425,9 +432,12 @@ async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<b
         .filter(w => w.id !== work.id && w.artForm)
         .slice(0, 8);
       if (recent.length === 0) return "";
-      const lines = recent.map(w => `- "${w.title}" → form: ${w.artForm}`).join("\n");
+      const lines = recent.map(w => `- "${w.title}" → form: ${w.artForm}${w.critiqueSummary ? ` — community feedback: ${w.critiqueSummary}` : ""}`).join("\n");
       const lastForms = recent.slice(0, 3).map(w => w.artForm).filter(Boolean);
-      return `\nRECENT ANA WORKS (most recent first — DO NOT pick the same form again unless the proposal explicitly demands it):\n${lines}\n${lastForms.length ? `The last ${lastForms.length} work(s) used: ${lastForms.join(", ")}. Avoid repeating these — favor variety (text forms AND generative HTML/JS).` : ""}\n`;
+      const feedbackNote = recent.some(w => w.critiqueSummary)
+        ? "\nThe community feedback above comes from Normies who did NOT create those works, reacting after publication — take it seriously: steer the brief away from what was criticized, and lean into what was praised."
+        : "";
+      return `\nRECENT ANA WORKS (most recent first — DO NOT pick the same form again unless the proposal explicitly demands it):\n${lines}\n${lastForms.length ? `The last ${lastForms.length} work(s) used: ${lastForms.join(", ")}. Avoid repeating these — favor variety (text forms AND generative HTML/JS).` : ""}${feedbackNote}\n`;
     } catch {
       return "";
     }
@@ -1005,11 +1015,109 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   await advanceState(work.id, "PUBLISHED", `tx: ${work.txHash?.slice(0, 12)}`);
 
   if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+    // Archive the salon, but leave a window where Normies who did NOT make this
+    // work can react/debate it (see runCritiquePhase()) — that feedback flows
+    // back into future briefs so the creative process visibly evolves.
+    const creativeTeam = [work.authorTokenId, work.curatorTokenId, work.rapporteurTokenId]
+      .filter((id): id is number => id != null);
+    await openCritiqueWindow(work.salonId, creativeTeam, CRITIQUE_WINDOW_MS).catch(() => null);
     await closeSalon(work.salonId, 0).catch(() => null);
-    console.log(`[work-lifecycle] closed work salon ${work.salonId}`);
+    console.log(`[work-lifecycle] closed work salon ${work.salonId} — open for critique for ${CRITIQUE_WINDOW_MS / 3_600_000}h`);
   }
 
   return true;
+}
+
+// ─── Post-publication community critique ───────────────────────────────────────
+
+async function postCritique(work: ANAWork, critic: NormiePersona): Promise<void> {
+  const raw = await groq(
+    [
+      { role: "system", content: buildSystemPrompt(critic) },
+      {
+        role: "user",
+        content: `You did NOT take part in creating the work "${work.title}" (${work.artForm ?? "text"}).
+Brief it was made from: ${(work.brief ?? "").slice(0, 250)}
+
+Give your honest reaction as a fellow ANA member — what do you like or dislike about it, in 1-2
+sentences. Be specific and concrete (not just "nice"/"meh") so the Author can actually learn from
+it for future works. Always write in English.`,
+      },
+    ],
+    { model: MODEL_FAST, maxTokens: 100, temp: 0.85 },
+  );
+  if (!raw) return;
+  await addMessage({
+    salonId:   work.salonId!,
+    tokenId:   critic.tokenId,
+    name:      critic.name,
+    imageUrl:  critic.imageUrl ?? "",
+    content:   `💬 ${raw.trim()}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+    topic:     "critique",
+  }).catch(() => null);
+}
+
+async function summarizeCritique(work: ANAWork): Promise<string | null> {
+  if (!work.salonId) return null;
+  const salon = await getSalon(work.salonId);
+  const critiques = (salon?.messages ?? []).filter(m => m.topic === "critique");
+  if (critiques.length === 0) return null;
+
+  const transcript = critiques.map(m => `${m.name}: ${m.content.replace(/^💬\s*/, "")}`).join("\n");
+  const raw = await groq(
+    [{
+      role: "user",
+      content: `Summarize this community feedback on the ANA work "${work.title}" (${work.artForm ?? "text"}) in 1-2 concrete sentences — what was liked, what wasn't — so future creators of similar works can learn from it:\n\n${transcript}`,
+    }],
+    { model: MODEL_FAST, maxTokens: 100, temp: 0.4 },
+  );
+  return raw?.trim() ?? null;
+}
+
+/**
+ * Each cron tick: lets a few non-creator Normies react to recently-published
+ * works while their critique window is open, and once a work's window has
+ * elapsed, synthesizes the reactions into a one-line takeaway stored on the
+ * work (critiqueSummary) — surfaced to the Rapporteur's briefing prompt for
+ * future works, so reception visibly shapes what gets made next.
+ */
+async function runCritiquePhase(personas: NormiePersona[]): Promise<{ reactionsPosted: number; summariesWritten: number }> {
+  const all = await listWorks();
+  const candidates = all.filter(w => w.state === "PUBLISHED" && w.salonId && w.salonId !== AGORA_SALON_ID && w.publishedAt);
+
+  let reactionsPosted = 0;
+  let summariesWritten = 0;
+
+  for (const work of candidates) {
+    if (work.critiqueSummary) continue; // already wrapped up
+    const elapsed = Date.now() - (work.publishedAt ?? 0);
+    const creativeTeam = [work.authorTokenId, work.curatorTokenId, work.rapporteurTokenId]
+      .filter((id): id is number => id != null);
+
+    if (elapsed < CRITIQUE_WINDOW_MS) {
+      if (reactionsPosted >= CRITIQUE_REACTIONS_PER_TICK) continue;
+      const salon = await getSalon(work.salonId!);
+      const alreadyReacted = new Set((salon?.messages ?? []).filter(m => m.topic === "critique").map(m => m.tokenId));
+      const eligible = personas.filter(p => !creativeTeam.includes(p.tokenId) && !alreadyReacted.has(p.tokenId));
+      if (eligible.length === 0) continue;
+      const critic = eligible[Math.floor(Math.random() * eligible.length)];
+      await postCritique(work, critic);
+      reactionsPosted++;
+      continue;
+    }
+
+    // Window elapsed — wrap it up once, whether or not anyone actually reacted.
+    const summary = await summarizeCritique(work);
+    await updateWork(work.id, {
+      critiqueSummary:   summary ?? "(no community feedback was posted)",
+      critiqueSummaryAt: Date.now(),
+    });
+    summariesWritten++;
+  }
+
+  return { reactionsPosted, summariesWritten };
 }
 
 // Scans PUBLISHED works whose ERC-721 collection failed to initialize.
@@ -1323,6 +1431,13 @@ export async function POST(req: NextRequest) {
     return 0;
   });
 
+  // Let a few non-creator Normies react to recently-published works, and wrap up
+  // critique windows that have elapsed into a one-line takeaway for future briefs.
+  const critique = await runCritiquePhase(personas).catch(e => {
+    console.error("[work-lifecycle] runCritiquePhase error:", e);
+    return { reactionsPosted: 0, summariesWritten: 0 };
+  });
+
   return NextResponse.json({
     processed:       results.length,
     advanced:        results.filter(r => r.advanced).length,
@@ -1330,5 +1445,6 @@ export async function POST(req: NextRequest) {
     memberCount:     personas.length,
     foundingCreated,
     reinited,
+    critique,
   });
 }

@@ -45,6 +45,12 @@ export interface Salon {
   messages:     SalonMessage[];
   summaries:    SalonSummary[];
   currentTopic: string | null;
+  /**
+   * Exceptional posting window on an otherwise-closed (archived) salon: lets
+   * Normies who did NOT create the work react/debate ("topic":"critique")
+   * for a limited time after publication. See openCritiqueWindow()/addMessage().
+   */
+  critique?: { until: number; excluded: number[] };
 }
 
 interface SalonStore {
@@ -383,6 +389,20 @@ export async function setTopic(salonId: string, topic: string | null): Promise<v
   await mutate(s => { if (s.salons[salonId]) s.salons[salonId].currentTopic = topic; });
 }
 
+/**
+ * Opens a time-boxed exception on an archived (closed) salon: Normies NOT in
+ * `excluded` (the work's own creative team) may post "topic":"critique"
+ * messages there until the window expires — see addMessage()'s closed-salon
+ * check. Does not reopen the salon for any other purpose.
+ */
+export async function openCritiqueWindow(salonId: string, excluded: number[], windowMs: number): Promise<void> {
+  await mutate(s => {
+    const sal = s.salons[salonId];
+    if (!sal) return;
+    sal.critique = { until: Date.now() + windowMs, excluded };
+  });
+}
+
 // ─── Messages ─────────────────────────────────────────────────────────────────
 
 export async function getMessages(salonId: string, since?: number): Promise<SalonMessage[]> {
@@ -429,8 +449,13 @@ export async function addMessage(msg: Omit<SalonMessage, "id"> & { topic?: strin
       return;
     }
     if (!sal.isOpen) {
-      console.warn(`[salonStore] addMessage skipped — salon "${sal.name}" (${msg.salonId}) is closed`);
-      return;
+      const critique     = sal.critique;
+      const critiqueOpen = msg.topic === "critique" && !!critique
+        && Date.now() < critique.until && !critique.excluded.includes(msg.tokenId);
+      if (!critiqueOpen) {
+        console.warn(`[salonStore] addMessage skipped — salon "${sal.name}" (${msg.salonId}) is closed`);
+        return;
+      }
     }
     sal.messages.push(full);
     if (sal.messages.length > MAX_MESSAGES_PER_SALON) sal.messages = sal.messages.slice(-MAX_MESSAGES_PER_SALON);

@@ -87,6 +87,12 @@ export interface ANAWork {
   revisionCount?:  number;
   pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — auto-rejects past MAX_PIPELINE_FAILS
 
+  // Post-publication community critique (non-creator Normies react/debate in the
+  // work's archived salon for a limited window) — see openCritiqueWindow() in
+  // salonStore.ts and runCritiquePhase() in work-lifecycle/route.ts.
+  critiqueSummary?:   string;
+  critiqueSummaryAt?: number;
+
   // On-chain
   txHash?:           string;
   onChainWorkId?:    number;
