@@ -77,6 +77,23 @@ const VISUAL_PRIMITIVES_BY_FORM: Record<GenerativeForm, RegExp> = {
   "html-webgl":   /\b(drawArrays|drawElements|bufferData|createShader|createProgram)\s*\(/i,
 };
 
+// Hard rule, not a warning: a generative piece must not read its on-chain data
+// out loud as a caption (e.g. text(`Normie #${NORMIE_ID} - ${NORMIE_ARCHETYPE}`)
+// or printing NORMIE_TRAITS.map(...).join(...)). This exact pattern recurred
+// across multiple submissions even after adding ellipse()/particle decoration
+// around it — the data must shape the visuals (color/size/motion), not be
+// displayed as readable text.
+const TEXT_PRINTS_ONCHAIN_DATA_RE = /\b(?:text|fillText)\s*\([^)]*\bNORMIE_(?:ID|ARCHETYPE|TRAITS)\b/;
+
+// A title is fine; a caption-driven piece is not. Counts call sites, not
+// runtime executions — cheap and reliable for catching "the whole screen is
+// text" without needing to actually run the sketch.
+const MAX_TEXT_CALLS_BY_FORM: Partial<Record<GenerativeForm, number>> = {
+  "html-p5js":   2,
+  "html-canvas": 2,
+};
+const TEXT_CALL_RE = /\b(?:text|fillText)\s*\(/g;
+
 export interface ValidationResult {
   valid: boolean;
   /** Hard technical-contract violations — block publication, trigger a revision. */
@@ -130,6 +147,18 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
 
     if (!VISUAL_PRIMITIVES_BY_FORM[artForm].test(trimmed)) {
       warnings.push(`${artForm}: no real visual drawing primitive detected (shapes/geometry/motion) — looks text-centric; the curator should judge whether this is a worked/animated piece or should be reclassified as a literary work (poem/manifesto/prose)`);
+    }
+
+    if (TEXT_PRINTS_ONCHAIN_DATA_RE.test(trimmed)) {
+      errors.push(`${artForm}: on-chain data (NORMIE_ID/NORMIE_ARCHETYPE/NORMIE_TRAITS) is printed as readable text — it must drive visual parameters (color, shape, motion, density) instead of being displayed as a caption`);
+    }
+
+    const maxTextCalls = MAX_TEXT_CALLS_BY_FORM[artForm];
+    if (maxTextCalls != null) {
+      const textCallCount = (trimmed.match(TEXT_CALL_RE) ?? []).length;
+      if (textCallCount > maxTextCalls) {
+        errors.push(`${artForm}: ${textCallCount} text()/fillText() call sites found (max ${maxTextCalls}) — the piece reads as a caption with decoration, not a generative visual; a small title is fine, the body must be carried by shapes/motion`);
+      }
     }
 
     for (const name of REQUIRED_DATA_CONSTS) {

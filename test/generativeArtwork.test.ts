@@ -107,12 +107,67 @@ function windowResized() { resizeCanvas(windowWidth, windowHeight); }
 </script>
 </body>
 </html>`;
-    // Text-only is now a WARNING, not a hard rejection — Normies may legitimately
-    // make text-driven generative art; the curator decides (approve, revise, or
-    // reclassify as a literary work), the validator just flags it for review.
+    // This specific fixture prints NORMIE_ID inside text() — a hard error on its
+    // own (reading on-chain data out loud as a caption), on top of the "no shape
+    // primitive" warning.
     const result = validateGenerativeHtml(textOnly, "html-p5js");
-    expect(result.valid, result.errors.join("; ")).to.equal(true);
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("printed as readable text"))).to.equal(true);
     expect(result.warnings.some(w => w.includes("no real visual drawing primitive"))).to.equal(true);
+  });
+
+  it("rejects on-chain data printed as a caption even when real shapes decorate it — the reported regression on the retry", () => {
+    // "Glitchy Agent Antics" v2: real ellipse() particles orbiting the canvas,
+    // but the centerpiece is still text(`Normie #${NORMIE_ID} - ${NORMIE_ARCHETYPE}`)
+    // plus a second text() dumping NORMIE_TRAITS as a sentence — particles around
+    // a data caption is still a caption, not a generative artwork.
+    const captionWithDecoration = `<!DOCTYPE html>
+<html lang="en">
+<head><script src="${P5_CDN}" integrity="${CDN_SRI["html-p5js"]!.hash}" crossorigin="anonymous"></script></head>
+<body>
+<script>
+const NORMIE_ID = 6848;
+const NORMIE_ARCHETYPE = "Human";
+const NORMIE_TRAITS = [{"trait_type":"Type","value":"Human"}];
+const WORK_TITLE = "Glitchy Agent Antics";
+const CREATED_AT = 1782483961421;
+let x = 0;
+function setup() { createCanvas(windowWidth, windowHeight); }
+function draw() {
+  background(20, 20, 20);
+  fill(255, 255, 0);
+  text(\`Normie #\${NORMIE_ID} - \${NORMIE_ARCHETYPE}\`, width / 2, height / 2);
+  fill(255);
+  text(\`Traits: \${NORMIE_TRAITS.map(t => t.value).join(', ')}\`, width / 2, height / 2 + 50);
+  x += 0.01;
+  for (let i = 0; i < 100; i++) {
+    fill(255, 0, 0, 50);
+    ellipse(width / 2 + cos(x + i) * 100, height / 2 + sin(x + i) * 100, 10, 10);
+  }
+}
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+</script>
+</body>
+</html>`;
+    const result = validateGenerativeHtml(captionWithDecoration, "html-p5js");
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("printed as readable text"))).to.equal(true);
+    // Real shape primitive IS present (ellipse) — that warning must NOT fire here,
+    // only the caption-specific hard error should.
+    expect(result.warnings.some(w => w.includes("no real visual drawing primitive"))).to.equal(false);
+  });
+
+  it("rejects more than 2 text()/fillText() call sites even without referencing on-chain data directly", () => {
+    const tooManyCaptions = validP5Doc().replace(
+      "function draw(){ background(10); ellipse(50,50,30,30); }",
+      `function draw(){
+        background(10); ellipse(50,50,30,30);
+        text("a", 10, 10); text("b", 20, 20); text("c", 30, 30);
+      }`,
+    );
+    const result = validateGenerativeHtml(tooManyCaptions, "html-p5js");
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("call sites found"))).to.equal(true);
   });
 
   it("rejects an artwork missing a brief-mandated on-chain data constant", () => {

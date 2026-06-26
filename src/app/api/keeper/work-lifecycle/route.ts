@@ -615,11 +615,20 @@ ${(work.artForm === "html-canvas" || work.artForm === "html-webgl") ? `- Create 
   and call getContext("2d") or getContext("webgl"); clear/paint it every frame — never leave it black` : ""}
 - Visually immersive body: dark background by default, fullscreen if possible
 - Something must visibly HAPPEN on screen: motion, color change, glitch, particles, geometry.
-  A static or purely descriptive screen (e.g. printing the title/traits as still text labels and
-  nothing else) is not acceptable. Text is allowed and welcome as part of the piece — animated,
-  glitched, reactive, or otherwise worked typography is a legitimate generative form — but ideally
-  NORMIE_TRAITS/NORMIE_ARCHETYPE shape the visuals themselves (colors, shapes, motion, density),
-  not just get printed as a static label list.
+- FORBIDDEN regardless of what else is on screen: calling text()/fillText() to print
+  NORMIE_ID, NORMIE_ARCHETYPE, or NORMIE_TRAITS as a readable caption (e.g.
+  text(\`Normie #\${NORMIE_ID} - \${NORMIE_ARCHETYPE}\`) or printing
+  NORMIE_TRAITS.map(...).join(...)). This is checked automatically and will be
+  rejected even if the rest of the piece is visual (shapes/particles around a data
+  caption is still a caption, not a generative artwork). Use these values instead to
+  PICK colors, shapes, counts, speeds, or patterns — never to print them as a sentence.
+${work.artForm === "html-p5js" || work.artForm === "html-canvas" ? `- At most 2 text()/fillText() call sites total in the whole script — a short one-time
+  title is fine, anything more reads as a caption with decoration around it, not a
+  generative visual piece. The body of the work must be carried by shapes/motion.` : ""}
+- Text is allowed and welcome as part of the piece itself — animated, glitched, reactive,
+  or otherwise worked typography (e.g. letters that move/distort/scatter) is a legitimate
+  generative form. The distinction is between text AS the visual material versus text AS
+  a caption describing data — the former is fine, the latter is rejected.
 
 ON-CHAIN DATA TO INJECT (put these JS constants at the top of your <script>):
 const NORMIE_ID = ${author.tokenId};
