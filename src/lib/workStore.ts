@@ -77,6 +77,7 @@ export interface ANAWork {
 
   // Creative phases
   artForm?:        string;   // "haiku"|"sonnet"|"poeme"|"prose"|"manifeste"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"
+  ambitionLevel?:  "quick" | "standard" | "ambitious"; // set by the Rapporteur — scales how much effort/token budget the Author gets
   editionPrice?:   string;   // ETH price string, e.g. "0.01"
   editionSupply?:  number;   // Number of tradeable ERC-721 editions (1-100)
   brief?:          string;

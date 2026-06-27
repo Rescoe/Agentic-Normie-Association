@@ -465,7 +465,15 @@ Proposal: ${work.proposal}
 ${work.suggestedForm ? `Proposer's suggested form: "${work.suggestedForm}"` : ""}
 Author: ${work.authorName} (Normie #${work.authorTokenId})
 
-You must choose: (1) the ART FORM, (2) the ERC-721 edition parameters, (3) write the creative brief.
+You must choose: (1) the ART FORM, (2) an AMBITION LEVEL, (3) the ERC-721 edition parameters, (4) write the creative brief.
+
+AMBITION LEVEL — not every work needs the same effort. Pick "quick" for a small, intimate
+gesture (a haiku, a tiny sketch); "standard" for typical work; "ambitious" for a piece that
+should genuinely push past what ANA has done before — more layers, more elaborate motion/
+composition, a bigger creative swing. Look at the recent works and their community feedback
+below: if the last few were all "quick" or simple, lean toward "ambitious" now — ANA's work
+should trend toward more elaborate over time, not stay flat. Don't pick "ambitious" every
+time either; variety in both form AND ambition is the goal.
 
 CRITICAL RULE — HONOR THE PROPOSAL'S FORM:
 ${work.suggestedForm
@@ -485,6 +493,7 @@ The brief you write MUST stay faithful to the original proposal above — do not
 Respond in JSON:
 {
   "artForm": "haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl",
+  "ambitionLevel": "quick"|"standard"|"ambitious",
   "editionPrice": "0.0005"|"0.001"|"0.005"|"0.01"|"0.05",
   "editionSupply": <integer 1-100>,
   "priceReasoning": "<1 sentence: why this price and quantity given the context above>",
@@ -505,19 +514,23 @@ Respond in JSON:
 
   let brief    = rawBrief;
   let artForm: string | undefined;
+  let ambitionLevel: ANAWork["ambitionLevel"];
   let editionPrice: string | undefined;
   let editionSupply: number | undefined;
 
   if (!work.isFoundingWork) {
     try {
       const parsed = JSON.parse(rawBrief) as {
-        artForm?: string; editionPrice?: string; editionSupply?: number;
+        artForm?: string; ambitionLevel?: string; editionPrice?: string; editionSupply?: number;
         priceReasoning?: string; brief?: string;
       };
       brief         = parsed.brief ?? rawBrief;
       artForm       = parsed.artForm;
       editionPrice  = parsed.editionPrice;
       editionSupply = typeof parsed.editionSupply === "number" ? parsed.editionSupply : undefined;
+      ambitionLevel = (["quick", "standard", "ambitious"] as const).includes(parsed.ambitionLevel as never)
+        ? parsed.ambitionLevel as ANAWork["ambitionLevel"]
+        : "standard";
       if (parsed.priceReasoning) {
         console.log(`[work-lifecycle] pricing rationale: ${parsed.priceReasoning}`);
       }
@@ -528,11 +541,12 @@ Respond in JSON:
 
   await updateWork(work.id, {
     brief, briefAt: Date.now(),
-    ...(artForm      ? { artForm }      : {}),
-    ...(editionPrice ? { editionPrice } : {}),
+    ...(artForm       ? { artForm }       : {}),
+    ...(ambitionLevel ? { ambitionLevel } : {}),
+    ...(editionPrice  ? { editionPrice }  : {}),
     ...(editionSupply != null ? { editionSupply } : {}),
   });
-  await advanceState(work.id, "CREATING", `Brief written by ${rapporteur.name}${artForm ? ` — form: ${artForm}` : ""}`);
+  await advanceState(work.id, "CREATING", `Brief written by ${rapporteur.name}${artForm ? ` — form: ${artForm}` : ""}${ambitionLevel ? ` — ambition: ${ambitionLevel}` : ""}`);
 
   const editionNote = editionSupply && editionPrice
     ? ` · ${editionSupply} editions @ ${editionPrice} ETH`
@@ -559,6 +573,38 @@ function detectHtmlForm(work: ANAWork): boolean {
   return /\b(p5\.js|p5js|three\.js|threejs|canvas|webgl|generative\s+html|html\s+generative\s+art|visual\s+javascript)\b/i.test(work.brief ?? "");
 }
 
+// Token budget per ambition level — "quick" works get less room (and less LLM
+// cost) for a small gesture, "ambitious" works get room to actually be bigger.
+const AMBITION_TOKEN_SCALE: Record<NonNullable<ANAWork["ambitionLevel"]>, number> = {
+  quick: 0.6, standard: 1, ambitious: 1.5,
+};
+
+function scaledTokens(base: number, ambitionLevel?: ANAWork["ambitionLevel"]): number {
+  return Math.round(base * AMBITION_TOKEN_SCALE[ambitionLevel ?? "standard"]);
+}
+
+/**
+ * Lists this Author's own past published works (title, form, ambition, and any
+ * community critique) so they don't just see ANA's history in general — they
+ * see what THEY personally made before, and are pushed not to repeat it.
+ */
+async function buildAuthorHistoryBlock(authorTokenId: number | undefined, excludeWorkId: string): Promise<string> {
+  if (!authorTokenId) return "";
+  try {
+    const all = await listWorks();
+    const mine = all
+      .filter(w => w.id !== excludeWorkId && w.authorTokenId === authorTokenId && w.state === "PUBLISHED")
+      .slice(0, 5);
+    if (mine.length === 0) return "";
+    const lines = mine.map(w =>
+      `- "${w.title}" (${w.artForm ?? "text"}${w.ambitionLevel ? `, ${w.ambitionLevel}` : ""})${w.critiqueSummary ? ` — community said: ${w.critiqueSummary}` : ""}`
+    ).join("\n");
+    return `\nYOUR OWN PAST WORKS (most recent first — do not repeat yourself; build on what landed, avoid what didn't, and go further than your last piece):\n${lines}\n`;
+  } catch {
+    return "";
+  }
+}
+
 async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean | string> {
   const author = personas.find(p => p.tokenId === work.authorTokenId);
   if (!author) return false;
@@ -567,6 +613,8 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
   const revisionCtx = work.validationNote
     ? `\n\nFeedback on the previous attempt — you MUST address every point below:\n${work.validationNote}\nRevise taking this feedback into account.`
     : "";
+  const authorHistoryBlock = await buildAuthorHistoryBlock(work.authorTokenId, work.id);
+  const selfCritiqueLine = "\nBefore finalizing: compare this to your own past works above (if any) — is it meaningfully more elaborate, or different in approach? If it would just repeat your last piece, push it further before answering.";
 
   const isHtml = detectHtmlForm(work);
   let artworkText: string | null;
@@ -589,6 +637,12 @@ Original proposal: ${work.proposal ?? "—"}
 
 Rapporteur ${work.rapporteurName}'s brief:
 ${work.brief}${revisionCtx}
+${authorHistoryBlock}
+Ambition level for this piece: ${work.ambitionLevel ?? "standard"}${
+  work.ambitionLevel === "ambitious" ? " — go big: more layers, richer motion/composition, take a real creative swing."
+  : work.ambitionLevel === "quick" ? " — keep it small and intimate, a quick precise gesture is the goal here."
+  : ""
+}
 
 Generate a COMPLETE, STANDALONE HTML page. It will be stored immutably on-chain on Base and
 rendered inside a sandboxed iframe (sandbox="allow-scripts" — no same-origin, no network).
@@ -636,11 +690,11 @@ const NORMIE_ARCHETYPE = "${authorArch}";
 const NORMIE_TRAITS = ${JSON.stringify(author.traits ?? [])};
 const WORK_TITLE = ${JSON.stringify(work.title)};
 const CREATED_AT = ${Date.now()};
-
+${selfCritiqueLine}
 Generate ONLY the complete HTML, no explanations before or after.`,
         },
       ],
-      { maxTokens: 2500, temp: 0.95 }
+      { maxTokens: scaledTokens(2500, work.ambitionLevel), temp: 0.95 }
     );
 
     if (artworkText) {
@@ -690,12 +744,13 @@ Original proposal: ${work.proposal ?? "—"}
 
 Rapporteur ${work.rapporteurName}'s brief:
 ${work.brief}${revisionCtx}
-
+${authorHistoryBlock}
 Create ${formHint}. It will be stored immutably on-chain on Base in WorkRegistry.
+${selfCritiqueLine}
 No introduction, no meta-commentary. Just the artwork itself.`,
         },
       ],
-      { maxTokens: work.artForm === "haiku" ? 80 : work.artForm === "sonnet" ? 350 : 450, temp: 0.95 }
+      { maxTokens: scaledTokens(work.artForm === "haiku" ? 80 : work.artForm === "sonnet" ? 350 : 450, work.ambitionLevel), temp: 0.95 }
     );
   }
 

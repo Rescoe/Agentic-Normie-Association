@@ -1198,17 +1198,44 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
 // ─── WorkList (published on-chain) ───────────────────────────────────────────
 
-function WorkList({ count, neonWorks, getName }: { count: number; neonWorks: ANAWork[]; getName: GetName }) {
+function WorkList({
+  count, neonWorks, getName, search, formFilter,
+}: {
+  count: number; neonWorks: ANAWork[]; getName: GetName;
+  search: string; formFilter: string;
+}) {
   const neonMap = new Map(
     neonWorks
       .filter(w => w.onChainWorkId != null)
       .map(w => [w.onChainWorkId!, w])
   );
 
+  const q = search.trim().toLowerCase();
+  // Newest first — the on-chain id is assigned sequentially, so the highest id
+  // is the most recently published work. Pure on-chain entries with no Neon
+  // record (legacy works) can't be matched against a text/form filter before
+  // their own async fetch resolves, so they're hidden whenever a filter is
+  // active rather than silently shown unfiltered.
+  const ids = Array.from({ length: count }, (_, i) => count - 1 - i).filter(id => {
+    if (!q && formFilter === "all") return true;
+    const w = neonMap.get(id);
+    if (!w) return false;
+    if (formFilter !== "all" && w.artForm !== formFilter) return false;
+    if (q && !w.title.toLowerCase().includes(q) && !(w.authorName ?? "").toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  if (ids.length === 0) {
+    return (
+      <p className="font-mono text-xs text-[--fg-muted] py-8 text-center">
+        No work matches your search.
+      </p>
+    );
+  }
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-      {Array.from({ length: count }, (_, i) => {
-        const id       = i;
+      {ids.map(id => {
         const neonWork = neonMap.get(id);
         return neonWork
           ? <WorkCard key={id} work={neonWork} onChainId={id} getName={getName} />
@@ -1224,6 +1251,8 @@ export function WorksClient() {
   const t = useTranslations("works");
   const [allWorks,  setAllWorks]  = useState<ANAWork[]>([]);
   const [nameMap,   setNameMap]   = useState<Map<number, string>>(new Map());
+  const [search,     setSearch]     = useState("");
+  const [formFilter, setFormFilter] = useState("all");
 
   const { data: countRaw, isLoading } = useReadContract({
     address:      WR_ADDR,
@@ -1292,6 +1321,10 @@ export function WorksClient() {
   // be wired up (or about to be, once initialization succeeds/retries).
   const onChainPublishedWorks = allWorks.filter(w => w.onChainWorkId != null);
   const activeWorks           = allWorks.filter(w => ACTIVE_STATES.includes(w.state));
+  const availableForms = useMemo(
+    () => [...new Set(onChainPublishedWorks.map(w => w.artForm).filter((f): f is string => !!f))].sort(),
+    [onChainPublishedWorks],
+  );
 
   if (!deployed) {
     return (
@@ -1365,15 +1398,35 @@ export function WorksClient() {
       {/* ── Galerie on-chain ── */}
       {count > 0 && (
         <section className="space-y-6">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
-              {t("gallery.label")}
-            </p>
-            <p className="font-mono text-xs text-[--fg-muted]">
-              {t("gallery.count", { count })}
-            </p>
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-1">
+                {t("gallery.label")}
+              </p>
+              <p className="font-mono text-xs text-[--fg-muted]">
+                {t("gallery.count", { count })}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search by title or author…"
+                className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 w-56 focus:outline-none focus:border-[--fg]"
+              />
+              <select
+                value={formFilter}
+                onChange={e => setFormFilter(e.target.value)}
+                className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 focus:outline-none focus:border-[--fg]"
+              >
+                <option value="all">All forms</option>
+                {availableForms.map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <WorkList count={count} neonWorks={onChainPublishedWorks} getName={getName} />
+          <WorkList count={count} neonWorks={onChainPublishedWorks} getName={getName} search={search} formFilter={formFilter} />
         </section>
       )}
 
