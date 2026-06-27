@@ -95,7 +95,13 @@ THINKING ABOUT EDITION COUNT:
 
 PHILOSOPHY: ANA is a young community in an experimental phase. Favor accessibility
 so other Normies can collect. A price set too high slows the circulation of works.
-Vary your choices based on the work's form and ambition — don't always pick the same combination.`;
+Vary your choices based on the work's form and ambition — don't always pick the same combination.
+
+PRICE MUST TRACK THE AMBITION LEVEL YOU PICKED — don't price a "quick" piece like an
+"ambitious" one just because the form is the same: "quick" → 0.0005-0.001 ETH range,
+"standard" → 0.001-0.005 ETH range, "ambitious" → 0.005-0.05 ETH range, only reaching the
+top of that if it's genuinely a standout piece. The price is a promise about the effort
+actually invested — keep it honest.`;
 }
 
 const client = createPublicClient({
