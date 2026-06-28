@@ -29,6 +29,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { kvGet, kvSet } from "@/lib/db";
+import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
 
 const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
 const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
@@ -36,9 +37,6 @@ const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
   : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
 
 const CA = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
-
-const ELECTION_TERM_SECONDS = 30 * 24 * 60 * 60; // 1 month mandate
-const ELECTION_TERM_MS      = ELECTION_TERM_SECONDS * 1000;
 
 const CYCLE_KEY = "election-cycle-state";
 
@@ -94,19 +92,26 @@ export async function POST(req: NextRequest) {
   const now = Date.now();
   const cycle = await getCycleState();
 
-  // ── Step 1: open a new session if none is active and the term has elapsed ──
+  // ── Step 1: open a new session if none is active and it's due ──────────────
+  // First ever session: gated by the announced constitutive AG date, not by
+  // "id===0" alone — without this the very first cron run after deploy would
+  // open the assembly immediately regardless of the publicly announced date.
+  // Subsequent sessions: term anchored to the PREVIOUS session's openedAt, so
+  // mandates recur every ELECTION_TERM_MS from when they started, not from
+  // when the (much shorter) vote window happened to close.
   if (!session.active) {
-    const lastClosedMs = session.closedAt * 1000;
-    const shouldOpen = session.id === 0 || (session.resolved && now - lastClosedMs >= ELECTION_TERM_MS);
+    const shouldOpen = session.id === 0
+      ? now >= FIRST_ELECTION_OPEN_AT
+      : (session.resolved && now - session.openedAt * 1000 >= ELECTION_TERM_MS);
     if (!shouldOpen) {
-      return NextResponse.json({ step: "waiting", reason: "term not elapsed since last session closed", session });
+      return NextResponse.json({ step: "waiting", reason: "election not due yet", session });
     }
     const key = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
     if (!key) return NextResponse.json({ error: "RELAYER_PRIVATE_KEY not configured" }, { status: 500 });
     const wallet = createWalletClient({ account: privateKeyToAccount(key), chain: CHAIN, transport: http(RPC_URL) });
     try {
       const hash = await wallet.writeContract({
-        address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "openSession", args: [BigInt(ELECTION_TERM_SECONDS)],
+        address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "openSession", args: [BigInt(ELECTION_VOTE_WINDOW_SECONDS)],
       });
       return NextResponse.json({ step: "openSession", txHash: hash });
     } catch (e) {

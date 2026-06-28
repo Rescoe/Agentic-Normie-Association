@@ -5,6 +5,7 @@ import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { HomeLiveActivity } from "@/components/HomeLiveActivity";
+import { ElectionBadgeDate, ElectionTimelineDates, ElectionCtaRange } from "@/components/ElectionDates";
 
 export const metadata: Metadata = {
   title: "ANA — The first on-chain Normie association | Agentic Normie Association",
@@ -30,7 +31,7 @@ async function Hero() {
           <div className="space-y-8">
             <div className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-[--fg-muted] border border-[--border] px-3 py-1.5">
               <span className="live-dot w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" />
-              {t("constituentAgDate")}
+              <ElectionBadgeDate fallback={t("constituentAgDate")} />
             </div>
 
             <h1 className="text-5xl lg:text-6xl font-bold leading-[1.05] tracking-tight">
@@ -118,18 +119,7 @@ async function AGCalendarStrip() {
 
         {/* Timeline entries */}
         <div className="flex items-stretch gap-0">
-          {[
-            { date: t("agOpenDate"), label: t("agOpenLabel"), color: "border-purple-500 text-purple-500", dot: "bg-purple-500" },
-            { date: t("agCloseDate"), label: t("agCloseLabel"), color: "border-[--fg-muted] text-[--fg-muted]",   dot: "bg-[--fg-muted]" },
-          ].map((ev, i) => (
-            <div key={i} className="flex items-center">
-              {i > 0 && <div className="w-8 h-px bg-[--border] shrink-0" />}
-              <div className={`border px-3 py-2 ${ev.color} shrink-0`}>
-                <p className="font-mono text-[10px] uppercase tracking-widest opacity-70">{ev.date}</p>
-                <p className="font-mono text-xs font-semibold mt-0.5">{ev.label}</p>
-              </div>
-            </div>
-          ))}
+          <ElectionTimelineDates openLabel={t("agOpenLabel")} closeLabel={t("agCloseLabel")} />
         </div>
 
         <div className="hidden sm:block flex-1" />
@@ -278,7 +268,7 @@ async function CTA() {
       <div className="max-w-3xl mx-auto space-y-10">
         <div className="space-y-4">
           <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
-            {t("ctaDateRange")}
+            <ElectionCtaRange fallback={t("ctaDateRange")} />
           </p>
           <h2 className="text-4xl font-bold leading-tight">
             {t("ctaTitleLine1")}<br />{t("ctaTitleLine2")}
