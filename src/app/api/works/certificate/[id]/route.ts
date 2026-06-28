@@ -23,7 +23,7 @@ import { artworkChainClient, htmlHeaders, decodeContent, notFoundHtml } from "@/
 
 const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
 
-const CERT_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; frame-src 'self';";
+const CERT_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https://api.normies.art; connect-src 'none'; frame-src 'self';";
 
 export async function GET(
   _req: NextRequest,

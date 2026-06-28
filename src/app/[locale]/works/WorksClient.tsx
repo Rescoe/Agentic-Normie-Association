@@ -446,7 +446,7 @@ function ArtworkModal({
           <iframe
             src={certUrl}
             className="flex-1 w-full border-0 bg-black"
-            sandbox="allow-scripts"
+            sandbox="allow-scripts allow-same-origin"
             title={work.title}
           />
         ) : (
@@ -615,7 +615,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
             <iframe
               src={certUrl}
               className="w-full h-full border-0"
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-same-origin"
               title={work.title}
               style={{ pointerEvents: "none" }}
             />
@@ -946,7 +946,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
           className="relative bg-black overflow-hidden cursor-pointer group"
           style={{ aspectRatio: "4/3" }}
         >
-          <iframe src={certUrl} className="w-full h-full border-0" sandbox="allow-scripts"
+          <iframe src={certUrl} className="w-full h-full border-0" sandbox="allow-scripts allow-same-origin"
             title={cert.title} style={{ pointerEvents: "none" }} />
           <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
             <span className="font-mono text-xs text-white border border-white/40 px-3 py-1.5">⤢ open fullscreen</span>
@@ -998,7 +998,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                 <button onClick={() => setShowModal(false)}
                   className="font-mono text-xs text-[--fg-muted] hover:text-[--fg] transition-colors ml-4 shrink-0">✕</button>
               </div>
-              <iframe src={certUrl} className="flex-1 w-full border-0 bg-black" sandbox="allow-scripts" title={cert.title} />
+              <iframe src={certUrl} className="flex-1 w-full border-0 bg-black" sandbox="allow-scripts allow-same-origin" title={cert.title} />
               <div className="flex items-center justify-between px-5 py-3 border-t border-[--border] shrink-0">
                 <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">Artwork · ANA · Base</p>
                 <a href={certificateUrl} target="_blank" rel="noopener noreferrer"

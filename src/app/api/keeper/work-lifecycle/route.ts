@@ -16,7 +16,7 @@ import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, ANA_EDITIONS_ABI, CONTRACT_AD
 import {
   getActiveWorks, listWorks, getWork, updateWork, advanceState, addVote,
   hasVoted, tallyVotes, buildWorkHtml, createWork, getFoundingWork,
-  VOTE_WINDOW_MS,
+  VOTE_WINDOW_MS, nextInDispatchRotation,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
 import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
@@ -364,17 +364,32 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
   let rapporteur: NormiePersona;
   let author: NormiePersona;
   let curator: NormiePersona;
+  let arbiterAuthorId: number | undefined;
+  let arbiterCuratorId: number | undefined;
+  let arbiterRapporteurId: number | undefined;
 
   if (bureauElected) {
-    // ── Bureau elected: use official roles ──────────────────────────────────
+    // ── Bureau elected: officers arbitrate, the work itself is dispatched in
+    // round-robin across ALL registered members — so creation isn't limited
+    // to the 3 elected Normies. The elected officers are recorded separately
+    // as arbiters for future reputation scoring of their dispatch decisions.
     const findOrFake = (id: number): NormiePersona =>
       personas.find(p => p.tokenId === id) ?? ({ tokenId: id, name: `Normie #${id}`, imageUrl: "" } as NormiePersona);
 
-    rapporteur = findOrFake(electedRapporteur!.tokenId);
-    author     = findOrFake(electedAuthor!.tokenId);
-    curator    = findOrFake(electedCurator!.tokenId);
+    arbiterRapporteurId = electedRapporteur!.tokenId;
+    arbiterAuthorId     = electedAuthor!.tokenId;
+    arbiterCuratorId    = electedCurator!.tokenId;
 
-    console.log(`[work-lifecycle] Bureau elected — Author: ${author.name}, Curator: ${curator.name}, Rapporteur: ${rapporteur.name}`);
+    const candidateIds = personas.map(p => p.tokenId);
+    const rapporteurId = await nextInDispatchRotation("rapporteur", candidateIds);
+    const authorId      = await nextInDispatchRotation("author", candidateIds, [rapporteurId]);
+    const curatorId     = await nextInDispatchRotation("curator", candidateIds, [rapporteurId, authorId]);
+
+    rapporteur = findOrFake(rapporteurId);
+    author     = findOrFake(authorId);
+    curator    = findOrFake(curatorId);
+
+    console.log(`[work-lifecycle] Bureau elected (arbiters: #${arbiterAuthorId}/#${arbiterCuratorId}/#${arbiterRapporteurId}) — dispatched Author: ${author.name}, Curator: ${curator.name}, Rapporteur: ${rapporteur.name}`);
   } else {
     // ── No bureau yet: elect from vote preferences ──────────────────────────
     // Rapporteur = proposer (most engaged with the proposal)
@@ -413,6 +428,9 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
     authorName:        author.name,
     curatorTokenId:    curator.tokenId,
     curatorName:       curator.name,
+    rapporteurArbiterTokenId: arbiterRapporteurId,
+    authorArbiterTokenId:     arbiterAuthorId,
+    curatorArbiterTokenId:    arbiterCuratorId,
   });
   await advanceState(work.id, "BRIEFING",
     `Rapporteur: ${rapporteur.name} | Auteur: ${author.name} | Curateur: ${curator.name}`

@@ -67,13 +67,20 @@ export interface ANAWork {
   absCount?:     number;
   totalVoters?:  number;
 
-  // Roles (assigned after vote passes)
+  // Roles (assigned after vote passes) — the Normie actually dispatched to do the work
   rapporteurTokenId?: number;
   authorTokenId?:     number;
   curatorTokenId?:    number;
   rapporteurName?:    string;
   authorName?:        string;
   curatorName?:       string;
+
+  // Elected officer on duty at dispatch time (arbiter) — distinct from the dispatched
+  // executor above once the bureau is elected. Captured now for future reputation scoring
+  // of arbitration quality; not yet used by any scoring logic.
+  rapporteurArbiterTokenId?: number;
+  authorArbiterTokenId?:     number;
+  curatorArbiterTokenId?:    number;
 
   // Creative phases
   artForm?:        string;   // "haiku"|"sonnet"|"poeme"|"prose"|"manifeste"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"
@@ -118,9 +125,16 @@ export interface ANAWork {
   allElectedRoles?:   Array<{ roleLabel: string; tokenId: number; name: string }>;
 }
 
+interface DispatchRotation {
+  author:     number; // cursor into the sorted member-tokenId list, advances on each dispatch
+  curator:    number;
+  rapporteur: number;
+}
+
 interface WorkStore {
   works:             Record<string, ANAWork>;
   lastNormieSupply?: number;
+  dispatchRotation?: DispatchRotation;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -331,6 +345,57 @@ export async function getLastNormieSupply(): Promise<number | null> {
 
 export async function updateNormieSupply(supply: number): Promise<void> {
   await mutate(s => { s.lastNormieSupply = supply; });
+}
+
+// ─── Creative dispatch (round-robin) ──────────────────────────────────────────
+//
+// Once the bureau (Author/Curator/Rapporteur) is elected, those officers no
+// longer author/curate/report every work themselves — they act as arbiters,
+// and the actual creative work is dispatched across ALL registered members in
+// rotation, so participation isn't limited to the 3 elected Normies. The
+// rotation cursor is a single growing index per role over the sorted member
+// roster; per-work exclusions (e.g. don't pick the same Normie for two roles
+// on one work) are skipped without consuming their turn.
+//
+// This is a simple fairness mechanism for now. Once a reliable per-role
+// reputation score exists, the elected officer's "arbitration" can become a
+// real choice informed by that score instead of blind rotation.
+
+export type DispatchRole = "author" | "curator" | "rapporteur";
+
+/**
+ * Picks the next Normie tokenId for `role` from `candidates` (sorted ascending
+ * by tokenId for determinism), skipping any tokenId in `exclude`, and persists
+ * the advanced rotation cursor.
+ */
+export async function nextInDispatchRotation(
+  role: DispatchRole,
+  candidates: number[],
+  exclude: number[] = []
+): Promise<number> {
+  const sorted = [...new Set(candidates)].sort((a, b) => a - b);
+  if (sorted.length === 0) throw new Error("nextInDispatchRotation: no candidates");
+
+  const store = await getStore();
+  const rotation: DispatchRotation = store.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0 };
+  const start = rotation[role] % sorted.length;
+
+  let picked = sorted[start];
+  let nextCursor = (start + 1) % sorted.length;
+  for (let i = 0; i < sorted.length; i++) {
+    const idx = (start + i) % sorted.length;
+    if (!exclude.includes(sorted[idx])) {
+      picked = sorted[idx];
+      nextCursor = (idx + 1) % sorted.length;
+      break;
+    }
+  }
+
+  await mutate(s => {
+    s.dispatchRotation = { ...(s.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0 }), [role]: nextCursor };
+  });
+
+  return picked;
 }
 
 export async function resetWorks(): Promise<void> {

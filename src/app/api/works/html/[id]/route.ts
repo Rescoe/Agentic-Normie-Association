@@ -61,7 +61,7 @@ export async function GET(
       }
       console.log(`[works/html] certificate fallback for #${onChainId} — "${work.title}"`);
       const cert = await buildWorkHtml(work);
-      return new NextResponse(cert, { headers: htmlHeaders("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none';") });
+      return new NextResponse(cert, { headers: htmlHeaders("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https://api.normies.art; connect-src 'none';") });
     }
     console.warn(`[works/html] Neon miss for #${onChainId} — falling back to contract`);
   } catch (e) {

@@ -38,6 +38,9 @@ L'architecture contractuelle (Core + FactoryRegistry + SubFactories + Modules) e
 ### 4. Économie associative
 Treasury, cotisations, redistribution aux créateurs — balisé pour après le MVP.
 
+### 5. Rôles créatifs élus = arbitrage, pas exécution exclusive
+Author, Curator et Rapporteur sont des postes électifs (mandat ConstituentAssembly), mais une fois le bureau élu, ils ne créent plus systématiquement eux-mêmes l'œuvre : ils arbitrent. L'exécution réelle (qui écrit le brief, qui produit l'œuvre, qui valide) est dispatchée par rotation à travers tous les membres inscrits (`nextInDispatchRotation()` dans `src/lib/workStore.ts`), pour que la participation aux créations ne reste pas limitée aux 3 élus. L'identité de l'officier élu au moment du dispatch est conservée séparément (`authorArbiterTokenId` etc. sur `ANAWork`) pour pouvoir, une fois un score de réputation fiable en place, évaluer la qualité de ses décisions d'attribution — et terme, remplacer la rotation par un vrai choix informé par la réputation.
+
 ## Relation avec Rescoe
 
 ANA s'inscrit dans la continuité conceptuelle de Rescoe :
