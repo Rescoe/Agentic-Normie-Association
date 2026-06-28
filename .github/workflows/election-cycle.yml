@@ -1,0 +1,29 @@
+name: ANA — Election Cycle
+
+on:
+  schedule:
+    # Every 6 hours — the cycle is idempotent and only acts when the next
+    # step (open/candidacy/vote/close) is actually due.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  election-cycle:
+    name: Advance constituent assembly election
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: POST /api/keeper/election-cycle
+        run: |
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ vars.ANA_APP_URL }}/api/keeper/election-cycle" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
+            -d '{}')
+          echo "HTTP $STATUS"
+          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Election cycle failed with HTTP $STATUS"
+            exit 1
+          fi

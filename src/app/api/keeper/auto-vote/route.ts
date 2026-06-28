@@ -253,9 +253,14 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
 export async function POST(req: NextRequest) {
   // This was previously completely unauthenticated — anyone could trigger LLM-driven
   // candidacies/votes, or (mode=execute) have the relayer actually cast on-chain votes.
-  const { ok: isAdminCall } = await verifyAdminRequest(req);
-  if (!isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized — a valid admin signature is required" }, { status: 401 });
+  // Two ways in: a wallet-signed admin proof (manual trigger from the admin panel),
+  // or x-cron-secret (the automated election-cycle keeper, same secret as every
+  // other scheduled route in this app — not weaker, just a different caller).
+  const cronSecret = process.env.CRON_SECRET;
+  const isCronCall  = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isAdminCall = isCronCall ? false : (await verifyAdminRequest(req)).ok;
+  if (!isCronCall && !isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature is required" }, { status: 401 });
   }
 
   let body: { phase?: string; mode?: string; candidacies?: Candidacy[] };

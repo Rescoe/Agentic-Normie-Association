@@ -53,12 +53,26 @@ export interface Salon {
   critique?: { until: number; excluded: number[] };
 }
 
+export interface DevNeed {
+  id:        string;
+  salonId:   string;
+  tokenId:   number;
+  name:      string;
+  content:   string;  // the flagged excerpt, tag stripped
+  timestamp: number;
+  resolved:  boolean;
+}
+
 interface SalonStore {
   salons:           Record<string, Salon>;
   names:            Record<string, string>; // tokenId.toString() → realName
   lastSynthesisAt?: number;                 // timestamp of last synthesis run
   stimulations?:    Record<string, number>; // ip → last user-triggered stim timestamp
+  devNeeds?:        DevNeed[];              // human-intervention needs flagged by Normies
 }
+
+const DEV_NEED_TAG = "[DEV-NEEDED]";
+const MAX_DEV_NEEDS = 200;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -478,9 +492,49 @@ export async function addMessage(msg: Omit<SalonMessage, "id"> & { topic?: strin
     if (sal.messages.length > MAX_MESSAGES_PER_SALON) sal.messages = sal.messages.slice(-MAX_MESSAGES_PER_SALON);
   });
 
+  if (full.content.includes(DEV_NEED_TAG)) {
+    await flagDevNeed(full);
+  }
+
   const count = (await getStore()).salons[msg.salonId]?.messages.length ?? 0;
   console.log(`[salonStore] +msg ${resolvedName} → ${count} total in ${msg.salonId}`);
   return full;
+}
+
+// ─── Dev-needs board ───────────────────────────────────────────────────────────
+//
+// Normies are instructed (see normiesPersona.ts buildSystemPrompt) to prefix a
+// message with "[DEV-NEEDED]" when they spot a real technical issue with the
+// ANA app itself. Without this, those observations were scattered across salon
+// history and never resurfaced. This captures them in one list a human can
+// actually review.
+
+async function flagDevNeed(msg: SalonMessage): Promise<void> {
+  const content = msg.content.replace(DEV_NEED_TAG, "").trim();
+  const need: DevNeed = {
+    id:        `dn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    salonId:   msg.salonId,
+    tokenId:   msg.tokenId,
+    name:      msg.name,
+    content,
+    timestamp: msg.timestamp,
+    resolved:  false,
+  };
+  await mutate(s => {
+    s.devNeeds = [...(s.devNeeds ?? []), need].slice(-MAX_DEV_NEEDS);
+  });
+  console.log(`[salonStore] dev-need flagged by ${msg.name}: ${content.slice(0, 80)}`);
+}
+
+export async function listDevNeeds(): Promise<DevNeed[]> {
+  return [...((await getStore()).devNeeds ?? [])].sort((a, b) => b.timestamp - a.timestamp);
+}
+
+export async function resolveDevNeed(id: string, resolved = true): Promise<void> {
+  await mutate(s => {
+    const need = (s.devNeeds ?? []).find(n => n.id === id);
+    if (need) need.resolved = resolved;
+  });
 }
 
 // ─── Reset ────────────────────────────────────────────────────────────────────

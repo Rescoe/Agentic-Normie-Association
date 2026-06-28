@@ -1838,6 +1838,74 @@ function BurnCheckSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeader
   );
 }
 
+// ─── DevNeedsSection — human-intervention needs flagged by Normies ────────────
+
+interface DevNeedRow {
+  id: string; salonId: string; tokenId: number; name: string;
+  content: string; timestamp: number; resolved: boolean;
+}
+
+function DevNeedsSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
+  const [needs,   setNeeds]   = useState<DevNeedRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch("/api/admin/dev-needs", { headers: await getAdminHeaders() });
+      const d = await r.json() as { needs?: DevNeedRow[]; error?: string };
+      if (!r.ok) setError(d.error ?? `HTTP ${r.status}`);
+      else setNeeds(d.needs ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setLoading(false); }
+  };
+
+  const toggle = async (id: string, resolved: boolean) => {
+    await fetch("/api/admin/dev-needs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+      body: JSON.stringify({ id, resolved }),
+    });
+    setNeeds(prev => prev?.map(n => n.id === id ? { ...n, resolved } : n) ?? null);
+  };
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={load}
+        disabled={loading}
+        className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
+      >
+        {loading ? "Chargement…" : "⬛ Charger les besoins remontés"}
+      </button>
+      {error && <p className="font-mono text-xs text-red-600">{error}</p>}
+      {needs && needs.length === 0 && (
+        <p className="font-mono text-xs text-[--fg-muted]">Aucun besoin technique remonté pour l'instant.</p>
+      )}
+      {needs && needs.length > 0 && (
+        <div className="space-y-2">
+          {needs.map(n => (
+            <div key={n.id} className={`border px-4 py-3 space-y-1 ${n.resolved ? "border-[--border] opacity-50" : "border-orange-400/50 bg-orange-50/10"}`}>
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-mono text-xs font-bold">{n.name} (#{n.tokenId}) — {new Date(n.timestamp).toLocaleString()}</p>
+                <button
+                  onClick={() => toggle(n.id, !n.resolved)}
+                  className="font-mono text-[10px] border border-[--border] px-2 py-1 hover:bg-[--bg-card]"
+                >
+                  {n.resolved ? "Réouvrir" : "Marquer résolu"}
+                </button>
+              </div>
+              <p className="font-mono text-xs text-[--fg-muted]">{n.content}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── SessionCountdown — ticks every second ────────────────────────────────────
 
 function SessionCountdown({ deadline }: { deadline: bigint }) {
@@ -2426,6 +2494,18 @@ export default function AdminPage() {
               </p>
             </div>
             <SalonExchangeSection getAdminHeaders={getAdminHeaders} />
+          </section>
+
+          {/* ── Besoins humains remontés par les Normies ── */}
+          <section className="space-y-6 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold mb-1">Besoins d'intervention humaine</h2>
+              <p className="text-sm text-[--fg-muted]">
+                Quand un Normie identifie un vrai problème technique de l'app ANA dans le salon, il le préfixe par
+                "[DEV-NEEDED]" — ce tag est extrait automatiquement et listé ici au lieu de se perdre dans le flux.
+              </p>
+            </div>
+            <DevNeedsSection getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── Documentation du flow ── */}

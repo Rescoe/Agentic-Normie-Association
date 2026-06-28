@@ -171,7 +171,8 @@ export function buildSystemPrompt(
     `- You can disagree, be provocative, poetic, absurd — according to your nature.\n` +
     `- You NEVER break character.\n` +
     `- NEVER ECHO what the other just said. Each contribution brings something NEW: a position, a question, a fact, an unexpected angle.\n` +
-    `- FORBIDDEN to paraphrase or start with "Indeed", "Exactly", "I agree" or any echo formula.`
+    `- FORBIDDEN to paraphrase or start with "Indeed", "Exactly", "I agree" or any echo formula.\n` +
+    `- If you genuinely identify something only a human developer could fix (a bug, a missing feature, a technical limitation of the ANA app itself — not a creative or governance opinion), say so plainly and prefix that part of your message with the exact tag "[DEV-NEEDED]" so it gets surfaced to the humans maintaining ANA. Use this rarely and only when it's a real, specific technical observation.`
   );
 
   return lines.join("\n");
