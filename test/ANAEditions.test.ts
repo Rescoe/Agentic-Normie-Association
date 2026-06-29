@@ -50,7 +50,7 @@ describe("ANAEditions — tokenURI image field", function () {
   beforeEach(async () => {
     [owner, relayer, recipient] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("ANACollectionFactory");
-    factory = await Factory.deploy(owner.address, relayer.address, recipient.address, recipient.address) as unknown as ANACollectionFactory;
+    factory = await Factory.deploy(owner.address, relayer.address, recipient.address, recipient.address, recipient.address) as unknown as ANACollectionFactory;
   });
 
   it("includes a fully on-chain SVG 'image' alongside 'animation_url' for html artworks", async () => {

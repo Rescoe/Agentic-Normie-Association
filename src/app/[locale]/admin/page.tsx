@@ -22,7 +22,7 @@ import {
 } from "wagmi";
 import { useRouter } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { isAddress, parseEther, formatEther } from "viem";
+import { isAddress } from "viem";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import {
@@ -904,41 +904,12 @@ function CelebrationRegistrySection({
 }: {
   writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
 }) {
-  const [fundAmount, setFundAmount] = useState("0.05");
-  const [fundState,  setFundState]  = useState<"idle"|"pending"|"done"|"error">("idle");
-  const [fundErr,    setFundErr]    = useState<string | null>(null);
-  const [fundTx,     setFundTx]     = useState<string | null>(null);
+  void writeContractAsync; // no write actions left here — no sponsorship pool to fund
 
-  const { data: balance, refetch } = useReadContract({
-    address: CELEBRATION_ADDR, abi: CELEBRATION_REGISTRY_ABI, functionName: "sponsorshipBalance",
-    query: { enabled: !!CELEBRATION_ADDR, refetchInterval: 15_000 },
-  });
   const { data: celebrationCount } = useReadContract({
     address: CELEBRATION_ADDR, abi: CELEBRATION_REGISTRY_ABI, functionName: "celebrationCount",
     query: { enabled: !!CELEBRATION_ADDR, refetchInterval: 15_000 },
   });
-
-  const fund = async () => {
-    const eth = parseFloat(fundAmount);
-    if (!eth || eth <= 0) { setFundErr("Montant invalide"); return; }
-    setFundState("pending"); setFundErr(null); setFundTx(null);
-    try {
-      const hash = await writeContractAsync({
-        address:      CELEBRATION_ADDR,
-        abi:          CELEBRATION_REGISTRY_ABI,
-        functionName: "fundSponsorship",
-        args:         [],
-        value:        parseEther(fundAmount),
-      } as never);
-      setFundTx(hash);
-      setFundState("done");
-      void refetch();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setFundErr(msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150));
-      setFundState("error");
-    }
-  };
 
   if (!CELEBRATION_ADDR) {
     return (
@@ -946,7 +917,7 @@ function CelebrationRegistrySection({
         <h2 className="text-xl font-bold">CelebrationRegistry</h2>
         <p className="font-mono text-xs text-[--fg-muted]">
           Non déployé — NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS absent. Les célébrations (burns) ne
-          sont pas sponsorisées : les œuvres mémorial sont créées normalement, sans claim gratuit.
+          sont pas honorées par un claim gratuit : les œuvres mémorial sont créées normalement.
         </p>
       </section>
     );
@@ -957,56 +928,19 @@ function CelebrationRegistrySection({
       <div>
         <h2 className="text-xl font-bold">CelebrationRegistry</h2>
         <p className="font-mono text-xs text-[--fg-muted] mt-1">
-          Sponsorise les claims gratuits pour les wallets honorés par une œuvre de célébration (burns, etc.).
+          Claim gratuit pour le wallet honoré par une œuvre de célébration (burns, etc.) — aucun pool à
+          financer : ANAEditions.mintFreeTo() mint directement, sans paiement ni sponsoring.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="border border-[--border] p-5 space-y-0">
-          <div className="flex items-center justify-between mb-3">
-            <p className="font-bold text-sm">État</p>
-            <a href={basescanAddr(CELEBRATION_ADDR)} target="_blank" rel="noopener noreferrer"
-              className="font-mono text-xs text-[--fg-muted] hover:underline">Basescan ↗</a>
-          </div>
-          <StatusRow label="Adresse" value={`${CELEBRATION_ADDR.slice(0,10)}…${CELEBRATION_ADDR.slice(-6)}`} />
-          <StatusRow
-            label="Pool de sponsoring"
-            value={balance != null ? `${formatEther(balance as bigint)} ETH` : "—"}
-            ok={balance != null && (balance as bigint) > 0n}
-          />
-          <StatusRow label="Célébrations enregistrées" value={celebrationCount != null ? String(celebrationCount) : "—"} />
+      <div className="border border-[--border] p-5 space-y-0 max-w-md">
+        <div className="flex items-center justify-between mb-3">
+          <p className="font-bold text-sm">État</p>
+          <a href={basescanAddr(CELEBRATION_ADDR)} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] hover:underline">Basescan ↗</a>
         </div>
-
-        <div className="border border-[--border] p-5 space-y-3">
-          <p className="font-bold text-sm">Financer le pool</p>
-          <p className="font-mono text-xs text-[--fg-muted] leading-relaxed">
-            Chaque claim() dépense ce pool pour payer le mint au nom du wallet honoré.
-            À recharger périodiquement depuis le wallet admin connecté.
-          </p>
-          <div className="flex gap-2">
-            <input
-              value={fundAmount}
-              onChange={e => setFundAmount(e.target.value)}
-              placeholder="0.05"
-              className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-[--fg]"
-            />
-            <span className="font-mono text-xs text-[--fg-muted] self-center">ETH</span>
-            <button
-              onClick={fund}
-              disabled={fundState === "pending"}
-              className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            >
-              {fundState === "pending" ? "En cours…" : fundState === "done" ? "✓ Financé" : "Financer →"}
-            </button>
-          </div>
-          {fundErr && <p className="font-mono text-xs text-red-600">{fundErr}</p>}
-          {fundTx && (
-            <a href={basescanTx(fundTx)} target="_blank" rel="noopener noreferrer"
-              className="font-mono text-xs text-[--fg-muted] underline">
-              tx: {fundTx.slice(0, 16)}… ↗
-            </a>
-          )}
-        </div>
+        <StatusRow label="Adresse" value={`${CELEBRATION_ADDR.slice(0,10)}…${CELEBRATION_ADDR.slice(-6)}`} />
+        <StatusRow label="Célébrations enregistrées" value={celebrationCount != null ? String(celebrationCount) : "—"} />
       </div>
     </section>
   );

@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
+import "../interfaces/IAssociationCore.sol";
 
 /**
  * @title ANAEditions
@@ -26,6 +27,10 @@ import "@openzeppelin/contracts/utils/Strings.sol";
  *  4. Anyone calls buyAndMint() payable. Token minted directly to buyer.
  *     No pre-minting. Supply is hard-capped at maxSupply.
  *
+ *  4b. A registered ANA member calls claimFree(memberTokenId) — ONE free edition
+ *      per member per collection, no payment, no sponsorship pool. Gated by
+ *      AssociationCore: the caller must be the registered owner of that Normie.
+ *
  * Revenue split (first-come, shared rules for all editions):
  *   authorPct% → authorAddr
  *   curatorPct% → curatorAddr
@@ -42,6 +47,7 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
     uint256 public immutable maxSupply;
     uint256 public immutable priceWei;
     uint256 public immutable creatorNormieTokenId;
+    IAssociationCore public immutable core; // membership source of truth for claimFree()
 
     // 5% of every sale goes to the real human loi 1901 association that runs the platform.
     // This sustains the ANA infrastructure independently of on-chain revenue.
@@ -71,11 +77,22 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
 
     uint256 public totalMinted;
 
+    // One free claim per registered member per collection.
+    mapping(uint256 => bool) public freeClaimed; // memberTokenId => claimed
+
+    // Contracts authorized to mint a free edition directly to an arbitrary
+    // recipient (e.g. CelebrationRegistry, after it verifies event eligibility
+    // itself — independent of AssociationCore membership). No payment either way.
+    mapping(address => bool) public freeMinters;
+
     // ─── Events ──────────────────────────────────────────────────────────────
 
     event CollectionInitialized(string artworkTitle, uint256 workId);
     event EditionMinted(uint256 indexed tokenId, address indexed buyer, uint256 priceWei);
+    event FreeEditionClaimed(uint256 indexed memberTokenId, address indexed recipient, uint256 tokenId);
+    event FreeEditionMinted(address indexed minter, address indexed recipient, uint256 tokenId);
     event MinterUpdated(address indexed newMinter);
+    event FreeMinterUpdated(address indexed addr, bool status);
     event RecipientUpdated(string role, address newAddr);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
@@ -84,10 +101,14 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
     error AlreadyInitialized();
     error SoldOut();
     error OnlyMinter();
+    error OnlyFreeMinter();
     error InsufficientPayment(uint256 required, uint256 sent);
     error ZeroAddress();
     error PctOverflow();
     error TokenDoesNotExist(uint256 tokenId);
+    error NotMember(uint256 tokenId);
+    error NotMemberOwner(uint256 tokenId);
+    error AlreadyClaimed(uint256 tokenId);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -103,6 +124,7 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
      * @param rapporteurAddr_  Revenue recipient — RAPPORTEUR role
      * @param associationAddr_ ANA on-chain vault (TreasuryModule) — remainder + ERC-2981 royalties
      * @param platformAddr_    Real human loi 1901 association — receives 5% platform fee
+     * @param coreAddr_        AssociationCore — source of truth for claimFree() membership checks
      * @param authorPct_       Author revenue share (0-100, of the 95% remaining after platform fee)
      * @param curatorPct_      Curator revenue share
      * @param rapporteurPct_   Rapporteur revenue share
@@ -119,14 +141,16 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
         address rapporteurAddr_,
         address associationAddr_,
         address platformAddr_,
+        address coreAddr_,
         uint8   authorPct_,
         uint8   curatorPct_,
         uint8   rapporteurPct_
     ) ERC721(name_, symbol_) Ownable(msg.sender) {
-        if (minter_ == address(0) || associationAddr_ == address(0) || platformAddr_ == address(0)) revert ZeroAddress();
+        if (minter_ == address(0) || associationAddr_ == address(0) || platformAddr_ == address(0) || coreAddr_ == address(0)) revert ZeroAddress();
         if (uint16(authorPct_) + uint16(curatorPct_) + uint16(rapporteurPct_) > 100) revert PctOverflow();
         require(maxSupply_ > 0 && maxSupply_ <= 10000, "Invalid supply");
 
+        core = IAssociationCore(coreAddr_);
         creatorNormieTokenId = normieTokenId_;
         maxSupply       = maxSupply_;
         priceWei        = priceWei_;
@@ -194,6 +218,48 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
             (bool ok, ) = payable(msg.sender).call{value: excess}("");
             require(ok, "Refund failed");
         }
+    }
+
+    // ─── Free claim for registered members (no payment, no sponsorship) ───────
+
+    /**
+     * @notice A registered ANA member claims one free edition of this collection.
+     *         No ETH changes hands — this is a direct free mint, not a sponsored
+     *         purchase. One claim per memberTokenId per collection, ever.
+     * @param memberTokenId The caller's Normie tokenId, as registered in AssociationCore.
+     */
+    function claimFree(uint256 memberTokenId) external nonReentrant returns (uint256) {
+        if (!initialized) revert NotInitialized();
+        if (totalMinted >= maxSupply) revert SoldOut();
+        if (!core.isMember(memberTokenId)) revert NotMember(memberTokenId);
+        if (core.getMemberOwner(memberTokenId) != msg.sender) revert NotMemberOwner(memberTokenId);
+        if (freeClaimed[memberTokenId]) revert AlreadyClaimed(memberTokenId);
+
+        freeClaimed[memberTokenId] = true;
+        uint256 tokenId = totalMinted++;
+        _safeMint(msg.sender, tokenId);
+
+        emit FreeEditionClaimed(memberTokenId, msg.sender, tokenId);
+        return tokenId;
+    }
+
+    /**
+     * @notice Mints one free edition directly to `recipient`, no payment. Restricted
+     *         to authorized free-minter contracts (e.g. CelebrationRegistry), which
+     *         verify eligibility themselves before calling this — independent of
+     *         AssociationCore membership (a celebration's eligible wallet need not
+     *         be a registered ANA member).
+     */
+    function mintFreeTo(address recipient) external nonReentrant returns (uint256) {
+        if (!freeMinters[msg.sender]) revert OnlyFreeMinter();
+        if (!initialized) revert NotInitialized();
+        if (totalMinted >= maxSupply) revert SoldOut();
+
+        uint256 tokenId = totalMinted++;
+        _safeMint(recipient, tokenId);
+
+        emit FreeEditionMinted(msg.sender, recipient, tokenId);
+        return tokenId;
     }
 
     // ─── tokenURI (fully on-chain) ────────────────────────────────────────────
@@ -274,6 +340,12 @@ contract ANAEditions is ERC721, ERC2981, Ownable, ReentrancyGuard {
         if (newMinter == address(0)) revert ZeroAddress();
         minter = newMinter;
         emit MinterUpdated(newMinter);
+    }
+
+    function setFreeMinter(address addr, bool status) external onlyOwner {
+        if (addr == address(0)) revert ZeroAddress();
+        freeMinters[addr] = status;
+        emit FreeMinterUpdated(addr, status);
     }
 
     function setAuthorAddr(address addr) external onlyOwner {

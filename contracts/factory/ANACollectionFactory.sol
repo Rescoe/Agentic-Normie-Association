@@ -28,6 +28,12 @@ contract ANACollectionFactory is Ownable {
     address public associationAddr;
     // Real human loi 1901 association — receives 5% platform fee on all edition sales
     address public platformAddr;
+    // AssociationCore — passed to every deployed ANAEditions for claimFree() membership checks
+    address public coreAddr;
+    // CelebrationRegistry — if set, authorized as a free-minter on every newly deployed
+    // collection so celebration claims work without any sponsorship pool. Optional:
+    // address(0) means no collection gets this authorization (set later via setter).
+    address public celebrationRegistryAddr;
 
     mapping(address => bool)       public authorized;
     mapping(uint256 => address[])  public collectionsByNormie;
@@ -62,16 +68,19 @@ contract ANACollectionFactory is Ownable {
      * @param relayerAddr      Relayer address — authorized immediately
      * @param associationAddr_ ANA on-chain vault (TreasuryModule) — association revenue share
      * @param platformAddr_    Real human loi 1901 association — 5% platform fee on all sales
+     * @param coreAddr_        AssociationCore — passed to every ANAEditions deployed (claimFree() gate)
      */
     constructor(
         address initialOwner,
         address relayerAddr,
         address associationAddr_,
-        address platformAddr_
+        address platformAddr_,
+        address coreAddr_
     ) Ownable(initialOwner) {
-        if (relayerAddr == address(0) || associationAddr_ == address(0) || platformAddr_ == address(0)) revert ZeroAddress();
+        if (relayerAddr == address(0) || associationAddr_ == address(0) || platformAddr_ == address(0) || coreAddr_ == address(0)) revert ZeroAddress();
         associationAddr = associationAddr_;
         platformAddr    = platformAddr_;
+        coreAddr         = coreAddr_;
         authorized[relayerAddr] = true;
         emit AuthorizationUpdated(relayerAddr, true);
     }
@@ -142,10 +151,18 @@ contract ANACollectionFactory is Ownable {
             rapporteurAddr_,
             associationAddr,
             platformAddr,    // 5% platform fee — same for all collections
+            coreAddr,
             aPct,
             cPct,
             rPct
         );
+
+        // Authorize CelebrationRegistry as a free-minter on this collection (if wired)
+        // BEFORE ownership transfers — the factory is still owner() at this point since
+        // it's the one that just called `new ANAEditions(...)`.
+        if (celebrationRegistryAddr != address(0)) {
+            coll.setFreeMinter(celebrationRegistryAddr, true);
+        }
 
         // Transfer ownership of the collection to the factory owner (= multisig / owner)
         // so admin functions (setMinter, setAuthorAddr, etc.) are protected.
@@ -189,6 +206,16 @@ contract ANACollectionFactory is Ownable {
     function setAssociationAddr(address addr) external onlyOwner {
         if (addr == address(0)) revert ZeroAddress();
         associationAddr = addr;
+    }
+
+    function setCoreAddr(address addr) external onlyOwner {
+        if (addr == address(0)) revert ZeroAddress();
+        coreAddr = addr;
+    }
+
+    /// @notice addr(0) disables free-minter authorization on newly deployed collections.
+    function setCelebrationRegistry(address addr) external onlyOwner {
+        celebrationRegistryAddr = addr;
     }
 
     function setPlatformAddr(address addr) external onlyOwner {

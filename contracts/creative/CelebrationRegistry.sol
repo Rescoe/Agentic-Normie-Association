@@ -3,16 +3,14 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
 import "../interfaces/IANAEditions.sol";
 
 /**
  * @title CelebrationRegistry
  * @notice On-chain ledger of Normies life-events the ANA chooses to honor with a
- *         collectively-created work, plus a sponsored free claim for the wallet
- *         tied to that event. Touches no existing contract — WorkRegistry,
- *         ANACollectionFactory and ANAEditions are used exactly as they are today.
+ *         collectively-created work, plus a free claim for the wallet tied to
+ *         that event. Touches no existing contract beyond ANAEditions itself
+ *         (which authorizes this registry as a free-minter via setFreeMinter()).
  *
  * Lore: a Normie's on-chain life has several rites of passage on Ethereum mainnet —
  *   BURN              — sacrificed for Canvas action points (death)
@@ -24,12 +22,10 @@ import "../interfaces/IANAEditions.sol";
  * records which event is being honored, by whom, and whether that wallet has
  * claimed its free edition — never the underlying api.normies.art data itself.
  *
- * Sponsorship model: this contract holds a small ETH pool (funded by the relayer /
- * association treasury) used to pay ANAEditions.buyAndMint() on behalf of the
- * eligible wallet, then forwards the freshly minted token to them. The eligible
- * wallet pays nothing and signs nothing but the claim() call itself.
+ * No sponsorship pool, no payment, ever: claim() calls ANAEditions.mintFreeTo(),
+ * a direct free mint to the eligible wallet. Nothing here holds or moves ETH.
  */
-contract CelebrationRegistry is Ownable, ReentrancyGuard, ERC721Holder {
+contract CelebrationRegistry is Ownable, ReentrancyGuard {
 
     // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -74,8 +70,6 @@ contract CelebrationRegistry is Ownable, ReentrancyGuard, ERC721Holder {
     );
     event CelebrationLinked(uint256 indexed celebrationId, uint256 indexed workId, address indexed editionsAddr);
     event CelebrationClaimed(uint256 indexed celebrationId, address indexed recipient, address indexed editionsAddr, uint256 tokenId);
-    event SponsorshipFunded(address indexed from, uint256 amount);
-    event SponsorshipWithdrawn(address indexed to, uint256 amount);
     event AuthorizationUpdated(address indexed addr, bool status);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
@@ -88,7 +82,6 @@ contract CelebrationRegistry is Ownable, ReentrancyGuard, ERC721Holder {
     error NotLinkedYet();
     error AlreadyClaimed();
     error NotEligible();
-    error InsufficientSponsorshipFunds(uint256 required, uint256 available);
     error EditionsNotInitialized();
     error EditionsSoldOut();
 
@@ -160,13 +153,12 @@ contract CelebrationRegistry is Ownable, ReentrancyGuard, ERC721Holder {
         emit CelebrationLinked(celebrationId, workId, editionsAddr);
     }
 
-    // ─── Sponsored claim (public) ──────────────────────────────────────────────
+    // ─── Free claim (public) ────────────────────────────────────────────────────
 
     /**
      * @notice The wallet tied to the honored event claims its free edition.
-     *         Pays nothing: this contract spends its own sponsorship pool to
-     *         call the unmodified ANAEditions.buyAndMint(), then forwards the
-     *         freshly minted token to the caller.
+     *         No payment — ANAEditions.mintFreeTo() mints directly to the
+     *         caller. This registry holds no funds and moves no ETH.
      */
     function claim(uint256 celebrationId) external nonReentrant {
         Celebration storage c = celebrations[celebrationId];
@@ -179,34 +171,11 @@ contract CelebrationRegistry is Ownable, ReentrancyGuard, ERC721Holder {
         if (!editions.initialized()) revert EditionsNotInitialized();
         if (editions.totalMinted() >= editions.maxSupply()) revert EditionsSoldOut();
 
-        uint256 price = editions.priceWei();
-        if (address(this).balance < price) revert InsufficientSponsorshipFunds(price, address(this).balance);
-
         c.claimed = true; // effects before interaction
 
-        editions.buyAndMint{value: price}();
-        uint256 tokenId = editions.totalMinted() - 1; // buyAndMint() assigns sequentially, then increments
-
-        IERC721(c.editionsAddr).safeTransferFrom(address(this), msg.sender, tokenId);
+        uint256 tokenId = editions.mintFreeTo(msg.sender);
 
         emit CelebrationClaimed(celebrationId, msg.sender, c.editionsAddr, tokenId);
-    }
-
-    // ─── Sponsorship pool ──────────────────────────────────────────────────────
-
-    receive() external payable {
-        emit SponsorshipFunded(msg.sender, msg.value);
-    }
-
-    function fundSponsorship() external payable {
-        emit SponsorshipFunded(msg.sender, msg.value);
-    }
-
-    function withdrawSponsorship(uint256 amount, address to) external onlyOwner {
-        if (to == address(0)) revert ZeroAddress();
-        (bool ok, ) = payable(to).call{value: amount}("");
-        require(ok, "Withdraw failed");
-        emit SponsorshipWithdrawn(to, amount);
     }
 
     // ─── Views ────────────────────────────────────────────────────────────────
@@ -219,12 +188,7 @@ contract CelebrationRegistry is Ownable, ReentrancyGuard, ERC721Holder {
         Celebration storage c = celebrations[celebrationId];
         if (c.eligibleRecipient == address(0) || c.editionsAddr == address(0) || c.claimed) return false;
         IANAEditions editions = IANAEditions(c.editionsAddr);
-        if (!editions.initialized() || editions.totalMinted() >= editions.maxSupply()) return false;
-        return address(this).balance >= editions.priceWei();
-    }
-
-    function sponsorshipBalance() external view returns (uint256) {
-        return address(this).balance;
+        return editions.initialized() && editions.totalMinted() < editions.maxSupply();
     }
 
     function isEventRegistered(CelebrationType eventType, uint256 normieTokenId) external view returns (bool) {

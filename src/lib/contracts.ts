@@ -21,15 +21,15 @@ export {
 // ─── Addresses (from environment) ────────────────────────────────────────────
 
 export const CONTRACT_ADDRESSES = {
-  AssociationCore:       process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS       ?? "",
-  ConstituentAssembly:   process.env.NEXT_PUBLIC_CONSTITUENT_ASSEMBLY_ADDRESS   ?? "",
-  WorkRegistry:          process.env.NEXT_PUBLIC_WORK_REGISTRY_ADDRESS          ?? "",
-  FactoryRegistry:       process.env.NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS       ?? "",
-  GovernanceCalendar:    process.env.NEXT_PUBLIC_GOVERNANCE_CALENDAR_ADDRESS    ?? "",
-  TreasuryModule:        process.env.NEXT_PUBLIC_TREASURY_MODULE_ADDRESS        ?? "",
-  CollectionFactory:     process.env.NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS     ?? "",
-  ANACollectionFactory:  process.env.NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS ?? "",
-  CelebrationRegistry:   process.env.NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS   ?? "",
+  AssociationCore:      process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS       ?? "",
+  ConstituentAssembly:  process.env.NEXT_PUBLIC_CONSTITUENT_ASSEMBLY_ADDRESS   ?? "",
+  WorkRegistry:         process.env.NEXT_PUBLIC_WORK_REGISTRY_ADDRESS          ?? "",
+  FactoryRegistry:      process.env.NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS       ?? "",
+  GovernanceCalendar:   process.env.NEXT_PUBLIC_GOVERNANCE_CALENDAR_ADDRESS    ?? "",
+  TreasuryModule:       process.env.NEXT_PUBLIC_TREASURY_MODULE_ADDRESS        ?? "",
+  CollectionFactory:    process.env.NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS     ?? "",
+  ANACollectionFactory: process.env.NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS ?? "",
+  CelebrationRegistry:  process.env.NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS   ?? "",
 } as const;
 
 // ─── Role constants (mirrors Roles.sol) ───────────────────────────────────────
