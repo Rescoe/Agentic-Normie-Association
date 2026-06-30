@@ -108,30 +108,38 @@ export async function POST(req: NextRequest) {
     }
     const key = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
     if (!key) return NextResponse.json({ error: "RELAYER_PRIVATE_KEY not configured" }, { status: 500 });
-    const wallet = createWalletClient({ account: privateKeyToAccount(key), chain: CHAIN, transport: http(RPC_URL) });
+    const account = privateKeyToAccount(key);
+
+    // openSession() is onlyOwner on ConstituentAssembly, and the relayer wallet is
+    // deliberately NOT the owner (separate keys — the relayer is a hot automation
+    // key; the owner is whichever wallet originally ran the deploy script, since
+    // ConstituentAssembly's constructor sets Ownable(msg.sender)). Pre-check via a
+    // read call instead of attempting the tx and string-matching the revert reason —
+    // the exact revert message format isn't guaranteed across RPC nodes/viem versions,
+    // and a failed attempt is exactly what was showing up as a red "failed" run in
+    // GitHub Actions every 6 hours.
+    let owner: string;
+    try {
+      owner = (await pub.readContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "owner" })) as string;
+    } catch (e) {
+      return NextResponse.json({ error: `owner() read failed: ${e instanceof Error ? e.message : String(e)}` }, { status: 503 });
+    }
+    if (owner.toLowerCase() !== account.address.toLowerCase()) {
+      return NextResponse.json({
+        step: "waiting-on-owner",
+        reason: `openSession() is onlyOwner (current owner: ${owner}). The relayer (${account.address}) cannot call it — a human holding the owner wallet must open the session manually from the admin panel.`,
+        session,
+      });
+    }
+
+    const wallet = createWalletClient({ account, chain: CHAIN, transport: http(RPC_URL) });
     try {
       const hash = await wallet.writeContract({
         address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "openSession", args: [BigInt(ELECTION_VOTE_WINDOW_SECONDS)],
       });
       return NextResponse.json({ step: "openSession", txHash: hash });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // openSession() is onlyOwner on ConstituentAssembly, and the relayer wallet is
-      // deliberately NOT the owner (separate keys — the relayer is a hot automation
-      // key, the owner is the wallet/multisig that actually governs the assembly).
-      // This isn't a bug to retry: it means a human holding the owner wallet has to
-      // open the session manually via the admin panel. Report it as informational
-      // (200, not 500) so the GitHub Actions cron doesn't show as "failed" every
-      // 6 hours — if ownership is ever transferred to the relayer, this branch
-      // simply stops triggering and openSession starts succeeding on its own.
-      if (msg.includes("OwnableUnauthorizedAccount") || msg.includes("Ownable: caller is not the owner")) {
-        return NextResponse.json({
-          step: "waiting-on-owner",
-          reason: "openSession() is onlyOwner — the relayer cannot call it. The ConstituentAssembly owner wallet must open the session manually from the admin panel.",
-          session,
-        });
-      }
-      return NextResponse.json({ error: `openSession failed: ${msg}` }, { status: 500 });
+      return NextResponse.json({ error: `openSession failed: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
     }
   }
 

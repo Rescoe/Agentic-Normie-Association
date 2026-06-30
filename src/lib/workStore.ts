@@ -6,7 +6,7 @@
  *     → VALIDATING → PUBLISHING → PUBLISHED
  *   (or → REJECTED at any vote/validation step)
  *
- * Storage: separate Vercel Blob at work/store.json (not mixed with salon store).
+ * Storage: separate Neon kv_store row ("work-store" key, not mixed with salon store).
  * The HTML artifact stored on-chain is built by buildWorkHtml() — no IPFS, all on Base.
  */
 

@@ -16,6 +16,29 @@ import * as path from "path";
  * Run:
  *  npm run deploy:sepolia
  *  npm run deploy:base
+ *
+ * ── Two DIFFERENT addresses are involved, do not confuse them ──────────────
+ *
+ *  DEPLOYER (whichever wallet's DEPLOYER_PRIVATE_KEY/RELAYER_PRIVATE_KEY in
+ *  hardhat.config.ts actually broadcasts this script) becomes the OWNER of
+ *  every Ownable contract here (`Ownable(msg.sender)` in each constructor —
+ *  this is implicit, never an explicit constructor argument). The owner is
+ *  the ONLY address that can call onlyOwner functions: authorizeModule(),
+ *  openSession()/closeSession() on ConstituentAssembly, setRelayer(), etc.
+ *  This is the governance authority — keep it cold/safe.
+ *
+ *  RELAYER_ADDRESS (env var, passed explicitly to AssociationCore's
+ *  constructor below) is a SEPARATE hot automation wallet. It can only do
+ *  the specific things the contracts explicitly grant it: relay EIP-712
+ *  registration attestations, cast votes on members' behalf
+ *  (castVoteAsRelayer), call ANAEditions.initialize(). It can NEVER call an
+ *  onlyOwner function, including openSession() — that's why automated
+ *  cron jobs using this key cannot open an election session by themselves.
+ *
+ *  A third role, the TreasuryModule / "association vault" address used by
+ *  scripts/deploy-editions.ts, is yet another distinct thing again: a pure
+ *  payment destination with NO admin power at all, just where revenue
+ *  shares get sent.
  */
 async function main() {
   const [deployer] = await ethers.getSigners();
@@ -24,7 +47,7 @@ async function main() {
 
   console.log("─────────────────────────────────────────");
   console.log(`Network  : ${network.name} (chainId: ${chainId})`);
-  console.log(`Deployer : ${deployer.address}`);
+  console.log(`Deployer : ${deployer.address}  ← becomes OWNER of every contract below (Ownable(msg.sender))`);
   console.log(`Balance  : ${ethers.formatEther(balance)} ETH`);
   console.log("─────────────────────────────────────────");
 
@@ -32,6 +55,7 @@ async function main() {
   if (!relayerAddress || relayerAddress === "0x...") {
     throw new Error("RELAYER_ADDRESS is not set in .env.local");
   }
+  console.log(`Relayer  : ${relayerAddress}  ← separate hot wallet, NOT the owner — cannot call onlyOwner functions\n`);
 
   // ── 1. AssociationCore ────────────────────────────────────────────────────
   console.log("\n[1/5] Deploying AssociationCore...");
@@ -76,8 +100,8 @@ async function main() {
     network:    network.name,
     chainId:    chainId.toString(),
     deployedAt: new Date().toISOString(),
-    deployer:   deployer.address,
-    relayer:    relayerAddress,
+    deployer:   deployer.address, // also the OWNER of every Ownable contract deployed here
+    relayer:    relayerAddress,   // separate hot wallet — cannot call onlyOwner functions
     contracts: {
       AssociationCore:      await core.getAddress(),
       FactoryRegistry:      await registry.getAddress(),

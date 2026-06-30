@@ -2,8 +2,10 @@
  * Salon store — shared persistence across all Vercel serverless instances.
  *
  * Storage strategy (auto-detected from env):
- *   BLOB_READ_WRITE_TOKEN present → Vercel Blob (production on Vercel)
- *   else                          → local JSON file (dev, single process)
+ *   NEON_DB_ANA (or its Vercel-integration variants) present → Neon Postgres (production)
+ *   else                                                     → local JSON file (dev, single process)
+ *
+ * No Vercel Blob — migrated off it entirely; @vercel/blob is not a dependency anymore.
  *
  * All functions are async. Global acts as in-process read cache.
  */
@@ -311,7 +313,7 @@ export async function recordStim(ip: string): Promise<void> {
   await mutate(s => {
     if (!s.stimulations) s.stimulations = {};
     s.stimulations[ip] = Date.now();
-    // Prune entries older than 48h to keep blob lean
+    // Prune entries older than 48h to keep the stored row small
     for (const [k, v] of Object.entries(s.stimulations)) {
       if (v < cutoff) delete s.stimulations![k];
     }
