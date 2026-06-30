@@ -115,7 +115,23 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ step: "openSession", txHash: hash });
     } catch (e) {
-      return NextResponse.json({ error: `openSession failed: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
+      const msg = e instanceof Error ? e.message : String(e);
+      // openSession() is onlyOwner on ConstituentAssembly, and the relayer wallet is
+      // deliberately NOT the owner (separate keys — the relayer is a hot automation
+      // key, the owner is the wallet/multisig that actually governs the assembly).
+      // This isn't a bug to retry: it means a human holding the owner wallet has to
+      // open the session manually via the admin panel. Report it as informational
+      // (200, not 500) so the GitHub Actions cron doesn't show as "failed" every
+      // 6 hours — if ownership is ever transferred to the relayer, this branch
+      // simply stops triggering and openSession starts succeeding on its own.
+      if (msg.includes("OwnableUnauthorizedAccount") || msg.includes("Ownable: caller is not the owner")) {
+        return NextResponse.json({
+          step: "waiting-on-owner",
+          reason: "openSession() is onlyOwner — the relayer cannot call it. The ConstituentAssembly owner wallet must open the session manually from the admin panel.",
+          session,
+        });
+      }
+      return NextResponse.json({ error: `openSession failed: ${msg}` }, { status: 500 });
     }
   }
 

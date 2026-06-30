@@ -36,6 +36,7 @@ import {
   ROLE_LABELS,
 } from "@/lib/contracts";
 import { buildAdminAuthMessage, ADMIN_AUTH_HEADERS, ADMIN_AUTH_MAX_AGE_MS } from "@/lib/adminAuth";
+import { ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
 
 /** Type for the function passed down to sections that call admin-gated API routes. */
 export type GetAdminHeaders = () => Promise<Record<string, string>>;
@@ -2259,24 +2260,27 @@ export default function AdminPage() {
               <SessionCountdown deadline={session.deadline} />
             )}
 
-            {/* openSession */}
+            {/* openSession — onlyOwner on-chain, so this can ONLY ever be triggered by
+                the connected owner wallet. The election-cycle cron uses the relayer key,
+                which is deliberately NOT the owner, so it can never call this itself —
+                opening a session is the one step that requires a human click here. */}
             <AdminAction
-              label="Ouvrir la session de vote (10 min)"
+              label={`Ouvrir la session de vote (${ELECTION_VOTE_WINDOW_SECONDS / 86400} jours)`}
               description={
                 sessionLoading
                   ? "Lecture de l'état de la session…"
                   : session?.active
                   ? "Une session est déjà active — clôturez-la d'abord."
-                  : "Démarre la phase de vote pour 10 minutes. triggerClose() disponible après expiration."
+                  : `Démarre la phase de vote pour ${ELECTION_VOTE_WINDOW_SECONDS / 86400} jours. triggerClose() (relayer, automatique) disponible après expiration.`
               }
               disabled={!isCaOwner || !!session?.active || sessionLoading}
               disabledReason={
                 sessionLoading ? "Lecture en cours…" :
                 session?.active ? "Session déjà ouverte" :
-                "Wallet propriétaire requis"
+                "Wallet propriétaire requis (la clé du relayer ne peut pas appeler openSession)"
               }
               onExec={async () => {
-                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", [600n]);
+                await execTx(CA_ADDR, CONSTITUENT_ASSEMBLY_ABI, "openSession", [BigInt(ELECTION_VOTE_WINDOW_SECONDS)]);
               }}
             />
 
@@ -2294,13 +2298,13 @@ export default function AdminPage() {
               disabledReason={sessionLoading ? "Chargement…" : "Ouvrez une session d'abord"}
               onExec={async () => {
                 const r1 = await fetch("/api/keeper/auto-vote", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
+                  method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
                   body: JSON.stringify({ phase: "candidacy" }),
                 });
                 const c = await r1.json();
                 console.log("[auto-vote] candidacy:", c);
                 const r2 = await fetch("/api/keeper/auto-vote", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
+                  method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
                   // Pass candidacies from phase=candidacy to avoid re-running LLM + duplicate messages
                   body: JSON.stringify({ phase: "vote", mode: "execute", candidacies: c.candidacies }),
                 });
@@ -2312,7 +2316,7 @@ export default function AdminPage() {
                 }
                 // Try to auto-close via relayer (works if deadline passed; silent if not)
                 await fetch("/api/keeper/auto-vote", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
+                  method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
                   body: JSON.stringify({ phase: "close" }),
                 }).then(r => r.json()).then(d => console.log("[auto-vote] close:", d)).catch(() => null);
                 if ((v.submitted ?? 0) === 0 && v.failed?.length) {
