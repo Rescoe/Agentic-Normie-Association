@@ -44,6 +44,10 @@ contract ConstituentAssembly is Ownable {
 
     IAssociationCore public immutable core;
 
+    // The relayer is stored locally so the contract is self-contained.
+    // It is set once at construction and never changes (immutable).
+    address public immutable relayerAddress;
+
     Session   public currentSession;
     uint256   public sessionCount;
     bytes32[] public electableRoles;
@@ -96,18 +100,28 @@ contract ConstituentAssembly is Ownable {
     error InvalidCore();
     error SessionActiveCannotChangeRoles();
     error UnauthorizedCaller(address caller);
+    error ZeroAddress();
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * @param _core Address of AssociationCore (must have authorized this contract)
-     * @dev  All 6 ANA roles are hardcoded from Roles.sol — no constructor args needed.
+     * @param _core    Address of AssociationCore (must have authorized this contract)
+     * @param _owner   Address that becomes the Ownable owner (can call onlyOwner
+     *                 functions: closeSession, setElectableRoles, transferOwnership…).
+     *                 Pass the governance/cold wallet here — NOT the deployer unless
+     *                 the deployer IS the governance wallet.
+     * @param _relayer Address of the automation hot-wallet (can call openSession via
+     *                 onlyOwnerOrRelayer, and castVoteAsRelayer for members).
+     *                 Must match the RELAYER_ADDRESS used by the keeper cron.
      */
-    constructor(address _core) Ownable(msg.sender) {
-        if (_core == address(0)) revert InvalidCore();
+    constructor(address _core, address _owner, address _relayer) Ownable(_owner) {
+        if (_core    == address(0)) revert InvalidCore();
+        if (_owner   == address(0)) revert ZeroAddress();
+        if (_relayer == address(0)) revert ZeroAddress();
         core = IAssociationCore(_core);
+        relayerAddress = _relayer;
         electableRoles = Roles.allRoles();
     }
 
@@ -122,7 +136,7 @@ contract ConstituentAssembly is Ownable {
      *      only do what individual functions explicitly grant it.
      */
     modifier onlyOwnerOrRelayer() {
-        if (msg.sender != owner() && msg.sender != core.relayerAddress())
+        if (msg.sender != owner() && msg.sender != relayerAddress)
             revert UnauthorizedCaller(msg.sender);
         _;
     }
@@ -234,7 +248,7 @@ contract ConstituentAssembly is Ownable {
         bytes32 role,
         uint256 candidateTokenId
     ) external {
-        if (msg.sender != core.relayerAddress()) revert NotRelayer(msg.sender);
+        if (msg.sender != relayerAddress) revert NotRelayer(msg.sender);
         if (!currentSession.active) revert NoActiveSession();
         if (!core.isMember(voterTokenId)) revert VoterNotMember(voterTokenId);
         if (!core.isMember(candidateTokenId)) revert CandidateNotMember(candidateTokenId);
