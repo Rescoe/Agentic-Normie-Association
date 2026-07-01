@@ -479,28 +479,45 @@ function ArtworkModal({
 
 // ─── ClaimFreeEditionButton — free mint for ANA members (Normie holders) ────────
 
+type ClaimCheckStatus = "idle" | "checking" | "unsupported" | "not-member" | "ready" | "all-claimed";
+
 function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x${string}` }) {
   const { address: connectedAddr } = useAccount();
-  const [myTokenIds,  setMyTokenIds]  = useState<number[]>([]);
-  const [claimStates, setClaimStates] = useState<Record<number, "unclaimed" | "claimed">>({});
-  const [claiming,    setClaiming]    = useState<number | null>(null);
-  const [done,        setDone]        = useState<number | null>(null);
-  const [error,       setError]       = useState<string | null>(null);
-  const [loading,     setLoading]     = useState(false);
+  const [status,       setStatus]       = useState<ClaimCheckStatus>("idle");
+  const [unclaimedIds, setUnclaimedIds] = useState<number[]>([]);
+  const [claiming,     setClaiming]     = useState<number | null>(null);
+  const [txError,      setTxError]      = useState<string | null>(null);
 
   const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore as `0x${string}`;
 
   useEffect(() => {
     if (!connectedAddr || !CORE_ADDR) return;
-    setLoading(true);
+    setStatus("checking");
+    setUnclaimedIds([]);
 
     (async () => {
       try {
-        const allIds = (await viemClient.readContract({
-          address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds",
-        })) as bigint[];
+        // Step 1: verify collection supports claimFree (new factory only — has core())
+        try {
+          const coreOnCollection = await viemClient.readContract({
+            address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "core",
+          }) as string;
+          if (!coreOnCollection || coreOnCollection === "0x0000000000000000000000000000000000000000") {
+            setStatus("unsupported");
+            return;
+          }
+        } catch {
+          // Old collection deployed before the rewrite — no core() function
+          setStatus("unsupported");
+          return;
+        }
 
-        if (!allIds.length) { setLoading(false); return; }
+        // Step 2: find which ANA Normie IDs belong to connected wallet
+        const allIds = await viemClient.readContract({
+          address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds",
+        }) as bigint[];
+
+        if (!allIds.length) { setStatus("not-member"); return; }
 
         const owners = await Promise.allSettled(
           allIds.map(id => viemClient.readContract({
@@ -512,22 +529,25 @@ function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x$
             (owners[i] as PromiseFulfilledResult<unknown>).value?.toString().toLowerCase() === connectedAddr.toLowerCase())
           .map(Number);
 
-        setMyTokenIds(mine);
+        if (!mine.length) { setStatus("not-member"); return; }
 
-        if (!mine.length) { setLoading(false); return; }
-
+        // Step 3: check which tokens haven't claimed yet
         const claimed = await Promise.allSettled(
           mine.map(id => viemClient.readContract({
             address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "freeClaimed", args: [BigInt(id)],
           }))
         );
-        const states: Record<number, "unclaimed" | "claimed"> = {};
-        mine.forEach((id, i) => {
-          states[id] = (claimed[i].status === "fulfilled" && claimed[i].value) ? "claimed" : "unclaimed";
-        });
-        setClaimStates(states);
-      } catch { /* silent — RPC issues don't break the buy button */ }
-      setLoading(false);
+        const unclaimed = mine.filter((_, i) =>
+          !(claimed[i].status === "fulfilled" && claimed[i].value)
+        );
+
+        setUnclaimedIds(unclaimed);
+        setStatus(unclaimed.length === 0 ? "all-claimed" : "ready");
+      } catch (e) {
+        console.error("[ClaimFreeEditionButton] check failed:", e);
+        // Don't show an error UI — fall back silently so buy button still works
+        setStatus("unsupported");
+      }
     })();
   }, [connectedAddr, collectionAddress, CORE_ADDR]);
 
@@ -535,27 +555,27 @@ function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x$
 
   async function handleClaim(tokenId: number) {
     setClaiming(tokenId);
-    setError(null);
+    setTxError(null);
     try {
       await writeContractAsync({
         address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "claimFree", args: [BigInt(tokenId)],
       });
-      setDone(tokenId);
-      setClaimStates(prev => ({ ...prev, [tokenId]: "claimed" }));
+      setUnclaimedIds(prev => {
+        const next = prev.filter(id => id !== tokenId);
+        if (next.length === 0) setStatus("all-claimed");
+        return next;
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg.includes("User rejected") ? "Cancelled" : "Claim failed — check you own this Normie in ANA");
+      setTxError(msg.includes("User rejected") ? "Cancelled" : "Claim failed — check you own this Normie in ANA");
     } finally {
       setClaiming(null);
     }
   }
 
-  if (!connectedAddr || loading) return null;
-  if (!myTokenIds.length) return null;
+  if (status === "idle" || status === "checking" || status === "unsupported" || status === "not-member") return null;
 
-  const unclaimedIds = myTokenIds.filter(id => claimStates[id] !== "claimed");
-
-  if (!unclaimedIds.length) {
+  if (status === "all-claimed") {
     return (
       <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
         ✓ Free edition claimed for all your Normies
@@ -567,23 +587,17 @@ function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x$
     <div className="space-y-1">
       {unclaimedIds.map(tokenId => (
         <div key={tokenId} className="flex items-center justify-between gap-2">
-          <p className="font-mono text-[10px] text-[--fg-muted]">
-            ◎ Free edition · Normie #{tokenId}
-          </p>
-          {done === tokenId ? (
-            <p className="font-mono text-[10px] text-green-400">✓ Claimed</p>
-          ) : (
-            <button
-              onClick={() => handleClaim(tokenId)}
-              disabled={claiming === tokenId}
-              className="font-mono text-[10px] border border-green-600 text-green-500 px-2 py-1 hover:bg-green-600 hover:text-black transition-colors disabled:opacity-50 disabled:cursor-wait"
-            >
-              {claiming === tokenId ? "Confirming…" : "Claim free"}
-            </button>
-          )}
+          <p className="font-mono text-[10px] text-[--fg-muted]">◎ Free edition · Normie #{tokenId}</p>
+          <button
+            onClick={() => handleClaim(tokenId)}
+            disabled={claiming === tokenId}
+            className="font-mono text-[10px] border border-green-600 text-green-500 px-2 py-1 hover:bg-green-600 hover:text-black transition-colors disabled:opacity-50 disabled:cursor-wait"
+          >
+            {claiming === tokenId ? "Confirming…" : "Claim free"}
+          </button>
         </div>
       ))}
-      {error && <p className="font-mono text-[10px] text-red-400">{error}</p>}
+      {txError && <p className="font-mono text-[10px] text-red-400">{txError}</p>}
     </div>
   );
 }
