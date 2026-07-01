@@ -7,7 +7,7 @@ import { createPublicClient, http, parseAbiItem } from "viem";
 import { base as baseChain } from "viem/chains";
 import Image from "next/image";
 import Link from "next/link";
-import { WORK_REGISTRY_ABI, ANA_EDITIONS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { WORK_REGISTRY_ABI, ANA_EDITIONS_ABI, ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 import type { ANAWork, WorkState } from "@/lib/workStore";
 
@@ -477,6 +477,117 @@ function ArtworkModal({
   );
 }
 
+// ─── ClaimFreeEditionButton — free mint for ANA members (Normie holders) ────────
+
+function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x${string}` }) {
+  const { address: connectedAddr } = useAccount();
+  const [myTokenIds,  setMyTokenIds]  = useState<number[]>([]);
+  const [claimStates, setClaimStates] = useState<Record<number, "unclaimed" | "claimed">>({});
+  const [claiming,    setClaiming]    = useState<number | null>(null);
+  const [done,        setDone]        = useState<number | null>(null);
+  const [error,       setError]       = useState<string | null>(null);
+  const [loading,     setLoading]     = useState(false);
+
+  const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore as `0x${string}`;
+
+  useEffect(() => {
+    if (!connectedAddr || !CORE_ADDR) return;
+    setLoading(true);
+
+    (async () => {
+      try {
+        const allIds = (await viemClient.readContract({
+          address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds",
+        })) as bigint[];
+
+        if (!allIds.length) { setLoading(false); return; }
+
+        const owners = await Promise.allSettled(
+          allIds.map(id => viemClient.readContract({
+            address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberOwner", args: [id],
+          }))
+        );
+        const mine = allIds
+          .filter((_, i) => owners[i].status === "fulfilled" &&
+            (owners[i] as PromiseFulfilledResult<unknown>).value?.toString().toLowerCase() === connectedAddr.toLowerCase())
+          .map(Number);
+
+        setMyTokenIds(mine);
+
+        if (!mine.length) { setLoading(false); return; }
+
+        const claimed = await Promise.allSettled(
+          mine.map(id => viemClient.readContract({
+            address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "freeClaimed", args: [BigInt(id)],
+          }))
+        );
+        const states: Record<number, "unclaimed" | "claimed"> = {};
+        mine.forEach((id, i) => {
+          states[id] = (claimed[i].status === "fulfilled" && claimed[i].value) ? "claimed" : "unclaimed";
+        });
+        setClaimStates(states);
+      } catch { /* silent — RPC issues don't break the buy button */ }
+      setLoading(false);
+    })();
+  }, [connectedAddr, collectionAddress, CORE_ADDR]);
+
+  const { writeContractAsync } = useWriteContract();
+
+  async function handleClaim(tokenId: number) {
+    setClaiming(tokenId);
+    setError(null);
+    try {
+      await writeContractAsync({
+        address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "claimFree", args: [BigInt(tokenId)],
+      });
+      setDone(tokenId);
+      setClaimStates(prev => ({ ...prev, [tokenId]: "claimed" }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg.includes("User rejected") ? "Cancelled" : "Claim failed — check you own this Normie in ANA");
+    } finally {
+      setClaiming(null);
+    }
+  }
+
+  if (!connectedAddr || loading) return null;
+  if (!myTokenIds.length) return null;
+
+  const unclaimedIds = myTokenIds.filter(id => claimStates[id] !== "claimed");
+
+  if (!unclaimedIds.length) {
+    return (
+      <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
+        ✓ Free edition claimed for all your Normies
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {unclaimedIds.map(tokenId => (
+        <div key={tokenId} className="flex items-center justify-between gap-2">
+          <p className="font-mono text-[10px] text-[--fg-muted]">
+            ◎ Free edition · Normie #{tokenId}
+          </p>
+          {done === tokenId ? (
+            <p className="font-mono text-[10px] text-green-400">✓ Claimed</p>
+          ) : (
+            <button
+              onClick={() => handleClaim(tokenId)}
+              disabled={claiming === tokenId}
+              className="font-mono text-[10px] border border-green-600 text-green-500 px-2 py-1 hover:bg-green-600 hover:text-black transition-colors disabled:opacity-50 disabled:cursor-wait"
+            >
+              {claiming === tokenId ? "Confirming…" : "Claim free"}
+            </button>
+          )}
+        </div>
+      ))}
+      {error && <p className="font-mono text-[10px] text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 // ─── BuyEditionButton — wagmi write, reads available token IDs on-chain ─────────
 
 function BuyEditionButton({
@@ -703,6 +814,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
                 {work.collectionAddress.slice(0, 6)}…{work.collectionAddress.slice(-4)} ↗
               </a>
             </div>
+            <ClaimFreeEditionButton collectionAddress={work.collectionAddress as `0x${string}`} />
             {work.editionPrice && (
               <BuyEditionButton
                 collectionAddress={work.collectionAddress as `0x${string}`}
@@ -958,7 +1070,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
             <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">#{workId}</span>
           </div>
 
-          {cert.collectionAddress && cert.editionPrice && (
+          {cert.collectionAddress && (
             <div className="space-y-2 pt-1 border-t border-[--border]">
               <div className="flex items-center justify-between gap-2">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">
@@ -972,11 +1084,14 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                   {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
                 </a>
               </div>
-              <BuyEditionButton
-                collectionAddress={cert.collectionAddress as `0x${string}`}
-                editionPriceEth={cert.editionPrice}
-                totalEditions={cert.editionSupply ?? 1}
-              />
+              <ClaimFreeEditionButton collectionAddress={cert.collectionAddress as `0x${string}`} />
+              {cert.editionPrice && (
+                <BuyEditionButton
+                  collectionAddress={cert.collectionAddress as `0x${string}`}
+                  editionPriceEth={cert.editionPrice}
+                  totalEditions={cert.editionSupply ?? 1}
+                />
+              )}
             </div>
           )}
 
@@ -1058,7 +1173,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
         </div>
 
         {/* Edition collection */}
-        {cert.collectionAddress && cert.editionPrice && (
+        {cert.collectionAddress && (
           <div className="space-y-2 pt-1 border-t border-[--border]">
             <div className="flex items-center justify-between gap-2">
               <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">
@@ -1072,11 +1187,14 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                 {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
               </a>
             </div>
-            <BuyEditionButton
-              collectionAddress={cert.collectionAddress as `0x${string}`}
-              editionPriceEth={cert.editionPrice}
-              totalEditions={cert.editionSupply ?? 1}
-            />
+            <ClaimFreeEditionButton collectionAddress={cert.collectionAddress as `0x${string}`} />
+            {cert.editionPrice && (
+              <BuyEditionButton
+                collectionAddress={cert.collectionAddress as `0x${string}`}
+                editionPriceEth={cert.editionPrice}
+                totalEditions={cert.editionSupply ?? 1}
+              />
+            )}
           </div>
         )}
 
