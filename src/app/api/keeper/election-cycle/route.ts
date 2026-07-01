@@ -110,28 +110,10 @@ export async function POST(req: NextRequest) {
     if (!key) return NextResponse.json({ error: "RELAYER_PRIVATE_KEY not configured" }, { status: 500 });
     const account = privateKeyToAccount(key);
 
-    // openSession() is onlyOwner on ConstituentAssembly, and the relayer wallet is
-    // deliberately NOT the owner (separate keys — the relayer is a hot automation
-    // key; the owner is whichever wallet originally ran the deploy script, since
-    // ConstituentAssembly's constructor sets Ownable(msg.sender)). Pre-check via a
-    // read call instead of attempting the tx and string-matching the revert reason —
-    // the exact revert message format isn't guaranteed across RPC nodes/viem versions,
-    // and a failed attempt is exactly what was showing up as a red "failed" run in
-    // GitHub Actions every 6 hours.
-    let owner: string;
-    try {
-      owner = (await pub.readContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "owner" })) as string;
-    } catch (e) {
-      return NextResponse.json({ error: `owner() read failed: ${e instanceof Error ? e.message : String(e)}` }, { status: 503 });
-    }
-    if (owner.toLowerCase() !== account.address.toLowerCase()) {
-      return NextResponse.json({
-        step: "waiting-on-owner",
-        reason: `openSession() is onlyOwner (current owner: ${owner}). The relayer (${account.address}) cannot call it — a human holding the owner wallet must open the session manually from the admin panel.`,
-        session,
-      });
-    }
-
+    // openSession() accepts both owner and relayer (onlyOwnerOrRelayer modifier
+    // in the redeployed ConstituentAssembly).  The relayer can now open sessions
+    // autonomously; the owner retains all other Ownable powers (closeSession,
+    // setElectableRoles, transferOwnership, etc.).
     const wallet = createWalletClient({ account, chain: CHAIN, transport: http(RPC_URL) });
     try {
       const hash = await wallet.writeContract({

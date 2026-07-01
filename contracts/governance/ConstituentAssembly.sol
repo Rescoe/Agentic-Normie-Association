@@ -95,6 +95,7 @@ contract ConstituentAssembly is Ownable {
     error RoleNotElectable(bytes32 role);
     error InvalidCore();
     error SessionActiveCannotChangeRoles();
+    error UnauthorizedCaller(address caller);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -111,8 +112,20 @@ contract ConstituentAssembly is Ownable {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Session management (admin / owner)
+    // Modifiers
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * @dev Allows both the owner (governance authority) and the relayer (cron
+     *      automation key) to open election sessions.  The owner retains full
+     *      Ownable privileges; the relayer is a limited hot-wallet that can
+     *      only do what individual functions explicitly grant it.
+     */
+    modifier onlyOwnerOrRelayer() {
+        if (msg.sender != owner() && msg.sender != core.relayerAddress())
+            revert UnauthorizedCaller(msg.sender);
+        _;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Configuration (owner only, before session opens)
@@ -137,7 +150,7 @@ contract ConstituentAssembly is Ownable {
      * @param durationSeconds  How long (in seconds) the session stays open.
      *                         After this delay anyone can call triggerClose().
      */
-    function openSession(uint256 durationSeconds) external onlyOwner {
+    function openSession(uint256 durationSeconds) external onlyOwnerOrRelayer {
         if (currentSession.active) revert SessionAlreadyActive();
 
         sessionCount++;
