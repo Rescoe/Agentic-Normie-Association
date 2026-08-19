@@ -95,6 +95,14 @@ declare global {
   var __anaSalonStore: SalonStore | undefined;
 }
 
+// ─── In-process read cache (Neon mode only) ───────────────────────────────────
+// Lambda instances are reused across requests. Caching for 30s means that
+// repeated getStore() calls within the same cron run (or a warm instance)
+// hit memory instead of Neon, dramatically reducing data transfer.
+// Writes always go to Neon AND update this cache.
+const CACHE_TTL_MS = 30_000;
+let _neonCache: { store: SalonStore; at: number } | null = null;
+
 // ─── Neon I/O ─────────────────────────────────────────────────────────────────
 
 async function neonLoad(): Promise<SalonStore | null> {
@@ -176,16 +184,17 @@ async function useNeon(): Promise<boolean> {
   return USE_NEON;
 }
 
-// Neon is the source of truth, read fresh on every call — no cross-request
-// in-memory caching. Vercel routes serverless functions to whichever Lambda
-// instance is available, so a per-instance TTL cache caused different pages
-// to see different ages of the same data, sometimes for a full minute.
-// Neon reads are fast and this app's traffic is low, so always-fresh is cheap.
 async function getStore(): Promise<SalonStore> {
   if (await useNeon()) {
+    // Serve from in-process cache when fresh — avoids one Neon read per sub-call
+    // within the same cron run or warm Lambda invocation.
+    if (_neonCache && Date.now() - _neonCache.at < CACHE_TTL_MS) {
+      return _neonCache.store;
+    }
     const fromNeon = await neonLoad();
     const s = fromNeon ?? { salons: {}, names: {} };
     ensureAgora(s);
+    _neonCache = { store: s, at: Date.now() };
     return s;
   }
   // Local dev fallback only (no NEON_DB_ANA configured)
@@ -202,6 +211,8 @@ async function mutate(fn: (s: SalonStore) => void): Promise<void> {
   fn(store);
   if (await useNeon()) {
     await neonSave(store);
+    // Refresh cache timestamp so subsequent reads within the TTL window see the write
+    if (_neonCache) _neonCache.at = Date.now();
   } else {
     global.__anaSalonStore = store;
     fileSave(store);
@@ -325,6 +336,15 @@ export async function recordStim(ip: string): Promise<void> {
 export async function registerName(tokenId: number, name: string): Promise<void> {
   if (!name || name === `Normie #${tokenId}`) return;
   await mutate(s => { s.names[String(tokenId)] = name; });
+}
+
+/** Batch-register many names in a single read+write (use instead of looping registerName). */
+export async function registerNames(entries: Array<{ tokenId: number; name: string }>): Promise<void> {
+  const toWrite = entries.filter(e => e.name && e.name !== `Normie #${e.tokenId}`);
+  if (toWrite.length === 0) return;
+  await mutate(s => {
+    for (const { tokenId, name } of toWrite) s.names[String(tokenId)] = name;
+  });
 }
 
 export async function getName(tokenId: number): Promise<string | null> {

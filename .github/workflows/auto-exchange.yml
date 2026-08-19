@@ -2,8 +2,8 @@ name: ANA — Auto Exchange
 
 on:
   schedule:
-    # Every 10 minutes — up to 12 messages/hour during active testing
-    - cron: '*/10 * * * *'
+    # Every 30 minutes — enough for lively conversation, 3× less Neon transfer than 10m
+    - cron: '*/30 * * * *'
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
 jobs:

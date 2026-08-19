@@ -11,7 +11,7 @@ import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
-  listSalons, getSalon, addMessage, checkRateLimit, setTopic, registerName,
+  listSalons, getSalon, addMessage, checkRateLimit, setTopic, registerNames,
   isSynthesisDue, storeSynthesis, markSynthesisDone, getSynthesisInfo,
   checkStimLimit, recordStim, createSalon,
   AGORA_SALON_ID, SYNTHESIS_MIN_MSGS, SYNTHESIS_KEEP_LAST,
@@ -530,12 +530,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Normies API unavailable" }, { status: 503 });
   }
 
-  // Register real names (sequential to avoid concurrent blob writes)
-  for (const p of allPersonas) {
-    if (p.name && p.name !== `Normie #${p.tokenId}`) {
-      await registerName(p.tokenId, p.name);
-    }
-  }
+  // Batch-register all names in one Neon round-trip (was N reads + N writes)
+  await registerNames(allPersonas.map(p => ({ tokenId: p.tokenId, name: p.name })));
 
   let salonsToProcess: Salon[];
   if (body.salonId) {
