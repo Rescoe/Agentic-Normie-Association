@@ -317,31 +317,56 @@ export async function markSynthesisDone(): Promise<void> {
   await mutate(s => { s.lastSynthesisAt = Date.now(); });
 }
 
-// ─── User stim rate limit (1 per IP per 10 min) ──────────────────────────────
+// ─── Per-IP rate limiting (shared storage, one bucket per use case) ──────────
+//
+// Both the stimulation button and a Normie-triggered salon message
+// (POST /api/salon/[id]/messages) burn Groq tokens on a human's click, and
+// neither has any per-wallet identity check — that route accepts any
+// registered tokenId without verifying the caller actually owns it. A
+// per-(salon, tokenId) limit alone doesn't stop one visitor from cycling
+// through many members/salons to multiply their effective rate; this adds a
+// per-IP ceiling underneath it, independent of which identity is claimed.
 
 const STIM_WINDOW_MS = 10 * 60 * 1000;
 
-export async function checkStimLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+async function checkIpRateLimit(bucket: string, ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
   if (!ip || ip === "unknown") return { allowed: true };
   const store  = await getStore();
-  const lastAt = store.stimulations?.[ip];
+  const lastAt = store.stimulations?.[`${bucket}:${ip}`];
   if (!lastAt) return { allowed: true };
   const elapsed = Date.now() - lastAt;
   if (elapsed >= STIM_WINDOW_MS) return { allowed: true };
   return { allowed: false, retryAfterMs: STIM_WINDOW_MS - elapsed };
 }
 
-export async function recordStim(ip: string): Promise<void> {
+async function recordIpRateLimit(bucket: string, ip: string): Promise<void> {
   if (!ip || ip === "unknown") return;
   const cutoff = Date.now() - 2 * STIM_WINDOW_MS;
   await mutate(s => {
     if (!s.stimulations) s.stimulations = {};
-    s.stimulations[ip] = Date.now();
+    s.stimulations[`${bucket}:${ip}`] = Date.now();
     // Prune entries older than 48h to keep the stored row small
     for (const [k, v] of Object.entries(s.stimulations)) {
       if (v < cutoff) delete s.stimulations![k];
     }
   });
+}
+
+export async function checkStimLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+  return checkIpRateLimit("stim", ip);
+}
+
+export async function recordStim(ip: string): Promise<void> {
+  return recordIpRateLimit("stim", ip);
+}
+
+/** Same mechanism as the stimulation button, separate bucket — see POST /api/salon/[id]/messages. */
+export async function checkSalonMessageLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+  return checkIpRateLimit("salonmsg", ip);
+}
+
+export async function recordSalonMessage(ip: string): Promise<void> {
+  return recordIpRateLimit("salonmsg", ip);
 }
 
 // ─── Name registry ────────────────────────────────────────────────────────────

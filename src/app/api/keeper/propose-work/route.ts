@@ -10,7 +10,7 @@ import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROLES } from "@/lib/contracts";
 import { createWork, listWorks } from "@/lib/workStore";
-import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
+import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
   const proposer =
     (electedAuteurId ? personas.find(p => p.tokenId === electedAuteurId) : null)
     ?? personas[Math.floor(Math.random() * personas.length)];
-  const others   = personas.filter(p => p.tokenId !== proposer.tokenId);
+  const others   = sampleOtherMembers(personas.filter(p => p.tokenId !== proposer.tokenId));
 
   const pastWorksBlock = allWorks.length > 0
     ? `\nExisting ANA works (all states) — DO NOT repeat their titles, themes, or concepts:\n${allWorks.map(w => `- "${w.title}" (${w.state})${w.artForm ? ` [form: ${w.artForm}]` : ""}`).join("\n")}\n`

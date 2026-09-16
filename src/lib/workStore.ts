@@ -168,11 +168,46 @@ async function neonLoad(): Promise<WorkStore | null> {
   }
 }
 
+// Once a work reaches one of these states it is done changing, and its full
+// on-chain record already exists (the certificate built in stepPublishing
+// bakes in every vote reason and the whole state history permanently — see
+// buildWorkHtml below). Unlike salon-store, this store has never pruned
+// anything, so every terminal work's bulkiest free-text fields keep getting
+// re-transferred to Neon on every single write to a completely different,
+// currently-active work.
+const TERMINAL_STATES: WorkState[] = ["PUBLISHED", "REJECTED"];
+
+/**
+ * Trims the bulkiest free-text fields (vote reasons, state-history notes) on
+ * terminal-state works before they're written to Neon. Mirrors the principle
+ * already applied to salon-store (see salonStore.ts's neonSave): prune only
+ * what's persisted, never the in-memory copy, and only once a work is no
+ * longer being actively worked on. artworkText (the actual creative output)
+ * and every summary field the gallery displays (yesCount, title, artForm...)
+ * are left untouched.
+ */
+function pruneWorkForStorage(w: ANAWork): ANAWork {
+  if (!TERMINAL_STATES.includes(w.state)) return w;
+  return {
+    ...w,
+    votes: (w.votes ?? []).map(v =>
+      v.reason.length > 60 ? { ...v, reason: v.reason.slice(0, 60) + "…" } : v
+    ),
+    stateHistory: (w.stateHistory ?? []).map(h => h.note ? { state: h.state, at: h.at } : h),
+  };
+}
+
 async function neonSave(store: WorkStore): Promise<void> {
   try {
     const { kvSet, USE_NEON } = await import("./db");
     if (!USE_NEON) return;
-    await kvSet(NEON_KEY, JSON.stringify(store));
+    const pruned: WorkStore = {
+      ...store,
+      works: Object.fromEntries(
+        Object.entries(store.works).map(([id, w]) => [id, pruneWorkForStorage(w)])
+      ),
+    };
+    await kvSet(NEON_KEY, JSON.stringify(pruned));
     console.log(`[workStore] saved to Neon — ${Object.keys(store.works).length} works`);
   } catch (e) {
     console.error("[workStore] neonSave error:", e);

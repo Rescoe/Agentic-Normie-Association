@@ -20,7 +20,7 @@ import {
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
 import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
-import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
+import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
@@ -29,7 +29,12 @@ import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 
 const MODEL        = "openai/gpt-oss-120b";
-const MODEL_FAST   = "llama-3.1-8b-instant";
+// Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
+// turned out to be Enterprise-only too (see commits 40e271f, f3312f9) — every
+// other route converged on openai/gpt-oss-120b everywhere, this file's "fast"
+// tier had been missed by that migration and was silently failing (castVote,
+// curator approval, and critique calls all returned null on every run).
+const MODEL_FAST   = "openai/gpt-oss-120b";
 
 // A work that fails the same pipeline step this many times in a row gets
 // auto-rejected instead of staying stuck in PUBLISHING/CREATING/etc. forever.
@@ -275,7 +280,11 @@ If vote "yes": which role suits you in this creation? ("author" = create, "curat
 async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   const notVoted = personas.filter(p => !hasVoted(work, p.tokenId));
 
-  // Cast votes for all who haven't voted yet (sequential to avoid blob races)
+  // Cast votes for all who haven't voted yet — sequential (each iteration
+  // awaited fully before the next starts) to avoid blob races on the Neon
+  // read-modify-write; no added delay between iterations, since Vercel's 60s
+  // function limit is shared with everything else this route does per tick,
+  // and Groq calls already retry their own rate limiting (groqFetch).
   let cast = 0;
   for (const persona of notVoted) {
     const vote = await castVote(persona, work);
@@ -295,7 +304,6 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
         topic:     "vote",
       }).catch(() => null);
     }
-    await new Promise(r => setTimeout(r, 400));
   }
 
   // Reload to get fresh vote list
@@ -442,7 +450,7 @@ async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<b
   const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId) ?? personas[0];
   if (!rapporteur) { console.error(`[work-lifecycle] BRIEFING: no rapporteur for ${work.id}`); return false; }
 
-  const others = personas.filter(p => p.tokenId !== rapporteur.tokenId);
+  const others = sampleOtherMembers(personas.filter(p => p.tokenId !== rapporteur.tokenId));
 
   // Fetch ETH price in parallel with building the prompt
   const ethUsd       = await fetchEthUsd();
@@ -633,7 +641,7 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
   const author = personas.find(p => p.tokenId === work.authorTokenId);
   if (!author) return false;
 
-  const others      = personas.filter(p => p.tokenId !== author.tokenId);
+  const others      = sampleOtherMembers(personas.filter(p => p.tokenId !== author.tokenId));
   const revisionCtx = work.validationNote
     ? `\n\nFeedback on the previous attempt — you MUST address every point below:\n${work.validationNote}\nRevise taking this feedback into account.`
     : "";
@@ -882,7 +890,7 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
       : "Automated structural check: PASSED — required functions, drawing primitives and on-chain data constants are all present, and no forbidden APIs were found. Judge artistic merit only, not code correctness.";
   }
 
-  const others      = personas.filter(p => p.tokenId !== curator.tokenId);
+  const others      = sampleOtherMembers(personas.filter(p => p.tokenId !== curator.tokenId));
   const revisionCtx = attempt >= maxRevisions
     ? ` This is the final allowed submission (attempt ${attempt + 1}/${maxRevisions + 1}). If you reject it again, the work will be permanently archived — be precise about exactly what is still wrong so it's clear to everyone.`
     : ` If you reject it, the Author will get another chance to revise (attempt ${attempt + 1}/${maxRevisions + 1}).`;

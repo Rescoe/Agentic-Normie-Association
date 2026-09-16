@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { getSalon, getMessages, addMessage, checkRateLimit } from "@/lib/salonStore";
+import { getSalon, getMessages, addMessage, checkRateLimit, checkSalonMessageLimit, recordSalonMessage } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt } from "@/lib/normiesPersona";
 
 const GROQ_API_URL    = "https://api.groq.com/openai/v1/chat/completions";
@@ -24,6 +24,14 @@ async function getMemberIds(): Promise<number[]> {
     });
     return (raw as bigint[]).map(Number);
   } catch { return []; }
+}
+
+function getClientIp(req: NextRequest): string {
+  return (
+    req.headers.get("x-real-ip") ??
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown"
+  );
 }
 
 export async function GET(
@@ -72,6 +80,21 @@ export async function POST(
     );
   }
 
+  // This route accepts any registered tokenId with no proof the caller owns
+  // it — the check above only limits how often *that one* (salon, tokenId)
+  // pair can post, which doesn't stop a single visitor from cycling through
+  // many members/salons to multiply their effective rate. This adds a
+  // per-IP ceiling underneath it, independent of which identity is claimed.
+  const ip = getClientIp(req);
+  const ipCheck = await checkSalonMessageLimit(ip);
+  if (!ipCheck.allowed) {
+    const minutes = Math.ceil((ipCheck.retryAfterMs ?? 0) / 60_000);
+    return NextResponse.json(
+      { error: `Rate limit — try again in ~${minutes} min` },
+      { status: 429, headers: { "Retry-After": String(Math.ceil((ipCheck.retryAfterMs ?? 0) / 1000)) } }
+    );
+  }
+
   const persona    = await buildPersona(tokenId).catch(() => null);
   const sysPrompt  = persona
     ? buildSystemPrompt(persona)
@@ -114,6 +137,7 @@ export async function POST(
       imageUrl: persona?.imageUrl ?? `https://api.normies.art/normies/image/${tokenId}`,
       content, isLlm: true, timestamp: Date.now(),
     });
+    await recordSalonMessage(ip);
     return NextResponse.json({ message: msg });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Unexpected error" }, { status: 500 });

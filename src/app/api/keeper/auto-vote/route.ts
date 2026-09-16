@@ -204,6 +204,22 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
   let ok = 0;
   const failed: string[] = [];
 
+  // Nonce tracked locally instead of re-fetched via RPC before every single
+  // transaction, with no fixed delay between broadcasts. At scale, that
+  // redundant round-trip plus a flat 600ms pacing sleep on every iteration
+  // meant this loop could only get through roughly 10-20 voters before
+  // hitting Vercel's 60s function limit — a modest election would then need
+  // several 6h cron cycles just to finish submitting votes.
+  //
+  // Bumped only after a transaction is actually broadcast. A revert caught at
+  // gas-estimation time (e.g. AlreadyVotedForRole, the common case on a cron
+  // retry) never consumes a nonce, so it must not bump the counter either —
+  // that's also why this stays sequential instead of firing transactions in
+  // parallel with pre-assigned nonces: on a retry, most decisions resolve to
+  // AlreadyVotedForRole without ever consuming a nonce, so nonces can't be
+  // safely handed out in advance without risking a permanent gap.
+  let nextNonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
+
   for (const d of decisions) {
     if (!Number.isFinite(d.voterTokenId) || d.voterTokenId <= 0) {
       failed.push(`invalid voterTokenId ${d.voterTokenId}`); continue;
@@ -216,34 +232,35 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
     }
 
     let attempt = 0;
-    while (attempt < 3) {
+    let done = false;
+    while (attempt < 3 && !done) {
       try {
-        // Fresh pending nonce before each tx — avoids desync from failures
-        const nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
         await wallet.writeContract({
           address:      CA,
           abi:          CONSTITUENT_ASSEMBLY_ABI,
           functionName: "castVoteAsRelayer",
           args:         [BigInt(d.voterTokenId), d.role as `0x${string}`, BigInt(d.candidateTokenId)],
-          nonce,
+          nonce:        nextNonce,
         });
+        nextNonce++;
         ok++;
-        break;
+        done = true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        if (msg.includes("AlreadyVotedForRole")) { ok++; break; }
+        if (msg.includes("AlreadyVotedForRole")) { ok++; done = true; break; }
         attempt++;
         if (attempt >= 3) {
           failed.push(`#${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 120)}`);
           console.error(`[auto-vote] FAILED #${d.voterTokenId}→${d.roleLabel}: ${msg.slice(0, 120)}`);
         } else {
           console.warn(`[auto-vote] retry ${attempt}/3 for #${d.voterTokenId}→${d.roleLabel}`);
-          await sleep(2_000);
+          // Resync from chain — a real failure (unlike AlreadyVotedForRole)
+          // may have left our local counter out of step with what landed.
+          nextNonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
+          await sleep(1_000);
         }
       }
     }
-    // 600ms between each broadcast — stays under RPC rate limits
-    await sleep(600);
   }
   return { ok, failed };
 }
@@ -377,7 +394,6 @@ export async function POST(req: NextRequest) {
         isLlm:     true,
         timestamp: Date.now(),
       }).catch(() => null);
-      await sleep(200);
     }
 
     // Single Agora announcement — only on the candidacy phase to avoid duplicates
@@ -420,7 +436,6 @@ export async function POST(req: NextRequest) {
       isLlm:     true,
       timestamp: Date.now(),
     }).catch(() => null);
-    await sleep(200);
   }
 
   if (mode === "simulate") {

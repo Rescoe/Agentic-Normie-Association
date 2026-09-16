@@ -178,6 +178,30 @@ export function buildSystemPrompt(
   return lines.join("\n");
 }
 
+// Caps how many "other members" get named in a system prompt. Without this,
+// every call site that passes ANA's full membership list makes prompt size
+// (and Groq token cost) grow with total membership instead of with the
+// conversation at hand — negligible at a handful of members, but capable of
+// exceeding Groq's per-minute token limit on its own well before membership
+// reaches a few hundred.
+export const MAX_OTHER_MEMBERS_IN_PROMPT = 8;
+
+/**
+ * Bounds an "other members" list to at most `max` entries, sampled randomly
+ * so prompts stay varied across calls instead of always naming the same
+ * low-tokenId members. Pass the already-speaker-excluded list in; use this
+ * wherever `otherMembers` is built from the full ANA roster rather than an
+ * inherently small set (e.g. a salon's actual participants).
+ */
+export function sampleOtherMembers(
+  members: NormiePersona[],
+  max: number = MAX_OTHER_MEMBERS_IN_PROMPT,
+): NormiePersona[] {
+  if (members.length <= max) return members;
+  const shuffled = [...members].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, max);
+}
+
 /** Short identity block for multi-agent context (vote prompts, etc.) */
 export function personaToPromptBlock(p: NormiePersona, roleLabel: string): string {
   const traitSummary = p.traits.slice(0, 6).map(t => `${t.trait_type}: ${t.value}`).join(", ");

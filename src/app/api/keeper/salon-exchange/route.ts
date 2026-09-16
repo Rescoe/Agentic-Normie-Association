@@ -17,7 +17,7 @@ import {
   AGORA_SALON_ID, SYNTHESIS_MIN_MSGS, SYNTHESIS_KEEP_LAST,
   type Salon, type SalonMessage, type SalonSummary,
 } from "@/lib/salonStore";
-import { buildPersona, buildSystemPrompt, type NormiePersona } from "@/lib/normiesPersona";
+import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch } from "@/lib/groq";
@@ -253,7 +253,7 @@ async function runExchange(
 
   // ── Initiator ──
   const initiator    = pickInitiator(eligible, freshSalon);
-  const otherForInit = allPersonas.filter(p => p.tokenId !== initiator.tokenId);
+  const otherForInit = sampleOtherMembers(allPersonas.filter(p => p.tokenId !== initiator.tokenId));
   const initContent  = await generateSpeech(initiator, otherForInit, freshSalon, recentMsgs, "initiator", topic, lastLlmMsg);
 
   if (!initContent) {
@@ -273,7 +273,7 @@ async function runExchange(
     if (!responder) {
       console.log(`[salon-exchange] no responder available for ${salon.id} (only 1 eligible member)`);
     } else {
-      const otherForResp = allPersonas.filter(p => p.tokenId !== responder.tokenId);
+      const otherForResp = sampleOtherMembers(allPersonas.filter(p => p.tokenId !== responder.tokenId));
       const freshRecent  = [...recentMsgs, initMsg];
       const respContent  = await generateSpeech(responder, otherForResp, freshSalon, freshRecent, "responder", topic, initMsg);
       if (!respContent) {
@@ -384,7 +384,7 @@ async function maybeGenerateWorkProposal(
       messages: [
         {
           role:    "system",
-          content: buildSystemPrompt(initiator, allPersonas.filter(p => p.tokenId !== initiator.tokenId)),
+          content: buildSystemPrompt(initiator, sampleOtherMembers(allPersonas.filter(p => p.tokenId !== initiator.tokenId))),
         },
         {
           role:    "user",
