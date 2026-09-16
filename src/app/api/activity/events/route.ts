@@ -170,6 +170,14 @@ const WINDOW = 25_000n;
 // definitely happened (verified independently via a direct eth_getLogs call) never
 // showed up in the feed. Every getLogs call now goes through this limiter so total
 // in-flight requests stay bounded regardless of how many event types run concurrently.
+// Vercel's edge cache serves repeated requests within this window without invoking the
+// function at all — no Neon read, no RPC calls. Kept short (well under the 5-min cron
+// interval) so it only dedupes bursts of real page-load traffic; the cron's own requests
+// are always spaced far enough apart to pass through and keep advancing the cursor.
+// This is the main lever against Neon transfer growing with visitor count rather than
+// with actual chain activity — see project memory on Neon quota for the full reasoning.
+const EDGE_CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=30" };
+
 const RPC_CONCURRENCY = 8;
 let activeRpcRequests = 0;
 const rpcWaitQueue: Array<() => void> = [];
@@ -392,7 +400,7 @@ export async function GET() {
       return NextResponse.json({
         events,
         meta: { fromBlock: String(floor), toBlock: String(latest), cachedAt: Date.now() },
-      }, { headers: { "X-Cache": "UP_TO_DATE" } });
+      }, { headers: { "X-Cache": "UP_TO_DATE", ...EDGE_CACHE_HEADERS } });
     }
 
     // Bounded window — never scans more than WINDOW blocks per request, regardless
@@ -626,10 +634,26 @@ export async function GET() {
       });
     });
 
+    // Re-read the cache fresh right before merging/writing. `cached` above was read at the
+    // START of this request, but a full scan takes 15-25s+ — wide enough for a concurrent
+    // request (cron every 5 min, plus manual catch-up calls, with no locking on this route)
+    // to have already advanced the cursor further and written its own result in the
+    // meantime. Merging against the stale start-of-request snapshot would silently overwrite
+    // that newer state with less data — this is what wiped the accumulated event history
+    // back to empty after a burst of manual catch-up calls overlapped with a cron tick.
+    const freshCached = await readCache();
+    if (freshCached?.lastScannedBlock && BigInt(freshCached.lastScannedBlock) >= to) {
+      // Someone else already reached at least as far as we did — writing our result (built
+      // from a stale merge base) would regress their progress. Their data supersedes ours.
+      console.log(`[activity/events] superseded by a concurrent request (cache already at ${freshCached.lastScannedBlock} >= our ${to}) — skipping write`);
+      const merged = await mergeTxLog(freshCached.events);
+      return NextResponse.json({ ...freshCached, events: merged }, { headers: { "X-Cache": "SUPERSEDED", ...EDGE_CACHE_HEADERS } });
+    }
+
     // Merge with whatever was already accumulated (this window's new events come first
     // since we always scan forward), cap the blob so it doesn't grow unbounded — older
     // events past MAX_EVENTS_KEPT are still recoverable from tx_log / the chain itself.
-    const allEvents = [...events, ...(cached?.events ?? [])].slice(0, MAX_EVENTS_KEPT);
+    const allEvents = [...events, ...(freshCached?.events ?? [])].slice(0, MAX_EVENTS_KEPT);
     allEvents.sort((a, b) => {
       const diff = BigInt(b.blockNumber) - BigInt(a.blockNumber);
       return diff > 0n ? 1 : diff < 0n ? -1 : 0;
@@ -647,7 +671,7 @@ export async function GET() {
     console.log(`[activity/events] +${events.length} new events (window ${from}-${to}/${latest}) in ${Date.now() - t0}ms — ${allEvents.length} total (+tx_log → ${merged.length})`);
 
     return NextResponse.json({ ...payload, events: merged }, {
-      headers: { "X-Cache": to < latest ? "CATCHING_UP" : "MISS" },
+      headers: { "X-Cache": to < latest ? "CATCHING_UP" : "MISS", ...EDGE_CACHE_HEADERS },
     });
 
   } catch (err) {
