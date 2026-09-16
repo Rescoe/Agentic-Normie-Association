@@ -2,11 +2,12 @@ name: ANA — Activity Feed Catchup
 
 on:
   schedule:
-    # Every 30 minutes — GET /api/activity/events only advances its scan cursor
-    # by WINDOW (100 000 blocks, ~55h of chain time) per call and is otherwise
-    # a no-op once caught up, so this cadence is generous in both directions:
-    # fast enough to clear a large backlog in a few hours, cheap to poll when idle.
-    - cron: '*/30 * * * *'
+    # Every 5 minutes — WINDOW was cut down to 25 000 blocks (~14h of chain time)
+    # to stay well clear of public-RPC rate limits (see route.ts's RPC_CONCURRENCY
+    # comment), so catching up the multi-million-block backlog to LAUNCH_FLOOR_BLOCK
+    # needs many more ticks than before. Each run only takes ~15-20s, so 5-minute
+    # cadence is cheap; still a no-op once caught up.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:

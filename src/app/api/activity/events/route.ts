@@ -133,21 +133,59 @@ const GC_LABELS: Record<string, string> = {
 
 const CHUNK      = 2_000n;
 const BATCH_SIZE = 20;
-const SCAN_RANGE = 2_000_000n; // ~46 days on Base — covers all ANA deployment history since launch
+// AssociationCore's actual deployment block (2026-06-10T21:10:41Z, per Simple-Deploy-Solidity's
+// deployed.json), rounded down for safety margin. This MUST be a fixed constant, not computed
+// from `latest` — it used to be `latest - 2_000_000n` ("46 days back"), which is a *sliding*
+// window: every day that passes without the cursor finishing its catch-up, the floor itself
+// creeps forward and permanently strands whatever the cursor hadn't reached yet. That's why
+// registrations from ~90 days ago (e.g. bitpixi.base.eth, roubzi.eth — block ~47.19M) never
+// showed up even though the cron was running: by the time anyone looked, "46 days back" from
+// the then-current block had already slid past those blocks, and `from = max(lastScanned+1,
+// floor)` never lets the scan go back below the (now later) floor to pick them up. A fixed
+// floor anchored to the real deployment block doesn't have this problem — it never moves.
+const LAUNCH_FLOOR_BLOCK = 47_000_000n;
 // Vercel Hobby hard-caps every function at 60s NO MATTER what maxDuration says — there is no
-// "give it more time" fix. Re-scanning the full SCAN_RANGE on every cache miss was the actual
-// bug: with degraded public RPCs, 2M blocks × 17 event types simply cannot finish in 60s, so
-// the route timed out with zero response instead of degrading gracefully.
-// WINDOW bounds how many *new* blocks a single request is allowed to scan — the cache now
-// stores a permanent lastScannedBlock cursor (see CachedPayload) and each request only
-// advances it by one WINDOW. First load after a deploy needs ~10 page loads/cron ticks to
-// fully catch up the 2M-block backlog; every load after that only scans the handful of
-// blocks produced since the last request, which is always fast.
-// Conservative for now — llamarpc (the fast primary) is mid-outage and drpc.org (the
-// fallback) is noticeably slower/flakier under load. Once llamarpc recovers this can
-// safely go back up; catching up the 2M-block backlog just takes more requests at a
-// smaller WINDOW, never a timeout.
-const WINDOW = 100_000n;
+// "give it more time" fix. Re-scanning the full history on every cache miss was the original
+// bug: with degraded public RPCs, millions of blocks × 17 event types simply cannot finish in
+// 60s, so the route timed out with zero response instead of degrading gracefully.
+// WINDOW bounds how many *new* blocks a single request is allowed to scan — the cache stores a
+// permanent lastScannedBlock cursor (see CachedPayload) and each request only advances it by
+// one WINDOW. Kept deliberately small (measured empirically, see RPC_CONCURRENCY comment below):
+// llamarpc — the fast primary — is in an active outage (HTTP 525) as of 2026-09-16, so both local
+// and production are actually falling back to mainnet.base.org / drpc.org, which are far more
+// rate-limit-prone. A larger WINDOW here just means more silently-dropped chunks, not faster
+// catch-up. Catching up from LAUNCH_FLOOR_BLOCK to "now" (~4.4M blocks) takes ~175 cron ticks at
+// this WINDOW — slower, but each tick actually finds what it scans instead of racing a rate
+// limit. Cron cadence bumped to every 5 min (see activity-catchup.yml) to compensate. Safe to
+// raise WINDOW again once llamarpc (or another high-limit RPC) is confirmed healthy.
+const WINDOW = 25_000n;
+
+// ─── Global RPC concurrency limiter ───────────────────────────────────────────
+// mainnet.base.org rate-limits well below what this route used to generate: up to 17
+// event types × BATCH_SIZE parallel chunks each meant 100+ simultaneous eth_getLogs
+// calls. Measured directly against mainnet.base.org: a 40-request burst got ~37%
+// rejected with "over rate limit". Those rejections were swallowed by the bare
+// `.catch(() => [])` below, so a rate-limited chunk looked identical to "no events in
+// this range" — this, not just the sliding-floor bug above, is why registrations that
+// definitely happened (verified independently via a direct eth_getLogs call) never
+// showed up in the feed. Every getLogs call now goes through this limiter so total
+// in-flight requests stay bounded regardless of how many event types run concurrently.
+const RPC_CONCURRENCY = 8;
+let activeRpcRequests = 0;
+const rpcWaitQueue: Array<() => void> = [];
+
+async function withRpcLimit<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeRpcRequests >= RPC_CONCURRENCY) {
+    await new Promise<void>(resolve => rpcWaitQueue.push(resolve));
+  }
+  activeRpcRequests++;
+  try {
+    return await fn();
+  } finally {
+    activeRpcRequests--;
+    rpcWaitQueue.shift()?.();
+  }
+}
 
 async function fetchLogs(
   address: `0x${string}` | `0x${string}`[],
@@ -171,10 +209,24 @@ async function fetchLogs(
   for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
     const batch = chunks.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
-      batch.map(c =>
-        rpc.getLogs({ address, event, fromBlock: c.from, toBlock: c.to })
-           .catch((): Log[] => [])
-      )
+      batch.map(async c => {
+        const call = () => withRpcLimit(() => rpc.getLogs({ address, event, fromBlock: c.from, toBlock: c.to }));
+        // Rate-limit is transient, not "no events" — worth retrying with backoff before
+        // giving up. Any other error (malformed range, etc.) fails fast, since retrying
+        // it would just waste the request budget. Up to 3 attempts total: a single retry
+        // wasn't enough when the RPC is under sustained load for the whole request, not
+        // just a momentary burst.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            return await call();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (!/rate limit/i.test(msg) || attempt === 2) return [] as Log[];
+            await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+          }
+        }
+        return [] as Log[];
+      })
     );
     allLogs.push(...results.flat());
   }
@@ -285,7 +337,10 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 // only scans forward from there, bounded by WINDOW. There is nothing to "expire":
 // once an event is found, it stays, and the cursor only ever moves forward.
 
-const CACHE_KEY      = "activity:events:v5"; // bumped — cursor-based schema (lastScannedBlock)
+// bumped v5 → v6: the old cursor was already stuck at block ~50.58M under the sliding-floor
+// bug above, past all of ANA's early history — resuming it as-is would never go back and
+// pick up what it skipped. A fresh key forces a clean re-scan from LAUNCH_FLOOR_BLOCK.
+const CACHE_KEY       = "activity:events:v6";
 const MAX_EVENTS_KEPT = 1000; // keep the blob bounded — older events are still in tx_log/on-chain
 
 interface CachedPayload {
@@ -323,9 +378,9 @@ export async function GET() {
     const latest = await rpc.getBlockNumber();
     const cached = await readCache();
 
-    // First-ever run: floor is SCAN_RANGE blocks back (covers since ANA's launch).
-    // Every run after that: resume exactly where the last one left off.
-    const floor = latest > SCAN_RANGE ? latest - SCAN_RANGE : 0n;
+    // First-ever run: floor is the fixed launch block (never moves — see comment above
+    // LAUNCH_FLOOR_BLOCK). Every run after that: resume exactly where the last one left off.
+    const floor = LAUNCH_FLOOR_BLOCK;
     const lastScanned = cached?.lastScannedBlock ? BigInt(cached.lastScannedBlock) : floor - 1n;
     const from = lastScanned + 1n > floor ? lastScanned + 1n : floor;
 
