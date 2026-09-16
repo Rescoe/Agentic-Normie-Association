@@ -7,7 +7,7 @@ import Image                                 from "next/image";
 import { useTranslations } from "next-intl";
 import { CONTRACT_ADDRESSES, CONSTITUENT_ASSEMBLY_ABI, ROLE_LABELS, ROLES } from "@/lib/contracts";
 import { getNormieImageUrl }                 from "@/lib/normiesApi";
-import type { ActivityEvent }                from "@/app/api/activity/events/route";
+import type { ActivityEvent }                from "@/lib/activityScanner";
 
 // ─── Chain client (only for ElectedRolesPanel — 6 small calls) ───────────────
 
