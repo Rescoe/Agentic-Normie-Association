@@ -14,7 +14,7 @@ import {
 } from "@/lib/salonStore";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL        = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL        = "llama-3.3-70b-versatile";
 
 async function generateSummaryText(
   salonName:    string,

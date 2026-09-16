@@ -82,7 +82,7 @@ export const AGORA_SALON_ID       = "salon_agora_ana";
 const NEON_KEY                    = "salon-store";
 const DATA_FILE                   = path.join(process.cwd(), "data", "salon.json");
 const MAX_MESSAGES_PER_HOUR       = 12;
-const MAX_MESSAGES_PER_SALON      = 500;
+const MAX_MESSAGES_PER_SALON      = 100;
 // Keep last N messages after synthesis (recent context for Normies)
 export const SYNTHESIS_KEEP_LAST  = 10;
 // Minimum messages in a salon before synthesis is worthwhile
@@ -129,7 +129,20 @@ async function neonSave(store: SalonStore): Promise<void> {
   try {
     const { kvSet, USE_NEON } = await import("./db");
     if (!USE_NEON) return;
-    await kvSet(NEON_KEY, JSON.stringify(store));
+    // Strip messages from closed salons before writing — keeps the JSON small.
+    // Closed salons already have summaries; in-memory store is not affected.
+    const pruned: SalonStore = {
+      ...store,
+      salons: Object.fromEntries(
+        Object.entries(store.salons).map(([id, salon]) => [
+          id,
+          salon.isOpen
+            ? salon
+            : { ...salon, messages: salon.messages.slice(-SYNTHESIS_KEEP_LAST) },
+        ])
+      ),
+    };
+    await kvSet(NEON_KEY, JSON.stringify(pruned));
     console.log(`[salonStore] neon saved — ${store.salons[AGORA_SALON_ID]?.messages.length ?? 0} agora msgs`);
   } catch (e) {
     console.error("[salonStore] neonSave error:", e);

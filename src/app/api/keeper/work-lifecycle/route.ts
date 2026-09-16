@@ -28,7 +28,7 @@ import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 
-const MODEL        = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL        = "llama-3.3-70b-versatile";
 const MODEL_FAST   = "llama-3.1-8b-instant";
 
 // A work that fails the same pipeline step this many times in a row gets

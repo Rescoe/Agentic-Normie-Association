@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model:           "meta-llama/llama-4-scout-17b-16e-instruct",
+      model:           "llama-3.3-70b-versatile",
       max_tokens:      280,
       temperature:     0.97,
       response_format: { type: "json_object" },
