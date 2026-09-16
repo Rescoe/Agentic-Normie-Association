@@ -13,9 +13,11 @@ import { neon } from "@neondatabase/serverless";
 // Vercel Neon integration creates NEON_DB_ANA_POSTGRES_URL (prefix = integration name).
 // Manual override: NEON_DB_ANA (bare, without suffix).
 const connStr =
-  process.env.NEON_DB_ANA_POSTGRES_URL ??   // Vercel Neon integration (auto-generated)
-  process.env.NEON_DB_ANA_DATABASE_URL ??   // alternative Vercel name
-  process.env.NEON_DB_ANA ??               // manual / legacy
+  process.env.NEON_DB_ANA_POSTGRES_URL ??          // prefix=NEON_DB_ANA, suffix=_POSTGRES_URL
+  process.env.NEON_DB_ANA_POSTGRES_DATABASE_URL ??  // prefix=NEON_DB_ANA_POSTGRES, suffix=_DATABASE_URL (Vercel actual)
+  process.env.NEON_DB_ANA_POSTGRES_POSTGRES_URL ??  // prefix=NEON_DB_ANA_POSTGRES, suffix=_POSTGRES_URL (Vercel actual)
+  process.env.NEON_DB_ANA_DATABASE_URL ??           // alternative
+  process.env.NEON_DB_ANA ??                        // manual / legacy
   "";
 
 export const USE_NEON = !!connStr;
