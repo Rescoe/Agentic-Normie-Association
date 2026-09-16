@@ -33,6 +33,32 @@ export interface NextElection {
   isOpen: boolean;
 }
 
+export function fmtDate(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric",
+  });
+}
+
+/**
+ * Human-readable description of the constituent session's real timing, computed
+ * from on-chain state instead of the fixed pre-launch estimate ("June 30 – July
+ * 7, 2026") that both the homepage and /roadmap used to hardcode independently.
+ * Returns null when there's no session yet (id === 0) — callers fall back to
+ * their own "not started" copy in that case.
+ */
+export function describeSessionPeriod(session: SessionLike | null): string | null {
+  if (!session || session.id === 0) return null;
+  if (session.resolved) return `${fmtDate(session.openedAt)} – ${fmtDate(session.closedAt)}`;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (session.active && nowSec < session.deadline) {
+    return `Voting open since ${fmtDate(session.openedAt)}`;
+  }
+  if (session.active) {
+    return `Opened ${fmtDate(session.openedAt)} — resolution pending`;
+  }
+  return null;
+}
+
 /** Computes the next (or current) election window from on-chain session state. */
 export function computeNextElection(session: SessionLike | null): NextElection {
   if (!session || session.id === 0) {

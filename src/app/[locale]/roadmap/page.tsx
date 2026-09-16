@@ -4,6 +4,14 @@ import { Footer } from "@/components/Footer";
 import { GovernanceCalendarWidget } from "@/components/GovernanceCalendarWidget";
 import { readChainStats, readRoleHolder } from "@/lib/chainReader";
 import { ROLES } from "@/lib/contracts";
+import { describeSessionPeriod } from "@/lib/electionSchedule";
+
+// readChainStats() calls out to Base via viem's http() transport, which uses
+// the global fetch() Next.js patches — without this, the App Router can treat
+// the page as static and freeze these on-chain reads at build time (same class
+// of bug as the Neon driver fetch-cache issue). See src/app/api/status &
+// src/app/api/election/next, which already force-dynamic for the same reason.
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Roadmap — ANA",
@@ -118,6 +126,9 @@ export default async function RoadmapPage() {
     };
   });
   const donePhase = phases.filter(p => p.status === "done").length;
+  const periodOverrides: Partial<Record<string, string>> = {
+    act2: describeSessionPeriod(stats.sessionState) ?? undefined,
+  };
 
   const badgeLabels: Record<PhaseStatus, string> = {
     done: t("badges.done"),
@@ -180,7 +191,7 @@ export default async function RoadmapPage() {
                   <div className="space-y-2 md:pt-1">
                     <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">{t(`phases.${phase.key}.id`)}</p>
                     <PhaseBadge status={phase.status} label={badgeLabels[phase.status]} />
-                    <p className="font-mono text-[10px] text-[--fg-muted]">{t(`phases.${phase.key}.period`)}</p>
+                    <p className="font-mono text-[10px] text-[--fg-muted]">{periodOverrides[phase.key] ?? t(`phases.${phase.key}.period`)}</p>
                   </div>
 
                   {/* Colonne droite — contenu */}
@@ -204,7 +215,7 @@ export default async function RoadmapPage() {
                               </p>
                               {item.noteKey && (
                                 <p className="font-mono text-[10px] text-[--fg-muted] mt-0.5 leading-relaxed">
-                                  → {t(`phases.${phase.key}.${item.noteKey}`)}
+                                  → {t(`phases.${phase.key}.items.${item.noteKey}`)}
                                 </p>
                               )}
                             </div>

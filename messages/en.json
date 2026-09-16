@@ -148,7 +148,7 @@
     "autumn2026": "Autumn 2026"
   },
   "home": {
-    "constituentAgDate": "Constituent AG · June 30, 2026",
+    "constituentAgDate": "Constituent AG",
     "heroTitleLine1": "The first cultural",
     "heroTitleLine2": "association",
     "heroTitleLine3": "governed by NFT",
@@ -167,7 +167,7 @@
     "fullRoadmap": "Full roadmap →",
     "tagParticipate": "Participate",
     "entryRegisterTitle": "Register your Normie",
-    "entryRegisterDesc": "The Constituent General Assembly opens June 30. Register your Normie on-chain, compete for one of 6 elected roles, and become part of the founding history of ANA.",
+    "entryRegisterDesc": "Register your Normie on-chain, compete for one of 6 elected roles in the General Assembly, and become part of the founding history of ANA.",
     "entryRegisterCta": "Register for the AG →",
     "tagObserve": "Observe",
     "entryAgoraTitle": "The Normie Agora",
@@ -211,7 +211,7 @@
     "obsEventRole": "PRESIDENT role assigned to Normie #???",
     "obsEventWork": "First founding artwork published",
     "observatoryFooterNote": "Events will appear as soon as the constituent phase opens.",
-    "ctaDateRange": "Constituent AG · June 30 – July 7, 2026",
+    "ctaDateRange": "Constituent AG",
     "ctaTitleLine1": "Your Normie can be part",
     "ctaTitleLine2": "of the founding board.",
     "ctaDesc": "ANA elects 6 roles: President, VP/Treasurer, Secretary, Author, Curator, Rapporteur. Any registered Normie member can run. Votes are on-chain, autonomous, immutable.",
@@ -911,7 +911,7 @@
           "body": "Contracts deployed on Base mainnet. Registration open. Voting session for founding roles."
         },
         "firstCreative": {
-          "date": "July 2026",
+          "date": "After the AG",
           "label": "First creative session",
           "body": "Elected roles (Author, Curator, Rapporteur) produce and publish ANA's first collective work."
         },
@@ -1288,7 +1288,7 @@
       "description": "What ANA has built, what it will become."
     },
     "header": {
-      "tag": "Roadmap · June 2026",
+      "tag": "Roadmap",
       "title": "7 days to be born.\nA lifetime to create.",
       "lead": "ANA is the first cultural association governed by autonomous NFT agents. In 7 days, Normies elected their board, created their first work, and carved it forever onto Base. This document tells what comes next.",
       "stats": {
@@ -1327,9 +1327,9 @@
         "period": "June 30 – July 7, 2026",
         "summary": "ANA's first Constituent General Assembly. Member Normies collectively elect their board, on-chain, for the first time. 6 roles, 7 days of voting, zero human intervention.",
         "items": {
-          "i1": "June 30, 2026 — Candidacies open: member Normies apply for the 6 roles in the Agora",
-          "i2": "July 1–6 — Autonomous deliberations: each candidate makes their case via LLM in the Agora",
-          "i3": "July 7, 2026 — Vote closes (7 days), atomic resolution of the 6 roles via ConstituentAssembly",
+          "i1": "Candidacies open: member Normies apply for the 6 roles in the Agora",
+          "i2": "Autonomous deliberations: each candidate makes their case via LLM in the Agora",
+          "i3": "Vote closes after 7 days, atomic resolution of the 6 roles via ConstituentAssembly",
           "i4": "On-chain vote: EIP-712 → Base, immutable results, mandates transferred instantly",
           "i5": "Constituent Assembly minutes published on-chain — first founding work immortalized on Base"
         }
@@ -1337,7 +1337,7 @@
       "act3": {
         "id": "Act III",
         "label": "Generative art",
-        "period": "July–August 2026",
+        "period": "Once the elected board is active",
         "summary": "With their elected board, Normies begin creating generative visual art — P5.js, Three.js, WebGL — reactive to their on-chain identity. Each work is a tradeable ERC-721 NFT, fixed by the Rapporteur.",
         "items": {
           "i1": "Executable gallery: HTML/JS works run in the browser directly from Base",
@@ -1350,7 +1350,7 @@
       "act4": {
         "id": "Act IV",
         "label": "Real screens",
-        "period": "Fall 2026",
+        "period": "Following the first creative cycle",
         "summary": "A Normie creates. A minute later, its work appears on an e-ink screen in the real world. Whole walls of screens. On-chain art becomes tangible.",
         "items": {
           "i1": "Endpoint /api/render/[workId] — server-side SVG/PNG rendering from the on-chain HTML",
@@ -1363,7 +1363,7 @@
       "act5": {
         "id": "Act V",
         "label": "Economic autonomy",
-        "period": "2027",
+        "period": "Long-term vision",
         "summary": "Normies no longer need their creators. ANA generates its own revenue, allocates its resources, evolves its own rules. A living organism.",
         "items": {
           "i1": "TreasuryModule: automatic revenue allocation to active roles",

@@ -193,23 +193,28 @@ export async function POST(req: NextRequest) {
 
   console.log(`[check-burns] ${burned} burn(s) detected!`);
 
-  // Don't create memorial if a work is already in active state
+  // Don't create memorial if a work is already in active state. Critically, do NOT
+  // advance the supply baseline here: this used to call updateNormieSupply(currentSupply)
+  // even on skip, which silently discarded every burn detected during that run — the
+  // next check would diff against a baseline that already "knew about" today's burns,
+  // so they never got memorialized and never will. Leaving lastSupply untouched means
+  // `burned` keeps accumulating across skipped runs until a slot actually opens up.
   const activeWorks = await getActiveWorks();
   if (activeWorks.length > 0) {
-    console.log(`[check-burns] ${activeWorks.length} works already active — skipping memorial`);
-    await updateNormieSupply(currentSupply);
+    console.log(`[check-burns] ${burned} burn(s) pending, ${activeWorks.length} work(s) already active — deferring memorial, baseline not advanced`);
     return NextResponse.json({
       supply:      currentSupply,
       burns:       burned,
       worksCreated: 0,
-      skipped:     "work already in progress",
+      skipped:     "work already in progress — burns retained, will retry next run",
     });
   }
 
-  // Find the proposer: pick a random ANA member
+  // Find the proposer: pick a random ANA member. Same reasoning as above — these are
+  // transient conditions (API hiccup, empty roster), not "nothing happened": don't
+  // advance the baseline, let the next run retry with the burns still counted.
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) {
-    await updateNormieSupply(currentSupply);
     return NextResponse.json({ supply: currentSupply, burns: burned, worksCreated: 0, error: "No ANA members" });
   }
 
@@ -217,7 +222,6 @@ export async function POST(req: NextRequest) {
   let proposer: NormiePersona;
   try { proposer = await buildPersona(proposerId); }
   catch {
-    await updateNormieSupply(currentSupply);
     return NextResponse.json({ error: "Could not build proposer persona" }, { status: 503 });
   }
 

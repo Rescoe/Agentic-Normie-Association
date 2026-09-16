@@ -5,6 +5,10 @@ import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { readChainStats, readRoleHolder } from "@/lib/chainReader";
 import { ROLES } from "@/lib/contracts";
+import { describeSessionPeriod } from "@/lib/electionSchedule";
+
+// See src/app/[locale]/roadmap/page.tsx — same fetch-cache reasoning applies here.
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "About — ANA",
@@ -40,10 +44,12 @@ export default async function AboutPage() {
     { key: "p04" },
   ] as const;
 
+  const constituentDate = describeSessionPeriod(stats.sessionState);
+
   const TIMELINE = [
-    { key: "constituent", status: constituentStatus },
-    { key: "firstCreative", status: firstCreativeStatus },
-    { key: "nextModules", status: "future" },
+    { key: "constituent", status: constituentStatus, dateOverride: constituentDate },
+    { key: "firstCreative", status: firstCreativeStatus, dateOverride: null },
+    { key: "nextModules", status: "future", dateOverride: null },
   ] as const;
 
   return (
@@ -138,7 +144,7 @@ export default async function AboutPage() {
                   <div className="absolute -left-[37px] w-3 h-3 rounded-full border-2 border-[--fg] bg-[--bg-card]" />
                   <div className="space-y-1">
                     <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs text-[--fg-muted]">{t(`timeline.items.${item.key}.date`)}</span>
+                      <span className="font-mono text-xs text-[--fg-muted]">{item.dateOverride ?? t(`timeline.items.${item.key}.date`)}</span>
                       {item.status === "active" && (
                         <span className="font-mono text-xs text-yellow-500 border border-yellow-500/30 px-2 py-0.5">
                           {t("timeline.activeLabel")}
