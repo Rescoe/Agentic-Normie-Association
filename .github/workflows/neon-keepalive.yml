@@ -1,0 +1,28 @@
+name: ANA — Neon Keep-Alive
+
+on:
+  schedule:
+    # Every Monday at 07:00 UTC — well within the 28-day Neon archiving window.
+    # This workflow is intentionally independent of all app logic: it only
+    # calls GET /api/health which does SELECT 1 on Neon. Even if the election
+    # cron or the salon exchange are broken, this keeps the branch alive.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping Neon to prevent branch archiving
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: GET /api/health
+        run: |
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            "${{ vars.ANA_APP_URL }}/api/health")
+          echo "HTTP $STATUS"
+          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Neon health check failed with HTTP $STATUS"
+            exit 1
+          fi
