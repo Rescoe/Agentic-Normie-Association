@@ -1,16 +1,13 @@
 name: ANA — Activity Feed Catchup
 
 on:
-  # TEMPORARILY DISABLED (2026-09-16): the route's read-modify-write cache update has a
-  # narrow race window (fresh-read-then-write, no DB-level atomicity yet) that a concurrent
-  # cron tick can still hit during a manual catch-up push, silently dropping accumulated
-  # events. Paused here so the manual catch-up has sole access to the cache key while it
-  # finishes recovering the events lost to that race. RE-ENABLE the `schedule:` block below
-  # once the manual catch-up is confirmed complete (see project memory
-  # project_ana_activity_feed_bugs for the full story) — don't leave this off long-term,
-  # steady-state relies on this cron once caught up.
-  # schedule:
-  #   - cron: '*/5 * * * *'
+  schedule:
+    # Every 5 minutes. Re-enabled 2026-09-16 after a manual catch-up (run with this
+    # schedule paused, to avoid racing it — see project_ana_activity_feed_bugs memory)
+    # brought the cursor from LAUNCH_FLOOR_BLOCK up past current. Steady-state scans are
+    # small (one WINDOW's worth of new blocks per tick), which is much less exposed to
+    # the free-RPC silent-empty-result issue than the marathon historical sweep was.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
