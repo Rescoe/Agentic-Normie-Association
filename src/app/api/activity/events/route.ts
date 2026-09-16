@@ -345,11 +345,11 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 // only scans forward from there, bounded by WINDOW. There is nothing to "expire":
 // once an event is found, it stays, and the cursor only ever moves forward.
 
-// bumped v6 → v7: the read-modify-write race (see comment above the fresh-cache re-check
-// in GET) clobbered the v6 cursor's accumulated events back to empty after it had already
-// scanned past block 47.85M — the race is fixed now, but the cursor won't revisit blocks
-// it already marked scanned, so the lost events need one more clean re-scan to recover.
-const CACHE_KEY        = "activity:events:v7";
+// bumped v7 → v8: even with the fresh-read guard, a concurrent cron tick still landed
+// inside the narrow window between v7's fresh-read and its write, dropping the recovered
+// registrations again. Cron is paused (see activity-catchup.yml) for this re-scan so
+// there's only one writer — see project_ana_activity_feed_bugs memory for the full trail.
+const CACHE_KEY         = "activity:events:v8";
 const MAX_EVENTS_KEPT = 1000; // keep the blob bounded — older events are still in tx_log/on-chain
 
 interface CachedPayload {

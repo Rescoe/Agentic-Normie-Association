@@ -1,13 +1,16 @@
 name: ANA — Activity Feed Catchup
 
 on:
-  schedule:
-    # Every 5 minutes — WINDOW was cut down to 25 000 blocks (~14h of chain time)
-    # to stay well clear of public-RPC rate limits (see route.ts's RPC_CONCURRENCY
-    # comment), so catching up the multi-million-block backlog to LAUNCH_FLOOR_BLOCK
-    # needs many more ticks than before. Each run only takes ~15-20s, so 5-minute
-    # cadence is cheap; still a no-op once caught up.
-    - cron: '*/5 * * * *'
+  # TEMPORARILY DISABLED (2026-09-16): the route's read-modify-write cache update has a
+  # narrow race window (fresh-read-then-write, no DB-level atomicity yet) that a concurrent
+  # cron tick can still hit during a manual catch-up push, silently dropping accumulated
+  # events. Paused here so the manual catch-up has sole access to the cache key while it
+  # finishes recovering the events lost to that race. RE-ENABLE the `schedule:` block below
+  # once the manual catch-up is confirmed complete (see project memory
+  # project_ana_activity_feed_bugs for the full story) — don't leave this off long-term,
+  # steady-state relies on this cron once caught up.
+  # schedule:
+  #   - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
