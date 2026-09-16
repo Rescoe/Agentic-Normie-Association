@@ -345,10 +345,11 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 // only scans forward from there, bounded by WINDOW. There is nothing to "expire":
 // once an event is found, it stays, and the cursor only ever moves forward.
 
-// bumped v5 → v6: the old cursor was already stuck at block ~50.58M under the sliding-floor
-// bug above, past all of ANA's early history — resuming it as-is would never go back and
-// pick up what it skipped. A fresh key forces a clean re-scan from LAUNCH_FLOOR_BLOCK.
-const CACHE_KEY       = "activity:events:v6";
+// bumped v6 → v7: the read-modify-write race (see comment above the fresh-cache re-check
+// in GET) clobbered the v6 cursor's accumulated events back to empty after it had already
+// scanned past block 47.85M — the race is fixed now, but the cursor won't revisit blocks
+// it already marked scanned, so the lost events need one more clean re-scan to recover.
+const CACHE_KEY        = "activity:events:v7";
 const MAX_EVENTS_KEPT = 1000; // keep the blob bounded — older events are still in tx_log/on-chain
 
 interface CachedPayload {
