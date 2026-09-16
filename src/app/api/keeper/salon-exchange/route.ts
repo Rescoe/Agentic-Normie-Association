@@ -22,7 +22,7 @@ import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch } from "@/lib/groq";
 
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "openai/gpt-oss-120b";
 const CONTEXT_MESSAGES = 12;
 
 const ANA_TOPICS = [

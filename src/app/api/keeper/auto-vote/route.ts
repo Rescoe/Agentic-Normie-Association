@@ -23,8 +23,8 @@ import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from 
 import { verifyAdminRequest } from "@/lib/adminAuth";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL    = "openai/gpt-oss-20b";
-const MODEL_F  = "openai/gpt-oss-20b";
+const MODEL    = "openai/gpt-oss-120b";
+const MODEL_F  = "openai/gpt-oss-120b";
 
 const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
 const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
