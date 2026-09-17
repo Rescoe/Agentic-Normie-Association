@@ -30,6 +30,7 @@ import { base, baseSepolia } from "viem/chains";
 import { CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { kvGet, kvSet } from "@/lib/db";
 import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
+import { runAutoVotePhase, type AutoVoteBody } from "@/app/api/keeper/auto-vote/route";
 
 const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
 const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
@@ -54,21 +55,21 @@ async function saveCycleState(s: CycleState): Promise<void> {
   await kvSet(CYCLE_KEY, JSON.stringify(s));
 }
 
-function appUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-}
-
-async function callAutoVote(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) throw new Error("CRON_SECRET not configured");
-  const r = await fetch(`${appUrl()}/api/keeper/auto-vote`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
-    body:    JSON.stringify(body),
-  });
-  const d = await r.json() as Record<string, unknown>;
-  if (!r.ok) throw new Error(`auto-vote ${body.phase} failed: ${JSON.stringify(d)}`);
-  return d;
+// Used to call directly into runAutoVotePhase() below instead of over HTTP — this used
+// to be a self-referential fetch to this same app's own /api/keeper/auto-vote via
+// NEXT_PUBLIC_APP_URL, which was never actually configured in Vercel and silently
+// defaulted to "http://localhost:3000" — unreachable from inside a serverless function,
+// so every single call failed instantly with "fetch failed". That's the real reason
+// election-cycle has failed on every run since the workflow existed (roughly 4 times a
+// day for ~3 months) — NOT the ConstituentAssembly authorization gap fixed earlier,
+// which only explains runs before that fix. See project_ana_election_cycle_self_fetch_bug
+// memory. A direct function call has no URL to get wrong.
+async function callAutoVote(body: AutoVoteBody): Promise<Record<string, unknown>> {
+  try {
+    return await runAutoVotePhase(body);
+  } catch (e) {
+    throw new Error(`auto-vote ${body.phase} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 export async function POST(req: NextRequest) {

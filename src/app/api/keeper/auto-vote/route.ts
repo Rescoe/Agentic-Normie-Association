@@ -8,6 +8,10 @@
  *                       mode=simulate → decisions only, no tx
  *                       mode=execute  → relayer submits castVoteAsRelayer() sequentially
  *   phase=close      → relayer calls triggerClose() on ConstituentAssembly
+ *
+ * runAutoVotePhase() is also exported for direct in-process calls (e.g. from
+ * election-cycle) instead of a self-referential HTTP fetch — see
+ * project_ana_election_cycle_self_fetch_bug memory for why that mattered.
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
@@ -21,6 +25,7 @@ import {
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 import { verifyAdminRequest } from "@/lib/adminAuth";
+import { runProposeWork } from "@/app/api/keeper/propose-work/route";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
@@ -265,67 +270,60 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
   return { ok, failed };
 }
 
-// ─── Route ────────────────────────────────────────────────────────────────────
+// ─── Core logic — callable directly (in-process) or via the POST handler below ─
 
-export async function POST(req: NextRequest) {
-  // This was previously completely unauthenticated — anyone could trigger LLM-driven
-  // candidacies/votes, or (mode=execute) have the relayer actually cast on-chain votes.
-  // Two ways in: a wallet-signed admin proof (manual trigger from the admin panel),
-  // or x-cron-secret (the automated election-cycle keeper, same secret as every
-  // other scheduled route in this app — not weaker, just a different caller).
-  const cronSecret = process.env.CRON_SECRET;
-  const isCronCall  = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
-  const isAdminCall = isCronCall ? false : (await verifyAdminRequest(req)).ok;
-  if (!isCronCall && !isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature is required" }, { status: 401 });
-  }
+export interface AutoVoteBody {
+  phase?: string;
+  mode?: string;
+  candidacies?: Candidacy[];
+}
 
-  let body: { phase?: string; mode?: string; candidacies?: Candidacy[] };
-  try { body = await req.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
+export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<string, unknown>> {
   const phase = body.phase ?? "vote";
   const mode  = body.mode  ?? "simulate";
 
-  if (!CORE || !CA)              return NextResponse.json({ error: "Contracts not configured" }, { status: 500 });
-  if (!process.env.GROQ_API_KEY) return NextResponse.json({ error: "GROQ_API_KEY missing" },   { status: 500 });
+  if (!CORE || !CA) throw new Error("Contracts not configured");
+  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY missing");
 
   // ── phase=close ──────────────────────────────────────────────────────────
   if (phase === "close") {
     const key = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
-    if (!key) return NextResponse.json({ error: "RELAYER_PRIVATE_KEY missing" }, { status: 500 });
+    if (!key) throw new Error("RELAYER_PRIVATE_KEY missing");
+    const wallet = createWalletClient({
+      account:   privateKeyToAccount(key),
+      chain:     CHAIN,
+      transport: http(RPC_URL),
+    });
+    const hash = await wallet.writeContract({
+      address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "triggerClose", args: [],
+    });
+    let closedSessionId = 0;
     try {
-      const wallet = createWalletClient({
-        account:   privateKeyToAccount(key),
-        chain:     CHAIN,
-        transport: http(RPC_URL),
-      });
-      const hash = await wallet.writeContract({
-        address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "triggerClose", args: [],
-      });
-      let closedSessionId = 0;
-      try {
-        const raw = await pub.readContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession" });
-        const t   = raw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean];
-        closedSessionId = Number(t[0]);
-      } catch { /* non-blocking */ }
-      const salonName = `AG Constitutive — Session #${closedSessionId}`;
-      const all = await listSalons();
-      const voteSalon = all.find(s => s.name === salonName);
-      if (voteSalon) await closeSalon(voteSalon.id, 0).catch(() => null);
+      const raw = await pub.readContract({ address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "currentSession" });
+      const t   = raw as unknown as readonly [bigint, bigint, bigint, bigint, boolean, boolean];
+      closedSessionId = Number(t[0]);
+    } catch { /* non-blocking */ }
+    const salonName = `AG Constitutive — Session #${closedSessionId}`;
+    const all = await listSalons();
+    const voteSalon = all.find(s => s.name === salonName);
+    if (voteSalon) await closeSalon(voteSalon.id, 0).catch(() => null);
 
-      // Auto-create work with the elected Auteur — fire-and-forget. Server-to-server,
-      // no wallet to sign with, so this uses the real shared secret (x-cron-secret),
-      // not the admin-signature path meant for browser-initiated calls.
-      const proposeUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/api/keeper/propose-work`;
-      const cronSecret = process.env.CRON_SECRET;
-      if (cronSecret) {
-        fetch(proposeUrl, { method: "POST", headers: { "x-cron-secret": cronSecret, "Content-Type": "application/json" }, body: "{}" })
-          .catch(() => null);
-      } else {
-        console.warn("[auto-vote] CRON_SECRET not configured — skipping auto propose-work after session close");
-      }
+    // Auto-create work with the elected Auteur. Was a self-referential HTTP fetch to
+    // this same app's own /api/keeper/propose-work, fired without awaiting it — in a
+    // Vercel serverless function that's doubly broken: the function can freeze/exit
+    // before the un-awaited fetch completes, and separately NEXT_PUBLIC_APP_URL was
+    // never configured, so the fetch always failed immediately regardless. Direct,
+    // awaited, in-process call instead — see project_ana_election_cycle_self_fetch_bug.
+    let postElection: string;
+    try {
+      await runProposeWork(null);
+      postElection = "created";
+    } catch (e) {
+      console.error("[auto-vote] auto propose-work after close failed (non-fatal):", e);
+      postElection = "failed";
+    }
 
-      return NextResponse.json({ phase: "close", txHash: hash, postElection: "propose-work triggered" });
-    } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
+    return { phase: "close", txHash: hash, postElection };
   }
 
   // ── Read session id ──────────────────────────────────────────────────────
@@ -343,15 +341,15 @@ export async function POST(req: NextRequest) {
   try {
     const raw = await pub.readContract({ address: CORE, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds" });
     memberIds = (raw as bigint[]).map(Number);
-  } catch (e) { return NextResponse.json({ error: `Chain read failed: ${e}` }, { status: 503 }); }
+  } catch (e) { throw new Error(`Chain read failed: ${e}`); }
 
-  if (memberIds.length === 0) return NextResponse.json({ message: "No registered members" });
+  if (memberIds.length === 0) return { message: "No registered members" };
 
   const personaRes = await Promise.allSettled(memberIds.map(id => buildPersona(id)));
   const personas   = personaRes
     .filter((r): r is PromiseFulfilledResult<NormiePersona> => r.status === "fulfilled")
     .map(r => r.value);
-  if (personas.length === 0) return NextResponse.json({ error: "No personas built" }, { status: 503 });
+  if (personas.length === 0) throw new Error("No personas built");
 
   // ── Candidacy phase (or implicit candidacy for vote phase) ────────────────
   // Use candidacies passed in body (from a previous candidacy call) OR compute fresh ones
@@ -411,7 +409,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (isExplicitCandidacy) {
-    return NextResponse.json({ phase: "candidacy", memberCount: memberIds.length, candidacies, voteSalonId });
+    return { phase: "candidacy", memberCount: memberIds.length, candidacies, voteSalonId };
   }
 
   // ── Vote phase ────────────────────────────────────────────────────────────
@@ -439,23 +437,49 @@ export async function POST(req: NextRequest) {
   }
 
   if (mode === "simulate") {
-    return NextResponse.json({
+    return {
       phase: "vote", mode: "simulate",
       candidacies, decisions: allDecisions,
       decisionCount: allDecisions.length,
       memberCount: personas.length,
       roleCount: ORDERED_ROLE_ENTRIES.length,
       voteSalonId,
-    });
+    };
   }
 
+  const result = await executeVotes(allDecisions);
+  return {
+    phase: "vote", mode: "execute",
+    candidacies, decisions: allDecisions,
+    submitted: result.ok, failed: result.failed,
+    voteSalonId,
+  };
+}
+
+// ─── Route ────────────────────────────────────────────────────────────────────
+
+export async function POST(req: NextRequest) {
+  // This was previously completely unauthenticated — anyone could trigger LLM-driven
+  // candidacies/votes, or (mode=execute) have the relayer actually cast on-chain votes.
+  // Two ways in: a wallet-signed admin proof (manual trigger from the admin panel),
+  // or x-cron-secret (the automated election-cycle keeper, same secret as every
+  // other scheduled route in this app — not weaker, just a different caller).
+  const cronSecret = process.env.CRON_SECRET;
+  const isCronCall  = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isAdminCall = isCronCall ? false : (await verifyAdminRequest(req)).ok;
+  if (!isCronCall && !isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature is required" }, { status: 401 });
+  }
+
+  let body: AutoVoteBody;
+  try { body = await req.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
+
   try {
-    const result = await executeVotes(allDecisions);
-    return NextResponse.json({
-      phase: "vote", mode: "execute",
-      candidacies, decisions: allDecisions,
-      submitted: result.ok, failed: result.failed,
-      voteSalonId,
-    });
-  } catch (e) { return NextResponse.json({ error: String(e) }, { status: 500 }); }
+    const result = await runAutoVotePhase(body);
+    return NextResponse.json(result);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const status = /not configured|missing/i.test(message) ? 500 : (/Chain read failed/.test(message) ? 503 : 500);
+    return NextResponse.json({ error: message }, { status });
+  }
 }

@@ -3,6 +3,10 @@
  * Un Normie (persona LLM) génère un titre + proposition d'œuvre et la crée en Neon (PROPOSED).
  * Appelé par l'admin après initiateWorkSession() ou par le cron salon-exchange.
  * Protected by x-cron-secret or a wallet-signed admin proof (see lib/adminAuth.ts).
+ *
+ * runProposeWork() is also exported for direct in-process calls (e.g. from
+ * auto-vote's close phase) instead of a self-referential HTTP fetch — see
+ * project_ana_election_cycle_self_fetch_bug memory for why that mattered.
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
@@ -47,29 +51,20 @@ async function getMemberIds(): Promise<number[]> {
   } catch { return []; }
 }
 
-export async function POST(req: NextRequest) {
-  const cronSecret  = process.env.CRON_SECRET;
-  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
-  const isAdminCall = (await verifyAdminRequest(req)).ok;
+export interface ProposedWorkResult {
+  id:         string;
+  title:      string;
+  proposal:   string;
+  proposedBy: string;
+  state:      string;
+}
 
-  if (!isCron && !isAdminCall) {
-    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
-  }
-  if (!process.env.GROQ_API_KEY) {
-    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
-  }
-
-  // Optional override: caller can specify a proposer (e.g. elected Auteur)
-  let forcedProposerId: number | null = null;
-  try {
-    const body = await req.json() as { proposerTokenId?: number };
-    if (body.proposerTokenId && body.proposerTokenId > 0) forcedProposerId = body.proposerTokenId;
-  } catch { /* body absent or not JSON — fine */ }
+/** Core logic, callable directly (in-process) or via the POST handler below. Throws on failure. */
+export async function runProposeWork(forcedProposerId: number | null): Promise<ProposedWorkResult> {
+  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY not configured");
 
   const memberIds = await getMemberIds();
-  if (memberIds.length === 0) {
-    return NextResponse.json({ error: "No member found on AssociationCore" }, { status: 503 });
-  }
+  if (memberIds.length === 0) throw new Error("No member found on AssociationCore");
 
   const [personaResults, allWorks] = await Promise.all([
     Promise.allSettled(memberIds.map(id => buildPersona(id))),
@@ -79,9 +74,7 @@ export async function POST(req: NextRequest) {
     .filter((r): r is PromiseFulfilledResult<NormiePersona> => r.status === "fulfilled")
     .map(r => r.value);
 
-  if (personas.length === 0) {
-    return NextResponse.json({ error: "Normies API unavailable" }, { status: 503 });
-  }
+  if (personas.length === 0) throw new Error("Normies API unavailable");
 
   // Prefer the elected Auteur; fall back to a random member
   const electedAuteurId = forcedProposerId ?? await getElectedAuteurId();
@@ -120,10 +113,6 @@ export async function POST(req: NextRequest) {
     },
     body: JSON.stringify({
       model:           "openai/gpt-oss-120b",
-      // Bumped 280 -> 350 alongside the same fix in salon-exchange.ts's embedded
-      // propose-work call (identical JSON schema) — 220 there was tight enough for
-      // Groq's own JSON-mode validation to occasionally reject truncated output
-      // outright (400 json_validate_failed).
       max_tokens:      350,
       temperature:     0.97,
       response_format: { type: "json_object" },
@@ -160,21 +149,17 @@ Respond ONLY in JSON, always in English:
     }),
   }).catch(() => null);
 
-  if (!res?.ok) {
-    return NextResponse.json({ error: "Groq API error" }, { status: 500 });
-  }
+  if (!res?.ok) throw new Error("Groq API error");
 
   const data = await res.json() as { choices: Array<{ message: { content: string } }> };
   const raw  = data.choices[0]?.message?.content?.trim();
-  if (!raw) return NextResponse.json({ error: "LLM returned empty response" }, { status: 500 });
+  if (!raw) throw new Error("LLM returned empty response");
 
   let parsed: { title?: string; proposal?: string; suggestedForm?: string };
   try { parsed = JSON.parse(raw); }
-  catch { return NextResponse.json({ error: "LLM response parse error", raw }, { status: 500 }); }
+  catch { throw new Error(`LLM response parse error: ${raw.slice(0, 200)}`); }
 
-  if (!parsed.title || !parsed.proposal) {
-    return NextResponse.json({ error: "LLM response missing title or proposal", parsed }, { status: 500 });
-  }
+  if (!parsed.title || !parsed.proposal) throw new Error("LLM response missing title or proposal");
 
   const VALID_FORMS = new Set(["haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl"]);
   const suggestedForm = parsed.suggestedForm && VALID_FORMS.has(parsed.suggestedForm) ? parsed.suggestedForm : undefined;
@@ -190,13 +175,36 @@ Respond ONLY in JSON, always in English:
 
   console.log(`[propose-work] "${work.title}" proposed by ${proposer.name} (#${proposer.tokenId})`);
 
-  return NextResponse.json({
-    work: {
-      id:         work.id,
-      title:      work.title,
-      proposal:   work.proposal,
-      proposedBy: work.proposedByName,
-      state:      work.state,
-    },
-  });
+  return {
+    id:         work.id,
+    title:      work.title,
+    proposal:   work.proposal,
+    proposedBy: work.proposedByName,
+    state:      work.state,
+  };
+}
+
+export async function POST(req: NextRequest) {
+  const cronSecret  = process.env.CRON_SECRET;
+  const isCron      = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isAdminCall = (await verifyAdminRequest(req)).ok;
+
+  if (!isCron && !isAdminCall) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
+  }
+
+  let forcedProposerId: number | null = null;
+  try {
+    const body = await req.json() as { proposerTokenId?: number };
+    if (body.proposerTokenId && body.proposerTokenId > 0) forcedProposerId = body.proposerTokenId;
+  } catch { /* body absent or not JSON — fine */ }
+
+  try {
+    const work = await runProposeWork(forcedProposerId);
+    return NextResponse.json({ work });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const status = /No member found|Normies API unavailable/.test(message) ? 503 : 500;
+    return NextResponse.json({ error: message }, { status });
+  }
 }
