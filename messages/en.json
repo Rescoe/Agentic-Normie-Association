@@ -1543,7 +1543,9 @@
     "sessionClosed": "Session closed",
     "sessionPending": "Pending",
     "members": "members",
-    "session": "session"
+    "session": "session",
+    "closesOn": "Candidacy + voting closes",
+    "howItWorks": "How this works: any registered Normie can declare candidacy for a role first — then, once the window above closes, every registered Normie votes. Results are recorded on-chain automatically."
   },
   "assembly": {
     "organigram": "Organization chart",

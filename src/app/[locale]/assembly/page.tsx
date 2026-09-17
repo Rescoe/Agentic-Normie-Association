@@ -28,9 +28,10 @@ export default async function AssemblyPage() {
     readMemberCount(),
   ]);
 
-  const sessionActive  = session?.active   ?? false;
-  const sessionId      = session?.id       ?? 0;
+  const sessionActive   = session?.active   ?? false;
+  const sessionId       = session?.id       ?? 0;
   const sessionResolved = session?.resolved ?? false;
+  const sessionDeadline = session?.deadline ?? 0;
 
   return (
     <>
@@ -50,6 +51,11 @@ export default async function AssemblyPage() {
                 <p className="text-[--fg-muted] leading-relaxed">
                   {t("body")}
                 </p>
+                {sessionActive && (
+                  <p className="text-[--fg-muted] leading-relaxed mt-3 text-sm">
+                    {t("howItWorks")}
+                  </p>
+                )}
               </div>
 
               {/* Session state badge */}
@@ -84,6 +90,19 @@ export default async function AssemblyPage() {
                         <p className="font-mono text-xs text-[--fg-muted]">{t("session")}</p>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {sessionActive && sessionDeadline > 0 && (
+                  <div className="border-t border-[--border] pt-4">
+                    <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest mb-1">
+                      {t("closesOn")}
+                    </p>
+                    <p className="font-mono text-sm font-bold">
+                      {new Date(sessionDeadline * 1000).toLocaleDateString("en-GB", {
+                        day: "numeric", month: "long", year: "numeric",
+                      })}
+                    </p>
                   </div>
                 )}
               </div>
