@@ -5,6 +5,7 @@ import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getSalon, getMessages, addMessage, checkRateLimit, checkSalonMessageLimit, recordSalonMessage } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt } from "@/lib/normiesPersona";
+import { trimIfTruncated } from "@/lib/groq";
 
 const GROQ_API_URL    = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL           = "openai/gpt-oss-120b";
@@ -122,15 +123,20 @@ export async function POST(
       body: JSON.stringify({
         model: MODEL,
         messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
-        max_tokens: 200, temperature: 0.9,
+        // Was 200 — same truncation issue as salon-exchange's cron-driven speech
+        // generation (see trimIfTruncated below): too tight for "2-4 sentences" in
+        // these personas' elaborate style, and nothing checked finish_reason before
+        // publishing whatever came back, so a cut-off response could post mid-word.
+        max_tokens: 400, temperature: 0.9,
       }),
     });
     if (!res.ok) {
       const err = await res.text();
       return NextResponse.json({ error: `Groq ${res.status}: ${err.slice(0, 150)}` }, { status: 502 });
     }
-    const data    = await res.json() as { choices: Array<{ message: { content: string } }> };
-    const content = data.choices[0]?.message?.content?.trim() ?? "(silence)";
+    const data      = await res.json() as { choices: Array<{ message: { content: string }; finish_reason?: string }> };
+    const rawReply  = data.choices[0]?.message?.content?.trim();
+    const content   = (rawReply ? trimIfTruncated(rawReply, data.choices[0]?.finish_reason) : null) ?? "(silence)";
     const msg     = await addMessage({
       salonId: params.id, tokenId,
       name:     persona?.name ?? `Normie #${tokenId}`,

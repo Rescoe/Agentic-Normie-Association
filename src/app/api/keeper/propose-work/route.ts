@@ -120,7 +120,11 @@ export async function POST(req: NextRequest) {
     },
     body: JSON.stringify({
       model:           "openai/gpt-oss-120b",
-      max_tokens:      280,
+      // Bumped 280 -> 350 alongside the same fix in salon-exchange.ts's embedded
+      // propose-work call (identical JSON schema) — 220 there was tight enough for
+      // Groq's own JSON-mode validation to occasionally reject truncated output
+      // outright (400 json_validate_failed).
+      max_tokens:      350,
       temperature:     0.97,
       response_format: { type: "json_object" },
       messages: [

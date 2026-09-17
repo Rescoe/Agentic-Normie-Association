@@ -20,7 +20,7 @@ import {
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
-import { groqFetch } from "@/lib/groq";
+import { groqFetch, trimIfTruncated } from "@/lib/groq";
 
 const MODEL = "openai/gpt-oss-120b";
 const CONTEXT_MESSAGES = 12;
@@ -145,11 +145,16 @@ async function generateSpeech(
     const res = await groqFetch({
       model: MODEL,
       messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
-      max_tokens: 250, temperature: 0.92,
+      // 250 was too tight for the "2-3 sentences" ask given these personas' elaborate
+      // style (philosophical tangents, measured rhythm) — Groq logs showed output
+      // routinely landing right at 250, and finish_reason wasn't even checked, so a
+      // few genuinely got cut off mid-word and published anyway ("...thereby anch").
+      max_tokens: 400, temperature: 0.92,
     });
     if (!res.ok) { console.error(`[salon-exchange] Groq ${res.status}`); return null; }
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content?.trim() ?? null;
+    const data = await res.json() as { choices: Array<{ message: { content: string }; finish_reason?: string }> };
+    const raw  = data.choices[0]?.message?.content?.trim();
+    return raw ? trimIfTruncated(raw, data.choices[0]?.finish_reason) : null;
   } catch (e) {
     console.error("[salon-exchange] generateSpeech error:", e);
     return null;
@@ -408,7 +413,10 @@ Reply with JSON only:
 {"title":"Specific evocative title (3-6 words, NO generic blockchain tropes)","text":"2-3 sentences: concrete idea, form chosen, why THIS work from YOUR perspective.","suggestedForm":"haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"}`,
         },
       ],
-      max_tokens:      220,
+      // Was 220 — tight enough for the JSON structure + a "2-3 sentences" text field
+      // that Groq's own JSON-mode validation occasionally rejected outright (400
+      // json_validate_failed) when truncation landed mid-string instead of after it.
+      max_tokens:      350,
       temperature:     0.97,
       response_format: { type: "json_object" },
     });

@@ -19,6 +19,20 @@ export interface GroqBody {
   response_format?: { type: string };
 }
 
+/**
+ * If the model was cut off mid-response (finish_reason "length" — hit max_tokens
+ * before finishing), trim back to the last complete sentence instead of publishing
+ * a mid-word fragment ("...thereby anch"). Returns null when there's no usable
+ * complete sentence to salvage, so the caller can skip this turn rather than post
+ * a near-empty or garbled message.
+ */
+export function trimIfTruncated(content: string, finishReason: string | undefined): string | null {
+  if (finishReason !== "length") return content;
+  const lastSentenceEnd = Math.max(content.lastIndexOf("."), content.lastIndexOf("!"), content.lastIndexOf("?"));
+  if (lastSentenceEnd < content.length * 0.4) return null;
+  return content.slice(0, lastSentenceEnd + 1).trim();
+}
+
 export async function groqFetch(
   body:       GroqBody,
   maxRetries: number = 3,
