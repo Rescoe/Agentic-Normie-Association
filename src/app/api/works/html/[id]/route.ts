@@ -19,7 +19,7 @@ import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, buildWorkHtml, type ANAWork } from "@/lib/workStore";
 import {
   artworkChainClient, htmlHeaders, decodeContent, fetchCollectionArtwork,
-  serveGenerativeHtml, notFoundHtml,
+  serveGenerativeHtml, notFoundHtml, extractGenerativeCollectionAddress,
 } from "@/lib/artworkServer";
 import { buildGenerativeCsp } from "@/lib/generativeArtwork";
 
@@ -89,7 +89,26 @@ export async function GET(
     const html = decodeContent(raw);
 
     if (html) {
-      console.log(`[works/html] contract OK for #${onChainId} — ${html.length} chars`);
+      // WorkRegistry.getWork().content is the governance CERTIFICATE, not the raw
+      // artwork — buildWorkHtml() writes the certificate there at publish time (see
+      // workStore.ts). Without a Neon record (the case for every currently-published
+      // work — Neon was reset in September), this used to be returned as-is and
+      // treated as "the artwork preview," which is why the gallery showed the
+      // certificate's text/placeholder instead of a live generative piece. If the
+      // certificate references a deployed ANAEditions collection, fetch the real
+      // artwork from it directly (same on-chain read the certificate's own iframe
+      // uses) — that's the actual rendered piece, not a description of it.
+      const collectionAddr = extractGenerativeCollectionAddress(html);
+      if (collectionAddr) {
+        const artwork = await fetchCollectionArtwork(collectionAddr);
+        if (artwork) {
+          console.log(`[works/html] resolved #${onChainId} certificate -> collection ${collectionAddr} artwork`);
+          return serveGenerativeHtml(artwork, undefined, `work #${onChainId}`);
+        }
+        console.warn(`[works/html] #${onChainId} certificate references collection ${collectionAddr} but artworkContent() returned nothing — falling back to certificate`);
+      }
+
+      console.log(`[works/html] contract OK for #${onChainId} — ${html.length} chars (certificate/poem content)`);
       // Legacy content predates the validator — serve with the same hash-based CSP
       // computed from whatever scripts/styles it actually contains.
       return new NextResponse(html, { headers: htmlHeaders(buildGenerativeCsp(html)) });

@@ -19,7 +19,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { WorkRegistryAbi } from "@/lib/abis/WorkRegistry";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, buildWorkHtml } from "@/lib/workStore";
-import { artworkChainClient, htmlHeaders, decodeContent, notFoundHtml } from "@/lib/artworkServer";
+import { artworkChainClient, htmlHeaders, decodeContent, notFoundHtml, relativizeSameOriginUrls } from "@/lib/artworkServer";
 
 const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
 
@@ -42,7 +42,7 @@ export async function GET(
     );
     if (work) {
       console.log(`[works/certificate] Neon hit for #${onChainId} — "${work.title}"`);
-      const cert = await buildWorkHtml(work);
+      const cert = relativizeSameOriginUrls(await buildWorkHtml(work));
       return new NextResponse(cert, { headers: htmlHeaders(CERT_CSP) });
     }
     console.warn(`[works/certificate] Neon miss for #${onChainId} — falling back to contract`);
@@ -70,7 +70,7 @@ export async function GET(
     }
 
     const raw  = data.content ?? "";
-    const html = decodeContent(raw) ?? raw;
+    const html = relativizeSameOriginUrls(decodeContent(raw) ?? raw);
     if (html) {
       console.log(`[works/certificate] contract OK for #${onChainId} — ${html.length} chars`);
       return new NextResponse(html, { headers: htmlHeaders(CERT_CSP) });

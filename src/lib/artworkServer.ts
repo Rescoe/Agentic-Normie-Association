@@ -31,6 +31,30 @@ export function htmlHeaders(csp: string) {
 
 export const STATIC_CSP = "default-src 'none'; style-src 'unsafe-inline';";
 
+// Certificates built before this fix baked in an ABSOLUTE iframe src using
+// NEXT_PUBLIC_APP_URL, which was never configured — it fell back to
+// "https://agentic-normie-association.vercel.app". Since the certificate is
+// served from agentic-normie-association.xyz, that's a cross-origin iframe,
+// and X-Frame-Options: SAMEORIGIN correctly blocks it ("Ce contenu est
+// bloqué" in the browser) even though the target URL itself works fine when
+// opened directly. That certificate HTML is immutable on-chain and can't be
+// re-baked, but rewriting the domain away at serve time fixes every existing
+// certificate without touching what's actually stored on WorkRegistry.
+const STALE_ABSOLUTE_ORIGINS = [
+  "https://agentic-normie-association.vercel.app",
+  "https://agentic-normie-association.xyz",
+];
+
+/** Strips known same-app absolute origins from a certificate's embedded URLs, leaving
+ *  relative paths — immune to whatever domain actually serves the page. */
+export function relativizeSameOriginUrls(html: string): string {
+  let out = html;
+  for (const origin of STALE_ABSOLUTE_ORIGINS) {
+    out = out.split(origin).join("");
+  }
+  return out;
+}
+
 /** Decode a data URI or raw HTML string → usable HTML or null. */
 export function decodeContent(raw: string): string | null {
   if (!raw) return null;
@@ -60,19 +84,47 @@ export function decodeContent(raw: string): string | null {
   return null;
 }
 
-/** Reads the real artwork content directly from its ANAEditions collection contract. */
+// Targets specifically the "Generative / visual artwork — stored on-chain in
+// ANAEditions collection 0x..." sentence buildWorkHtml() writes only for the
+// html-artwork branch (both the current iframe version and the older address-only
+// placeholder). Deliberately narrower than matching any basescan.org/address link in
+// the document — every certificate (poems included) also has an unrelated "N ERC-721
+// editions · price ETH · <a href=.../address/0x...>" line in its header, which isn't
+// what we want here.
+const GENERATIVE_COLLECTION_RE = /stored on-chain in ANAEditions collection[\s\S]*?(0x[a-fA-F0-9]{40})/;
+
+export function extractGenerativeCollectionAddress(certificateHtml: string): string | null {
+  return certificateHtml.match(GENERATIVE_COLLECTION_RE)?.[1] ?? null;
+}
+
+/**
+ * Reads the real artwork content directly from its ANAEditions collection contract.
+ * Retries on rate-limit errors — mainnet.base.org rejects a meaningful fraction of
+ * calls under any real load (see project_ana_activity_feed_bugs memory for a directly
+ * measured ~37% rejection rate on a request burst), and a single failed attempt here
+ * used to fall straight back to showing the certificate/placeholder text instead of
+ * the artwork — the gallery would then intermittently show code/text instead of a
+ * live piece depending on RPC luck, not on whether the artwork actually exists.
+ */
 export async function fetchCollectionArtwork(collectionAddress: string): Promise<string | null> {
-  try {
-    const content = await artworkChainClient.readContract({
-      address:      collectionAddress as `0x${string}`,
-      abi:          ANAEditionsAbi,
-      functionName: "artworkContent",
-    }) as string;
-    return decodeContent(content) ?? content;
-  } catch (e) {
-    console.error(`[artworkServer] could not read artworkContent() from ${collectionAddress}:`, e);
-    return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const content = await artworkChainClient.readContract({
+        address:      collectionAddress as `0x${string}`,
+        abi:          ANAEditionsAbi,
+        functionName: "artworkContent",
+      }) as string;
+      return decodeContent(content) ?? content;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/rate limit/i.test(msg) || attempt === 2) {
+        console.error(`[artworkServer] could not read artworkContent() from ${collectionAddress}:`, e);
+        return null;
+      }
+      await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+    }
   }
+  return null;
 }
 
 /** Re-validates (defense in depth) and serves a generative artwork with a strict, hash-based CSP. */

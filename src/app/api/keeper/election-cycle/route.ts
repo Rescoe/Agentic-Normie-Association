@@ -30,7 +30,7 @@ import { base, baseSepolia } from "viem/chains";
 import { CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { kvGet, kvSet } from "@/lib/db";
 import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
-import { runAutoVotePhase, type AutoVoteBody } from "@/app/api/keeper/auto-vote/route";
+import { runAutoVotePhase, type AutoVoteBody } from "@/lib/autoVote";
 
 const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
 const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"

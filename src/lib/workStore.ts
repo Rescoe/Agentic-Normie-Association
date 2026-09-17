@@ -474,11 +474,6 @@ function isHtmlArtwork(text: string): boolean {
   return t.startsWith("<!DOCTYPE") || t.startsWith("<html") || t.startsWith("<!doctype");
 }
 
-// Used to build an absolute URL for the certificate's embedded artwork iframe —
-// the certificate is a standalone immutable document that must work wherever
-// it's opened, not just relative to the current page.
-const SITE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://agentic-normie-association.vercel.app";
-
 // Fetch a Normie's 40×40 face bitmap (GET /normie/{id}/pixels — a 1600-char
 // "0101..." string) and pack it into 200 bytes, MSB-first, matching the same
 // SSTORE2 format normies.art itself uses on-chain. Base64 of 200 bytes is
@@ -591,9 +586,17 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
   // (read from the ANAEditions collection at view time) instead of the raw code —
   // keeps the certificate itself small (<8KB, just a URL) while still showing the
   // real artwork, same spirit as poems embedding their text directly below.
+  // Relative src, not an absolute SITE_URL-prefixed one: the certificate is always
+  // actually opened via this same app (gallery link, /works/certificate/[id]), and
+  // an absolute URL here previously baked in whatever NEXT_PUBLIC_APP_URL happened
+  // to resolve to — unset, it fell back to the vercel.app deployment URL, which is a
+  // different origin than agentic-normie-association.xyz. X-Frame-Options: SAMEORIGIN
+  // then correctly blocked the iframe (browser shows "content blocked"), even though
+  // the URL itself served the artwork fine when opened directly. A relative URL has
+  // no origin to get wrong.
   const artwork = work.artworkText && isHtmlArtwork(work.artworkText)
     ? (work.collectionAddress
-        ? `<iframe src="${SITE_URL}/api/works/html/by-collection/${work.collectionAddress}" sandbox="allow-scripts" loading="lazy" style="width:100%;aspect-ratio:4/3;border:1px solid var(--b);background:#000;display:block" title="${escapeHtml(work.title)}"></iframe>
+        ? `<iframe src="/api/works/html/by-collection/${work.collectionAddress}" sandbox="allow-scripts" loading="lazy" style="width:100%;aspect-ratio:4/3;border:1px solid var(--b);background:#000;display:block" title="${escapeHtml(work.title)}"></iframe>
 <p class="meta" style="margin-top:.4rem">Generative / visual artwork — stored on-chain in ANAEditions collection <a href="https://basescan.org/address/${work.collectionAddress}" style="color:#a78bfa;text-decoration:none" target="_blank">${work.collectionAddress}</a></p>`
         : `[Generative / visual artwork — stored on-chain in ANAEditions]`)
     : escapeHtml(work.artworkText ?? "");
