@@ -16,10 +16,9 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { WorkRegistryAbi } from "@/lib/abis/WorkRegistry";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, buildWorkHtml } from "@/lib/workStore";
-import { artworkChainClient, htmlHeaders, decodeContent, notFoundHtml, relativizeSameOriginUrls } from "@/lib/artworkServer";
+import { htmlHeaders, decodeContent, notFoundHtml, relativizeSameOriginUrls, readWorkRegistryWork } from "@/lib/artworkServer";
 
 const WR_ADDR = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
 
@@ -57,14 +56,8 @@ export async function GET(
     return new NextResponse("WorkRegistry not configured", { status: 503 });
   }
 
-  try {
-    const data = await artworkChainClient.readContract({
-      address:      WR_ADDR,
-      abi:          WorkRegistryAbi,
-      functionName: "getWork",
-      args:         [BigInt(onChainId)],
-    }) as { content: string; id: bigint; archived: boolean };
-
+  const data = await readWorkRegistryWork(WR_ADDR, onChainId);
+  if (data) {
     if (data.archived) {
       return new NextResponse("Work archived", { status: 410 });
     }
@@ -75,8 +68,6 @@ export async function GET(
       console.log(`[works/certificate] contract OK for #${onChainId} — ${html.length} chars`);
       return new NextResponse(html, { headers: htmlHeaders(CERT_CSP) });
     }
-  } catch (e) {
-    console.error(`[works/certificate] contract error for #${onChainId}:`, e);
   }
 
   return notFoundHtml(`Certificate #${onChainId} not found or not yet indexed.`);

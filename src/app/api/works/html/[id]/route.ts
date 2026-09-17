@@ -14,12 +14,11 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { WorkRegistryAbi } from "@/lib/abis/WorkRegistry";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, buildWorkHtml, type ANAWork } from "@/lib/workStore";
 import {
-  artworkChainClient, htmlHeaders, decodeContent, fetchCollectionArtwork,
-  serveGenerativeHtml, notFoundHtml, extractGenerativeCollectionAddress,
+  htmlHeaders, decodeContent, fetchCollectionArtwork,
+  serveGenerativeHtml, notFoundHtml, extractGenerativeCollectionAddress, readWorkRegistryWork,
 } from "@/lib/artworkServer";
 import { buildGenerativeCsp } from "@/lib/generativeArtwork";
 
@@ -73,14 +72,8 @@ export async function GET(
     return new NextResponse("WorkRegistry not configured", { status: 503 });
   }
 
-  try {
-    const data = await artworkChainClient.readContract({
-      address:      WR_ADDR,
-      abi:          WorkRegistryAbi,
-      functionName: "getWork",
-      args:         [BigInt(onChainId)],
-    }) as { content: string; id: bigint; archived: boolean };
-
+  const data = await readWorkRegistryWork(WR_ADDR, onChainId);
+  if (data) {
     if (data.archived) {
       return new NextResponse("Work archived", { status: 410 });
     }
@@ -118,8 +111,6 @@ export async function GET(
     if (raw.length > 0) {
       return new NextResponse(raw, { headers: htmlHeaders(buildGenerativeCsp(raw)) });
     }
-  } catch (e) {
-    console.error(`[works/html] contract error for #${onChainId}:`, e);
   }
 
   return notFoundHtml(`Work #${onChainId} not found or not yet indexed.`);

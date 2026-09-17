@@ -934,25 +934,19 @@ function parseEditionInfo(doc: Document): {
   };
 }
 
+// Same marker buildWorkHtml() writes into the Artwork section for generative pieces
+// (see artworkServer.ts GENERATIVE_COLLECTION_RE) — the certificate always has the full
+// .lbl/.credits structure regardless of art form, so presence of this text (not absence
+// of .lbl) is what actually distinguishes a generative piece from a poem here.
+const GENERATIVE_MARKER_RE = /stored on-chain in ANAEditions collection[\s\S]*?(0x[a-fA-F0-9]{40})/;
+
 function parseCertHtml(html: string): ParsedCert {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
-  // No .lbl elements → raw generative HTML artwork, not a poem certificate
-  const isHtmlArtwork = !doc.querySelector(".lbl");
-  const editionInfo = parseEditionInfo(doc);
-  const emptyBase = {
-    artworkText: "", brief: "", yes: 0, no: 0, abs: 0, votes: [],
-    authorName: "", authorTokenId: null, curatorName: "", curatorTokenId: null,
-    rapporteurName: "", rapporteurTokenId: null, txHash: "", publishedDate: "",
-    stateHistory: [], ...editionInfo,
-  };
-  if (isHtmlArtwork) {
-    return {
-      ...emptyBase,
-      title: doc.title?.replace(" — ANA", "").trim() || "Artwork",
-      isHtmlArtwork: true,
-    };
-  }
+  const editionInfo       = parseEditionInfo(doc);
+  const generativeMatch   = html.match(GENERATIVE_MARKER_RE);
+  const isHtmlArtwork     = !!generativeMatch;
+  const collectionAddress = generativeMatch?.[1] ?? editionInfo.collectionAddress;
 
   const title = doc.querySelector("h1")?.textContent?.trim()
     ?? doc.title?.replace(" — ANA", "").trim()
@@ -963,7 +957,7 @@ function parseCertHtml(html: string): ParsedCert {
   const getBlock  = (lbl: Element | undefined) =>
     lbl?.closest("section")?.querySelector(".block")?.textContent?.trim() ?? "";
 
-  const artworkText = getBlock(findLbl("Artwork"));
+  const artworkText = isHtmlArtwork ? "" : getBlock(findLbl("Artwork"));
   const brief       = getBlock(findLbl("Creative Brief"));
 
   // Vote counts from .vleg
@@ -1021,8 +1015,8 @@ function parseCertHtml(html: string): ParsedCert {
     authorName: author.name, authorTokenId: author.tokenId,
     curatorName: curator.name, curatorTokenId: curator.tokenId,
     rapporteurName: rapporteur.name, rapporteurTokenId: rapporteur.tokenId,
-    txHash, publishedDate, stateHistory, isHtmlArtwork: false,
-    ...editionInfo,
+    txHash, publishedDate, stateHistory, isHtmlArtwork,
+    ...editionInfo, collectionAddress,
   };
 }
 
@@ -1038,11 +1032,31 @@ function OnChainWorkCard({ workId }: { workId: number }) {
   const certificateUrl = `/api/works/certificate/${workId}`;
 
   useEffect(() => {
-    fetch(certUrl)
-      .then(r => r.text())
-      .then(html => { setCert(parseCertHtml(html)); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [certUrl]);
+    let cancelled = false;
+    // Parse the governance certificate for metadata (title/author/price/votes — always
+    // present there regardless of art form), not certUrl: that route now serves the
+    // actual rendered generative artwork directly for html pieces (see artworkServer.ts),
+    // which has none of that structure and used to collapse this card to a bare title.
+    // One retry: mainnet.base.org rejects a large share of the burst every card on the
+    // page fires on mount (readWorkRegistryWork in artworkServer.ts already retries
+    // server-side), and a short-lived rejection is no longer cached as a 404, so a
+    // second attempt a couple seconds later recovers most of what the first one missed.
+    const load = (isRetry: boolean) => {
+      fetch(certificateUrl, isRetry ? { cache: "no-store" } : undefined)
+        .then(async r => {
+          if (!r.ok && !isRetry) {
+            await new Promise(res => setTimeout(res, 2500));
+            if (!cancelled) load(true);
+            return;
+          }
+          const html = await r.text();
+          if (!cancelled) { setCert(parseCertHtml(html)); setLoading(false); }
+        })
+        .catch(() => { if (!cancelled) setLoading(false); });
+    };
+    load(false);
+    return () => { cancelled = true; };
+  }, [certificateUrl]);
 
   if (loading) {
     return (
@@ -1063,6 +1077,11 @@ function OnChainWorkCard({ workId }: { workId: number }) {
 
   // ── HTML / generative artwork ────────────────────────────────────────────────
   if (cert.isHtmlArtwork) {
+    const trio = [
+      { role: "Author",     name: cert.authorName,     id: cert.authorTokenId },
+      { role: "Curator",    name: cert.curatorName,    id: cert.curatorTokenId },
+      { role: "Rapporteur", name: cert.rapporteurName, id: cert.rapporteurTokenId },
+    ];
     return (
       <div className="border border-[--border] bg-[--bg] flex flex-col">
         <div
@@ -1082,6 +1101,19 @@ function OnChainWorkCard({ workId }: { workId: number }) {
           <div className="flex items-start justify-between gap-2">
             <p className="font-bold text-sm leading-tight">{cert.title || `Artwork #${workId}`}</p>
             <span className="font-mono text-xs px-1.5 py-0.5 border border-[--border] text-[--fg-muted] shrink-0">#{workId}</span>
+          </div>
+          {cert.publishedDate && (
+            <p className="font-mono text-[10px] text-[--fg-muted]">{cert.publishedDate}</p>
+          )}
+
+          {/* Creation trio */}
+          <div className="flex items-center gap-6 pt-1">
+            {trio.map(m => (
+              <div key={m.role} className="flex flex-col gap-0.5">
+                <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">{m.role}</p>
+                <p className="font-mono text-xs text-[--fg]">{m.name || (m.id != null ? `#${m.id}` : "—")}</p>
+              </div>
+            ))}
           </div>
 
           {cert.collectionAddress && (

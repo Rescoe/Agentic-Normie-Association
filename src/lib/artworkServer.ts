@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ANAEditionsAbi } from "@/lib/abis/ANAEditions";
+import { WorkRegistryAbi } from "@/lib/abis/WorkRegistry";
 import { validateGenerativeHtml, buildGenerativeCsp } from "@/lib/generativeArtwork";
 
 export const artworkChainClient = createPublicClient({
@@ -24,6 +25,21 @@ const BASE_HEADERS = {
 export function htmlHeaders(csp: string) {
   return {
     ...BASE_HEADERS,
+    "Content-Type":            "text/html; charset=utf-8",
+    "Content-Security-Policy": csp,
+  };
+}
+
+// A transient RPC rate-limit (common under gallery-load concurrency — see
+// readWorkRegistryWork above) used to produce a 404 that then carried the same
+// public, max-age=3600 as a real success. The visitor's browser would cache that
+// "not found" for an hour even though a reload moments later would have worked —
+// a single bad request poisoning every future load. Not-found responses get no
+// caching at all instead: they're a transient/legacy state, not a stable fact.
+function notFoundHeaders(csp: string) {
+  return {
+    "X-Frame-Options":         "SAMEORIGIN",
+    "Cache-Control":           "no-store",
     "Content-Type":            "text/html; charset=utf-8",
     "Content-Security-Policy": csp,
   };
@@ -127,6 +143,38 @@ export async function fetchCollectionArtwork(collectionAddress: string): Promise
   return null;
 }
 
+/**
+ * Reads a work's stored content from WorkRegistry.getWork() with the same retry-on-rate-limit
+ * pattern as fetchCollectionArtwork above. Neon is currently empty, so every gallery card goes
+ * through this contract-fallback path — that's up to a couple dozen concurrent eth_calls the
+ * instant the gallery mounts, and mainnet.base.org rejects a large share of a burst that size
+ * outright (see project_ana_activity_feed_bugs memory) rather than queuing it. A single
+ * unretried attempt here used to turn a transient rate-limit into a permanent "not found".
+ */
+export async function readWorkRegistryWork(
+  workRegistryAddress: `0x${string}`,
+  onChainId: number,
+): Promise<{ content: string; id: bigint; archived: boolean } | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await artworkChainClient.readContract({
+        address:      workRegistryAddress,
+        abi:          WorkRegistryAbi,
+        functionName: "getWork",
+        args:         [BigInt(onChainId)],
+      }) as { content: string; id: bigint; archived: boolean };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/rate limit/i.test(msg) || attempt === 2) {
+        console.error(`[artworkServer] could not read getWork(${onChainId}) from ${workRegistryAddress}:`, e);
+        return null;
+      }
+      await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
+  return null;
+}
+
 /** Re-validates (defense in depth) and serves a generative artwork with a strict, hash-based CSP. */
 export function serveGenerativeHtml(rawHtml: string, artForm: string | undefined, label: string): NextResponse {
   const check = validateGenerativeHtml(rawHtml, artForm);
@@ -142,6 +190,6 @@ export function notFoundHtml(message: string): NextResponse {
     `<!DOCTYPE html><html><body style="background:#050505;color:#e2e8f0;font-family:monospace;padding:2rem">
 <p>${message}</p>
 </body></html>`,
-    { status: 404, headers: htmlHeaders(STATIC_CSP) },
+    { status: 404, headers: notFoundHeaders(STATIC_CSP) },
   );
 }
