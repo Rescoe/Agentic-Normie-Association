@@ -146,7 +146,7 @@ export interface SessionState {
   resolved:  boolean;
 }
 
-export async function readCurrentSession(): Promise<SessionState | null> {
+async function readCurrentSessionOnce(): Promise<SessionState | null> {
   if (!ASSEMBLY_ADDRESS) return null;
   try {
     const raw = await publicClient.readContract({
@@ -165,6 +165,24 @@ export async function readCurrentSession(): Promise<SessionState | null> {
       resolved: Boolean(t[5]),
     };
   } catch { return null; }
+}
+
+/**
+ * mainnet.base.org is a load-balanced public endpoint whose backend nodes can lag —
+ * observed live (2026-09-17): one read returned session #1 (a July test session, long
+ * superseded) while a read moments later on a different domain returned the real
+ * current session #2. No error either time, just an old-but-valid answer — a plain
+ * retry-on-exception (as used elsewhere for rate limits) doesn't catch this, since
+ * nothing throws. Session ids only ever increase, so a second read landing on a
+ * different backend gives a cheap, reliable way to detect and resolve the disagreement:
+ * whichever read reports the higher id is provably the fresher one.
+ */
+export async function readCurrentSession(): Promise<SessionState | null> {
+  const first  = await readCurrentSessionOnce();
+  const second = await readCurrentSessionOnce();
+  if (!first)  return second;
+  if (!second) return first;
+  return second.id >= first.id ? second : first;
 }
 
 export interface RoleLeader {
