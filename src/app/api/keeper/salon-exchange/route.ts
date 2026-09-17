@@ -350,14 +350,32 @@ async function maybeGenerateWorkProposal(
   topic:         string,
   isUserStim:    boolean,
 ): Promise<{ id: string; title: string } | null> {
-  // Normies talking among themselves → 15% (they have a rich inner life)
-  // Human stimulation → 8% (the human inspires but Normies keep the initiative)
-  const probability = isUserStim ? 0.08 : 0.15;
-  if (Math.random() > probability) return null;
-
   // Don't start a new work if one is already active
   const [active, allWorks] = await Promise.all([getActiveWorks(), listWorks()]);
   if (active.length > 0) return null;
+
+  // Base rate: Normies talking among themselves → 15% per tick (they have a rich
+  // inner life), human stimulation → 8% (the human inspires but Normies keep the
+  // initiative). Deliberately NOT a forced/scheduled trigger — going a month
+  // between works is fine, this only shapes how likely a spontaneous impulse is.
+  const baseProbability = isUserStim ? 0.08 : 0.15;
+
+  // A bigger association has more independent minds who might feel the pull to
+  // create — scale with headcount rather than picking one Normie to be "in
+  // charge of proposing." Capped so it stays a real chance, not a certainty.
+  const memberFactor = Math.min(1 + allPersonas.length / 20, 2.5);
+
+  // Soft, reasoned pressure as the gap since the last work grows — never forced.
+  // No change under a week (that's a normal cadence); grows gradually after that,
+  // capped well short of certainty since going quiet for a while is legitimate.
+  const lastPublished  = allWorks.find(w => w.state === "PUBLISHED" && w.publishedAt);
+  const daysSinceWork   = lastPublished?.publishedAt
+    ? Math.floor((Date.now() - lastPublished.publishedAt) / 86_400_000)
+    : null;
+  const timeFactor = daysSinceWork == null ? 1 : Math.min(1 + Math.max(daysSinceWork - 7, 0) / 8, 3);
+
+  const probability = Math.min(baseProbability * memberFactor * timeFactor, 0.6);
+  if (Math.random() > probability) return null;
 
   const pastWorks = allWorks
     .map(w => `- "${w.title}" (${w.state})${w.artForm ? ` [form: ${w.artForm}]` : ""}`)
@@ -393,8 +411,9 @@ async function maybeGenerateWorkProposal(
         },
         {
           role:    "user",
-          content: `During our conversation about "${topic}", you feel the impulse to propose an artistic creation for the ANA.
+          content: `During our conversation about "${topic}", something in you stirs toward proposing an artistic creation for the ANA — but check that honestly first: does this genuinely feel true to who you are right now, or would you rather hold back and let it sit longer? Not every stirring should become a public proposal — that's your call to make, not a formality.
 ${pastWorksBlock}${formDiversityNote}
+If it does feel right, here's the angle to work from:
 MANDATORY ANGLE FOR THIS PROPOSAL: ${randomAngle}
 Work from THIS angle — do not drift toward generic blockchain/digital themes.
 
@@ -410,7 +429,7 @@ POSSIBLE FORMS (pick exactly one as "suggestedForm"): "haiku", "sonnet", "poem",
 If your idea is generative/visual/algorithmic/interactive, you MUST pick one of the html-* forms, not a text form.
 
 Reply with JSON only:
-{"title":"Specific evocative title (3-6 words, NO generic blockchain tropes)","text":"2-3 sentences: concrete idea, form chosen, why THIS work from YOUR perspective.","suggestedForm":"haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"}`,
+{"feelsRight":true|false,"title":"Specific evocative title (3-6 words, NO generic blockchain tropes) — or, if feelsRight is false, your honest one-line reason for holding back","text":"2-3 sentences: concrete idea, form chosen, why THIS work from YOUR perspective (irrelevant if feelsRight is false)","suggestedForm":"haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"}`,
         },
       ],
       // Was 220 — tight enough for the JSON structure + a "2-3 sentences" text field
@@ -422,8 +441,15 @@ Reply with JSON only:
     });
 
     if (!res.ok) return null;
-    const data   = await res.json() as { choices: Array<{ message: { content: string } }> };
-    const raw    = JSON.parse(data.choices[0]?.message?.content ?? "{}") as Record<string, string>;
+    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+    const raw  = JSON.parse(data.choices[0]?.message?.content ?? "{}") as Record<string, string | boolean>;
+
+    // The character's own call, not just a dice roll — an in-character "not right
+    // now" is a legitimate outcome, not a failure to route around.
+    if (raw.feelsRight === false) {
+      console.log(`[salon-exchange] ${initiator.name} felt the impulse but held back: ${raw.title ?? "(no reason given)"}`);
+      return null;
+    }
     if (!raw.title || !raw.text) return null;
 
     const proposedTitle = String(raw.title).slice(0, 80);
@@ -451,7 +477,8 @@ Reply with JSON only:
     }
 
     const VALID_FORMS = new Set(["haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl"]);
-    const suggestedForm = raw.suggestedForm && VALID_FORMS.has(raw.suggestedForm) ? raw.suggestedForm : undefined;
+    const suggestedFormRaw = typeof raw.suggestedForm === "string" ? raw.suggestedForm : undefined;
+    const suggestedForm = suggestedFormRaw && VALID_FORMS.has(suggestedFormRaw) ? suggestedFormRaw : undefined;
 
     const work = await createWork({
       proposedBy:     initiator.tokenId,

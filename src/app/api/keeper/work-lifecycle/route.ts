@@ -40,17 +40,17 @@ const MODEL_FAST   = "openai/gpt-oss-120b";
 // auto-rejected instead of staying stuck in PUBLISHING/CREATING/etc. forever.
 // This guards against genuine infra failures (LLM API down, missing persona) —
 // it is NOT the revision budget for a generative artwork that's being iterated
-// on (see GENERATIVE_MAX_REVISIONS), since a structural-validation retry
-// reports advanced:true and never increments this counter.
+// on, since a structural-validation retry or a curator's rejection both report
+// advanced:true and never increment this counter (see rejectOrRevise below).
 const MAX_PIPELINE_FAILS = 4;
 
-// Generative (html-*) works get this many revision attempts — covering both
-// automated structural-validation failures (stepCreating) and curator
-// rejections (stepValidating) through the SAME work.revisionCount counter —
-// before being permanently rejected. Text/poem works keep the original
-// single-revision budget; only the generative pipeline needed loosening.
-const GENERATIVE_MAX_REVISIONS = 9;
-const TEXT_MAX_REVISIONS       = 1;
+// Revisions are intentionally uncapped — ANA values getting a piece right over
+// getting it done quickly (a work can take as many rounds, or as long, as it
+// needs). rejectOrRevise below always bounces back to CREATING with feedback,
+// it never auto-rejects for revision count. This constant is purely a
+// messaging threshold: past this many rounds, salon updates say so explicitly,
+// so a long-running piece is legible rather than silently looping forever.
+const NOTABLE_REVISION_COUNT = 5;
 
 // Forms a curator may reclassify a text-centric html-* submission into,
 // instead of rejecting it outright — see stepValidating's reclassifyAs handling.
@@ -471,7 +471,19 @@ async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<b
       const feedbackNote = recent.some(w => w.critiqueSummary)
         ? "\nThe community feedback above comes from Normies who did NOT create those works, reacting after publication — take it seriously: steer the brief away from what was criticized, and lean into what was praised."
         : "";
-      return `\nRECENT ANA WORKS (most recent first — DO NOT pick the same form again unless the proposal explicitly demands it):\n${lines}\n${lastForms.length ? `The last ${lastForms.length} work(s) used: ${lastForms.join(", ")}. Avoid repeating these — favor variety (text forms AND generative HTML/JS).` : ""}${feedbackNote}\n`;
+
+      // ANA favors patience over throughput — works aren't produced on a schedule,
+      // so the gap since the last one is meaningful signal, not dead time. The
+      // longer that gap, the more this piece should earn it.
+      const lastPublished = allWorks.find(w => w.id !== work.id && w.state === "PUBLISHED" && w.publishedAt);
+      const daysSince = lastPublished?.publishedAt
+        ? Math.floor((Date.now() - lastPublished.publishedAt) / 86_400_000)
+        : null;
+      const patienceNote = daysSince != null && daysSince >= 2
+        ? `\nIt has been ${daysSince} days since ANA's last published work. ANA values patience over throughput — members wait for a good idea rather than producing on a schedule. The ambition level should reflect that wait: lean toward "ambitious" unless there's a genuine reason this particular piece should stay small.\n`
+        : "";
+
+      return `\nRECENT ANA WORKS (most recent first — DO NOT pick the same form again unless the proposal explicitly demands it):\n${lines}\n${lastForms.length ? `The last ${lastForms.length} work(s) used: ${lastForms.join(", ")}. Avoid repeating these — favor variety (text forms AND generative HTML/JS).` : ""}${feedbackNote}${patienceNote}\n`;
     } catch {
       return "";
     }
@@ -734,22 +746,13 @@ Generate ONLY the complete HTML, no explanations before or after.`,
       if (!check.valid) {
         const attempt = work.revisionCount ?? 0;
         const reason  = `Automated structural check failed: ${check.errors.join("; ")}`;
-        console.warn(`[work-lifecycle] CREATING: "${work.title}" attempt ${attempt + 1}/${GENERATIVE_MAX_REVISIONS + 1} failed validation: ${check.errors.join("; ")}`);
-
-        if (attempt >= GENERATIVE_MAX_REVISIONS) {
-          await updateWork(work.id, { validationNote: reason.slice(0, 500) });
-          await advanceState(work.id, "REJECTED", `Auto-rejected after ${attempt + 1} failed creation attempts — ${reason.slice(0, 300)}`);
-          await announceInSalon(work, "rejected", personas);
-          if (work.salonId && work.salonId !== AGORA_SALON_ID) {
-            await closeSalon(work.salonId, 0).catch(() => null);
-          }
-          return true;
-        }
+        console.warn(`[work-lifecycle] CREATING: "${work.title}" attempt ${attempt + 1} failed validation: ${check.errors.join("; ")}`);
 
         // Stay in CREATING — the next cycle retries with this concrete feedback via
-        // revisionCtx. Reporting "advanced" (rather than an error string) keeps this
-        // out of the generic MAX_PIPELINE_FAILS auto-reject, which is reserved for
-        // genuine infra failures, not a validator correctly catching a bad draft.
+        // revisionCtx, no matter how many attempts it takes. Reporting "advanced"
+        // (rather than an error string) keeps this out of the generic
+        // MAX_PIPELINE_FAILS auto-reject, which is reserved for genuine infra
+        // failures, not a validator correctly catching a bad draft.
         await updateWork(work.id, { validationNote: reason.slice(0, 500), revisionCount: attempt + 1 });
         return true;
       }
@@ -811,50 +814,35 @@ No introduction, no meta-commentary. Just the artwork itself.`,
 }
 
 // Shared by both rejection paths (curator-LLM "no" and the ground-truth structural
-// check below): either bounces the work back to CREATING with a concrete reason
-// attached for the next revisionCtx, or — past the form's revision budget —
-// permanently rejects it with that same concrete reason spelled out, so Normies
-// (and admins, via the "Voir le code" / "Relancer" debug tools) can see exactly
-// what blocked it instead of a generic "didn't work" message.
+// check above): always bounces the work back to CREATING with a concrete reason
+// attached for the next revisionCtx. No revision ceiling, deliberately — ANA
+// values a piece being right over being fast, so a work can go through as many
+// rounds as it takes. Past NOTABLE_REVISION_COUNT the salon message says so
+// explicitly, purely so a long-running piece stays legible instead of looking
+// like it's silently stuck.
 async function rejectOrRevise(
   work: ANAWork, personas: NormiePersona[], curator: NormiePersona,
-  reason: string, attempt: number, maxRevisions: number,
+  reason: string, attempt: number,
 ): Promise<boolean> {
-  await updateWork(work.id, { validationNote: reason.slice(0, 500) });
-
-  if (attempt >= maxRevisions) {
-    await addMessage({
-      salonId:   work.salonId ?? AGORA_SALON_ID,
-      tokenId:   curator.tokenId,
-      name:      curator.name,
-      imageUrl:  curator.imageUrl ?? "",
-      content:   `❌ Final rejection of "${work.title}" after ${attempt + 1} attempts. ${reason}`,
-      isLlm:     true,
-      timestamp: Date.now(),
-      topic:     "art",
-    }).catch(() => null);
-    await advanceState(work.id, "REJECTED", `Definitively rejected after ${attempt + 1} attempts by ${curator.name}: ${reason.slice(0, 300)}`);
-    await announceInSalon(work, "rejected", personas);
-    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
-      await closeSalon(work.salonId, 0).catch(() => null);
-    }
-    return true;
-  }
+  const notable = attempt + 1 >= NOTABLE_REVISION_COUNT
+    ? ` (attempt ${attempt + 1} — this one's taking a while, which is fine)`
+    : "";
 
   await addMessage({
     salonId:   work.salonId ?? AGORA_SALON_ID,
     tokenId:   curator.tokenId,
     name:      curator.name,
     imageUrl:  curator.imageUrl ?? "",
-    content:   `🔄 Revision requested for "${work.title}" (attempt ${attempt + 1}/${maxRevisions + 1}). ${reason}`,
+    content:   `🔄 Revision requested for "${work.title}"${notable}. ${reason}`,
     isLlm:     true,
     timestamp: Date.now(),
     topic:     "art",
   }).catch(() => null);
 
   await updateWork(work.id, {
-    revisionCount: attempt + 1,
-    artworkText:   undefined,
+    revisionCount:  attempt + 1,
+    artworkText:    undefined,
+    validationNote: reason.slice(0, 500),
   });
   await advanceState(work.id, "CREATING", `Revision requested by ${curator.name}`);
   return true;
@@ -864,9 +852,8 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
   const curator = personas.find(p => p.tokenId === work.curatorTokenId);
   if (!curator) return false;
 
-  const isHtml      = detectHtmlForm(work);
-  const maxRevisions = isHtml ? GENERATIVE_MAX_REVISIONS : TEXT_MAX_REVISIONS;
-  const attempt       = work.revisionCount ?? 0;
+  const isHtml  = detectHtmlForm(work);
+  const attempt = work.revisionCount ?? 0;
 
   // Ground-truth structural re-check for html-* works — stepCreating already
   // validated this before saving it, but re-asserting here means the curator
@@ -883,7 +870,7 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
     const check = validateGenerativeHtml(work.artworkText ?? "", work.artForm);
     if (!check.valid) {
       const reason = `Automated structural check failed: ${check.errors.join("; ")}`;
-      return await rejectOrRevise(work, personas, curator, reason, attempt, maxRevisions);
+      return await rejectOrRevise(work, personas, curator, reason, attempt);
     }
     structuralNote = check.warnings.length > 0
       ? `Automated structural check: PASSED, with a note: ${check.warnings.join("; ")}. Use your judgment — worked/animated/glitched text is a legitimate generative piece. If this instead reads as a static, purely literary piece, you may set "reclassifyAs" to "poem", "prose", or "manifesto" instead of approving or rejecting it as visual art.`
@@ -891,9 +878,26 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
   }
 
   const others      = sampleOtherMembers(personas.filter(p => p.tokenId !== curator.tokenId));
-  const revisionCtx = attempt >= maxRevisions
-    ? ` This is the final allowed submission (attempt ${attempt + 1}/${maxRevisions + 1}). If you reject it again, the work will be permanently archived — be precise about exactly what is still wrong so it's clear to everyone.`
-    : ` If you reject it, the Author will get another chance to revise (attempt ${attempt + 1}/${maxRevisions + 1}).`;
+  const revisionCtx = attempt > 0
+    ? ` This work has already been through ${attempt} revision${attempt > 1 ? "s" : ""} — there is no cap, ANA values getting it right over getting it done quickly, so reject again if it's genuinely not there yet. If you reject it, be precise about exactly what is still missing so the next attempt actually addresses it.`
+    : ` If you reject it, the Author will get another chance to revise.`;
+
+  // So the curator can catch a piece that's technically fine but conceptually a
+  // near-repeat of something ANA already made — judging artwork in isolation
+  // otherwise gives no way to notice that, and a curator who greenlights the
+  // same idea twice defeats the point of having one.
+  const pastWorksForCurator = await (async () => {
+    try {
+      const published = (await listWorks())
+        .filter(w => w.id !== work.id && w.state === "PUBLISHED")
+        .slice(0, 10);
+      if (published.length === 0) return "";
+      const lines = published
+        .map(w => `- "${w.title}" (${w.artForm ?? "text"}): ${(w.brief ?? w.proposal ?? "").slice(0, 100)}`)
+        .join("\n");
+      return `\nEXISTING ANA WORKS (compare this submission against these):\n${lines}\n`;
+    } catch { return ""; }
+  })();
 
   const raw = await groq(
     [
@@ -912,23 +916,27 @@ Excerpt: ${(work.artworkText ?? "").slice(0, 600)}…`
   : `Artwork submitted by ${work.authorName}:
 ${work.artworkText}`
 }
-
+${pastWorksForCurator}
 Do you approve this work for immutable on-chain publication?${revisionCtx}
 
-JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concrete about what works or what's still missing."${
+If it's too close in concept, theme, or execution to one of the existing works above, that's not a "polish it" note — it needs a full rework from a fresh brief, not another pass on the same idea. Set "tooSimilarToExisting" to true in that case instead of just rejecting it.
+
+JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concrete about what works or what's still missing.","tooSimilarToExisting":true|false${
   isHtml ? `,"reclassifyAs":"poem"|"prose"|"manifesto"|null` : ""
 }}`,
       },
     ],
-    { model: MODEL_FAST, maxTokens: 160, temp: 0.5, json: true }
+    { model: MODEL_FAST, maxTokens: 180, temp: 0.5, json: true }
   );
 
   if (!raw) return false;
 
-  const parsed       = JSON.parse(raw) as { approved?: boolean; note?: string; reclassifyAs?: string };
-  const approved      = !!parsed.approved;
-  const note          = parsed.note?.slice(0, 400) ?? "";
-  const reclassifyAs  = parsed.reclassifyAs;
+  const parsed = JSON.parse(raw) as {
+    approved?: boolean; note?: string; reclassifyAs?: string; tooSimilarToExisting?: boolean;
+  };
+  const approved     = !!parsed.approved;
+  const note         = parsed.note?.slice(0, 400) ?? "";
+  const reclassifyAs = parsed.reclassifyAs;
 
   if (approved) {
     await updateWork(work.id, { validationNote: note });
@@ -971,7 +979,31 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
     return true;
   }
 
-  return await rejectOrRevise(work, personas, curator, note, attempt, maxRevisions);
+  // Too close to something ANA already made — a full rework needs a fresh brief,
+  // not another pass on the same one (redoing just the artwork would likely land
+  // in the same place again, since the brief itself is what's too similar).
+  if (parsed.tooSimilarToExisting) {
+    await addMessage({
+      salonId:   work.salonId ?? AGORA_SALON_ID,
+      tokenId:   curator.tokenId,
+      name:      curator.name,
+      imageUrl:  curator.imageUrl ?? "",
+      content:   `🔁 "${work.title}" is too close to an existing ANA work — sending it back for a fresh brief rather than a tweak. ${note}`,
+      isLlm:     true,
+      timestamp: Date.now(),
+      topic:     "art",
+    }).catch(() => null);
+    await updateWork(work.id, {
+      brief:          undefined,
+      artworkText:    undefined,
+      validationNote: `Too similar to an existing work — full rework requested by ${curator.name}: ${note}`.slice(0, 500),
+      revisionCount:  attempt + 1,
+    });
+    await advanceState(work.id, "BRIEFING", `Full rework requested by ${curator.name} — too similar to an existing work`);
+    return true;
+  }
+
+  return await rejectOrRevise(work, personas, curator, note, attempt);
 }
 
 async function stepPublishing(work: ANAWork): Promise<boolean | string> {
@@ -1502,9 +1534,28 @@ export async function POST(req: NextRequest) {
   const worksToProcess = foundingCreated ? await getActiveWorks() : activeWorks;
   const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string; autoRejected?: boolean }> = [];
 
+  // CREATING is the one step whose Groq call can be genuinely large (up to 3750
+  // declared max_tokens for an "ambitious" html-* piece — nearly half of Groq's
+  // free-tier 8k tokens/minute ceiling on its own). Works overlapping at other
+  // states is fine and expected — the wait-for-quality philosophy is about not
+  // rushing proposals, not about serializing the whole pipeline — but two CREATING
+  // calls landing in the same tick could plausibly exceed the per-minute budget.
+  // So: at most one CREATING advancement per tick, across all active works; a
+  // second one just waits for the next tick (2h later, a fresh budget) — that's
+  // not a failure, so it skips the pipelineFailCount logic entirely rather than
+  // slowly auto-rejecting a healthy work that just lost the coin flip a few times.
+  let creatingUsedThisTick = false;
+
   for (const work of worksToProcess) {
-    const from   = work.state;
+    const from = work.state;
+
+    if (from === "CREATING" && creatingUsedThisTick) {
+      results.push({ id: work.id, title: work.title, from, to: from, advanced: false });
+      continue;
+    }
+
     const result = await advanceWork(work, personas);
+    if (from === "CREATING") creatingUsedThisTick = true;
     const advanced = result === true;
     const error    = typeof result === "string" ? result : undefined;
 
