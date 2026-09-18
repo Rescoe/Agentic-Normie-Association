@@ -157,9 +157,29 @@ export async function GET() {
     // back to empty after a burst of manual catch-up calls overlapped with a cron tick.
     const freshCached = await readCache();
     if (freshCached?.lastScannedBlock && BigInt(freshCached.lastScannedBlock) >= to) {
-      // Someone else already reached at least as far as we did — writing our result (built
-      // from a stale merge base) would regress their progress. Their data supersedes ours.
-      console.log(`[activity/events] superseded by a concurrent request (cache already at ${freshCached.lastScannedBlock} >= our ${to}) — skipping write`);
+      // Someone else already reached at least as far as we did — don't regress their
+      // lastScannedBlock cursor. But DO merge what we found: their scan of an overlapping
+      // range can have its own partial RPC failures ("over rate limit" on a per-chunk
+      // basis, silently returning [] for that one contract/event pair — see fetchLogs
+      // above), so simply discarding our results here risks permanently losing real
+      // events that ONLY this request's scan actually caught. Confirmed this is a real
+      // data-loss path, not theoretical: a genuine WorkPublished log (workId 13, full
+      // content) was independently verified on-chain at a block well within the already-
+      // scanned range, yet never made it into the cache — this exact branch is why.
+      const eventIds = new Set(freshCached.events.map(e => e.id));
+      const newOnes  = events.filter(e => !eventIds.has(e.id));
+      if (newOnes.length > 0) {
+        const merged = [...newOnes, ...freshCached.events].slice(0, MAX_EVENTS_KEPT);
+        merged.sort((a, b) => {
+          const diff = BigInt(b.blockNumber) - BigInt(a.blockNumber);
+          return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+        });
+        await writeCache({ ...freshCached, events: merged });
+        console.log(`[activity/events] superseded by cursor progress (cache at ${freshCached.lastScannedBlock} >= our ${to}), but recovered ${newOnes.length} event(s) their scan missed`);
+        const withTxLog = await mergeTxLog(merged);
+        return NextResponse.json({ ...freshCached, events: withTxLog }, { headers: { "X-Cache": "SUPERSEDED_MERGED", ...EDGE_CACHE_HEADERS } });
+      }
+      console.log(`[activity/events] superseded by a concurrent request (cache already at ${freshCached.lastScannedBlock} >= our ${to}) — nothing new to add`);
       const merged = await mergeTxLog(freshCached.events);
       return NextResponse.json({ ...freshCached, events: merged }, { headers: { "X-Cache": "SUPERSEDED", ...EDGE_CACHE_HEADERS } });
     }
