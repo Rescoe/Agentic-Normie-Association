@@ -297,14 +297,24 @@ function StatsBar({ events }: { events: ActivityEvent[] }) {
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export function ActivityClient() {
+interface ActivityClientProps {
+  initialEvents?: ActivityEvent[];
+  initialMeta?:   { fromBlock: string; toBlock: string; cachedAt: number } | null;
+}
+
+export function ActivityClient({ initialEvents = [], initialMeta = null }: ActivityClientProps) {
   const t = useTranslations("activity");
-  const [events,   setEvents]   = useState<ActivityEvent[]>([]);
-  const [loading,  setLoading]  = useState(true);
+  const [events,   setEvents]   = useState<ActivityEvent[]>(initialEvents);
+  // Nothing to wait for on first paint when the server already handed us cached
+  // events — the client fetch below still runs (for tx_log freshness + a live
+  // cursor position), it just updates in place instead of blocking the view.
+  const [loading,  setLoading]  = useState(initialEvents.length === 0);
   const [error,    setError]    = useState<string | null>(null);
   const [filter,   setFilter]   = useState<string>("ALL");
   const [nameMap,  setNameMap]  = useState<Map<number, string>>(new Map());
-  const [meta,     setMeta]     = useState<{ fromBlock?: string; toBlock?: string; cachedUntil?: number } | null>(null);
+  const [meta,     setMeta]     = useState<{ fromBlock?: string; toBlock?: string; cachedUntil?: number } | null>(
+    initialMeta ? { fromBlock: initialMeta.fromBlock, toBlock: initialMeta.toBlock, cachedUntil: initialMeta.cachedAt } : null
+  );
 
   const getName = useCallback((id: number) => nameMap.get(id) ?? `#${id}`, [nameMap]);
 

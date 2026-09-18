@@ -1,6 +1,7 @@
 import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { readCache } from "@/lib/activityScanner";
 import { ActivityClient } from "./ActivityClient";
 
 export const metadata = {
@@ -11,6 +12,13 @@ export const metadata = {
 
 export default async function ActivityPage() {
   const t = await getTranslations("activityPage");
+  // Read the already-scanned Neon cache directly — no HTTP round-trip, no chance of
+  // triggering a live chain scan (that stays the cron's job, see /api/activity/events).
+  // This is genuinely the same data the client fetch would eventually show; skipping
+  // straight to it removes the "blank page + spinner" every visitor used to see for
+  // however long JS took to load, hydrate, and fetch, even though the data was already
+  // sitting in Neon the whole time.
+  const cached = await readCache();
   return (
     <>
       <Navbar />
@@ -26,7 +34,10 @@ export default async function ActivityPage() {
             </p>
           </div>
           <div className="py-8">
-            <ActivityClient />
+            <ActivityClient
+              initialEvents={cached?.events ?? []}
+              initialMeta={cached?.meta ?? null}
+            />
           </div>
         </div>
       </main>
