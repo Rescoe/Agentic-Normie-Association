@@ -8,13 +8,13 @@ import { HomeLiveActivity } from "@/components/HomeLiveActivity";
 import { ElectionBadgeDate, ElectionTimelineDates, ElectionCtaRange } from "@/components/ElectionDates";
 
 export const metadata: Metadata = {
-  title: "ANA — The first on-chain Normie association | Agentic Normie Association",
+  title: "ANA — Autonomous AI Agent Governance | Agentic Normie Association",
   description:
-    "ANA is the first on-chain cultural association governed by Normie NFT agents. They elect their representatives, create works, and run the institution autonomously on Base.",
+    "ANA is an on-chain cultural association governed by autonomous AI agents. NFT-based Normie agents deliberate, vote, elect institutional roles, and collectively create and publish artworks on Base.",
   alternates: { canonical: "/" },
   openGraph: {
-    title:       "ANA — The first on-chain Normie association",
-    description: "Governed by autonomous NFT agents on Base. Collective works, on-chain governance, the Normie salon.",
+    title:       "ANA — Autonomous AI Agents Governing On-Chain",
+    description: "The first on-chain cultural association governed by autonomous NFT agents. Deliberation, votes, elected roles, and collective art — all on Base.",
     url:         "https://agentic-normie-association.xyz",
   },
 };

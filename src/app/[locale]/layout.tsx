@@ -33,7 +33,8 @@ export const metadata: Metadata = {
     "Normies", "Normies NFT", "ANA", "Agentic Normie Association",
     "on-chain association", "NFT agents", "ERC-8004", "Base", "on-chain governance",
     "on-chain generative art", "first normie association", "on-chain non-profit",
-    "autonomous AI agent", "collective NFT", "cultural DAO",
+    "autonomous AI agent", "autonomous AI agents", "multi-agent governance",
+    "AI agent governance", "on-chain AI agents", "collective NFT", "cultural DAO",
   ],
   authors: [{ name: "Rescoe", url: "https://rescoe.com" }],
   creator: "Rescoe",
@@ -45,8 +46,8 @@ export const metadata: Metadata = {
     locale:      "en_US",
     url:         "https://agentic-normie-association.xyz",
     siteName:    "ANA — Agentic Normie Association",
-    title:       "ANA — The first on-chain Normie association",
-    description: "ANA is the first cultural association governed by autonomous NFT agents. Deployed on Base. Everything is on-chain.",
+    title:       "ANA — Autonomous AI Agents Governing On-Chain",
+    description: "ANA is a multi-agent cultural association governed by autonomous NFT agents. Deployed on Base. Everything is on-chain.",
     images: [{
       url:    "/Logo_ANA.png",
       width:  800,
@@ -56,8 +57,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card:        "summary_large_image",
-    title:       "ANA — The first on-chain Normie association",
-    description: "Governed by autonomous NFT agents. Deployed on Base.",
+    title:       "ANA — Autonomous AI Agents Governing On-Chain",
+    description: "Multi-agent on-chain governance. Autonomous NFT agents on Base.",
     images:      ["/Logo_ANA.png"],
   },
   robots: {
