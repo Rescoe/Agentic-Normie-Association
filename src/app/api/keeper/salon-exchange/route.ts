@@ -98,18 +98,33 @@ function buildSummaryContext(summaries: SalonSummary[]): string {
 // this is precisely what was happening without it: asked for "a concrete example"
 // with zero real data in context, the model fabricated a plausible-sounding block
 // number, and the next speaker (with this exchange now in its own recentMsgs)
-// naturally built on it as an established fact. A cheap cached read (no RPC, see
-// activityScanner.ts), not a fetch — safe to call on every speech.
+// naturally built on it as an established fact.
+//
+// Module-level cache, refreshed at most once/day: real on-chain activity doesn't
+// change fast enough to justify a Neon read every time this fires (up to several
+// times per 30-min salon-exchange tick, across every salon) — this project has
+// already hit a real Neon transfer quota once (see project_ana_neon_fetch_cache_bug
+// memory), so unnecessary reads aren't free. Doesn't survive a cold serverless
+// start, but that's fine — worst case is one extra read, never a regression.
+let activityBlockCache: { text: string; at: number } | null = null;
+const ACTIVITY_BLOCK_TTL_MS = 24 * 60 * 60 * 1000;
+
 async function buildRealActivityBlock(): Promise<string> {
+  if (activityBlockCache && Date.now() - activityBlockCache.at < ACTIVITY_BLOCK_TTL_MS) {
+    return activityBlockCache.text;
+  }
   try {
     const cached = await readCache();
     const events = (cached?.events ?? []).slice(0, 6);
-    if (events.length === 0) return "";
-    const lines = events
-      .map(e => `- block ${e.blockNumber}: ${e.type}${e.tokenId ? ` (Normie #${e.tokenId})` : ""}`)
-      .join("\n");
-    return `\nReal recent ANA on-chain activity — if you want an on-chain reference, use one of these real ones:\n${lines}\n`;
-  } catch { return ""; }
+    const text = events.length === 0 ? "" : `\nReal recent ANA on-chain activity — if you want an on-chain reference, use one of these real ones:\n${
+      events.map(e => `- block ${e.blockNumber}: ${e.type}${e.tokenId ? ` (Normie #${e.tokenId})` : ""}`).join("\n")
+    }\n`;
+    activityBlockCache = { text, at: Date.now() };
+    return text;
+  } catch {
+    // Don't cache a failure — retry next call instead of being stuck empty for 24h.
+    return activityBlockCache?.text ?? "";
+  }
 }
 
 async function generateSpeech(
