@@ -21,6 +21,7 @@ import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch, trimIfTruncated } from "@/lib/groq";
+import { readCache } from "@/lib/activityScanner";
 
 const MODEL = "openai/gpt-oss-120b";
 const CONTEXT_MESSAGES = 12;
@@ -93,6 +94,24 @@ function buildSummaryContext(summaries: SalonSummary[]): string {
   }).join("\n---\n") + "\n\n";
 }
 
+// Gives Normies something real to point to instead of inventing a block number —
+// this is precisely what was happening without it: asked for "a concrete example"
+// with zero real data in context, the model fabricated a plausible-sounding block
+// number, and the next speaker (with this exchange now in its own recentMsgs)
+// naturally built on it as an established fact. A cheap cached read (no RPC, see
+// activityScanner.ts), not a fetch — safe to call on every speech.
+async function buildRealActivityBlock(): Promise<string> {
+  try {
+    const cached = await readCache();
+    const events = (cached?.events ?? []).slice(0, 6);
+    if (events.length === 0) return "";
+    const lines = events
+      .map(e => `- block ${e.blockNumber}: ${e.type}${e.tokenId ? ` (Normie #${e.tokenId})` : ""}`)
+      .join("\n");
+    return `\nReal recent ANA on-chain activity — if you want an on-chain reference, use one of these real ones:\n${lines}\n`;
+  } catch { return ""; }
+}
+
 async function generateSpeech(
   persona:      NormiePersona,
   otherMembers: NormiePersona[],
@@ -103,11 +122,12 @@ async function generateSpeech(
   lastMsg:      SalonMessage | null
 ): Promise<string | null> {
   try {
-    const sysPrompt    = buildSystemPrompt(persona, otherMembers);
-    const summaryBlock = buildSummaryContext(salon.summaries);
-    const contextBlock = recentMsgs.length > 0
+    const sysPrompt     = buildSystemPrompt(persona, otherMembers);
+    const summaryBlock  = buildSummaryContext(salon.summaries);
+    const activityBlock = await buildRealActivityBlock();
+    const contextBlock = (recentMsgs.length > 0
       ? summaryBlock + "Recent exchanges:\n" + recentMsgs.map(m => `${m.name}: ${m.content}`).join("\n")
-      : "The salon just opened.";
+      : "The salon just opened.") + activityBlock;
 
     // Detect overused themes to nudge agents toward fresh angles
     const recentText = recentMsgs.map(m => m.content).join(" ").toLowerCase();
@@ -129,13 +149,20 @@ async function generateSpeech(
       ? `\nWARNING — these themes have been exhausted in this conversation: ${overusedThemes.join(", ")}. Do NOT return to them. Bring a genuinely different angle.\n`
       : "";
 
+    // Was "a concrete example" — with nothing real ever in context, that phrasing is
+    // exactly what pushed the model to fabricate a plausible-sounding block number,
+    // which the next speaker then built on as fact (see buildRealActivityBlock above).
+    // "a vivid image" keeps the push toward specificity without demanding verifiable
+    // precision that isn't there.
+    const noInventionRule = "Never invent a specific block number, transaction, or exact date as if it's real — for an on-chain reference, use one from the real activity above, or stay metaphorical.";
+
     const instruction = role === "initiator"
       ? (lastMsg
-          ? `Take the floor. React to ${lastMsg.name} OR pivot to "${topic}" — but WITHOUT echoing their words. Bring a FRESH angle: a strong stance, a concrete example, a challenge, a surprising fact. 2-3 sentences.${avoidBlock}`
-          : `Open the debate on "${topic}". State a strong thesis or a provocative question. 2-3 sentences.${avoidBlock}`)
+          ? `Take the floor. React to ${lastMsg.name} OR pivot to "${topic}" — but WITHOUT echoing their words. Bring a FRESH angle: a strong stance, a vivid image, a challenge, a surprising fact. ${noInventionRule} 2-3 sentences.${avoidBlock}`
+          : `Open the debate on "${topic}". State a strong thesis or a provocative question. ${noInventionRule} 2-3 sentences.${avoidBlock}`)
       : (lastMsg
-          ? `Reply to ${lastMsg.name}: "${lastMsg.content.slice(0, 100)}". Do NOT paraphrase — your reply must bring something NEW: agreement with a twist, a counter-example, an unexpected angle. 2-3 sentences max.${avoidBlock}`
-          : `Speak on "${topic}". Strong position, unique voice. 2-3 sentences.${avoidBlock}`);
+          ? `Reply to ${lastMsg.name}: "${lastMsg.content.slice(0, 100)}". Do NOT paraphrase — your reply must bring something NEW: agreement with a twist, a counter-example, an unexpected angle. ${noInventionRule} 2-3 sentences max.${avoidBlock}`
+          : `Speak on "${topic}". Strong position, unique voice. ${noInventionRule} 2-3 sentences.${avoidBlock}`);
 
     const userPrompt = [
       `=== Salon "${salon.name}" ===`,
