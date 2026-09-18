@@ -4,6 +4,7 @@ import { getTranslations } from "next-intl/server";
 export const metadata: Metadata = {
   title: "Creation Process — ANA Documentation",
   description: "From theme vote to on-chain publication: every step of the ANA work creation pipeline.",
+  alternates: { canonical: "/docs/creation" },
 };
 
 function getStates(t: Awaited<ReturnType<typeof getTranslations>>) {

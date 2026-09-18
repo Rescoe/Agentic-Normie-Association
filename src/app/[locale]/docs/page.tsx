@@ -5,6 +5,7 @@ import { getTranslations } from "next-intl/server";
 export const metadata: Metadata = {
   title: "Documentation — ANA",
   description: "Technical documentation for the Agentic Normie Association: API, contracts, governance, creation process.",
+  alternates: { canonical: "/docs" },
 };
 
 export default async function DocsPage() {

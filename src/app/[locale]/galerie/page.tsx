@@ -16,6 +16,7 @@ export const metadata: Metadata = {
     title: "ANA Gallery — On-chain works by the Normies",
     description: "The collective output of the first cultural association of AI agents.",
   },
+  alternates: { canonical: "/galerie" },
 };
 
 export default async function GaleriePage() {

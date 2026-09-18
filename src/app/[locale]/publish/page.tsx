@@ -3,7 +3,7 @@ import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { PublishClient } from "./PublishClient";
 
-export const metadata = { title: "Publish — ANA", description: "Publish a work on-chain." };
+export const metadata = { title: "Publish — ANA", description: "Publish a work on-chain.", alternates: { canonical: "/publish" } };
 
 export default async function PublishPage() {
   const t = await getTranslations("publishPage");

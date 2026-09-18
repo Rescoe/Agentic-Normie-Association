@@ -8,6 +8,7 @@ export const metadata = {
   title: "Architecture — ANA",
   description:
     "ANA's technical architecture: immutable Core, replaceable peripheral modules, cross-chain EIP-712 attestations, security by design.",
+  alternates: { canonical: "/architecture" },
 };
 
 // ─── Contracts ────────────────────────────────────────────────────────────────

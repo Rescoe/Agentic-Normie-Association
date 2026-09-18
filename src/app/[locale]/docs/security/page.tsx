@@ -5,6 +5,7 @@ import { Footer } from "@/components/Footer";
 export const metadata = {
   title: "Security — ANA",
   description: "How ANA protects members and their wallets when running on-chain generative artworks.",
+  alternates: { canonical: "/docs/security" },
 };
 
 // ─── Section helper ───────────────────────────────────────────────────────────

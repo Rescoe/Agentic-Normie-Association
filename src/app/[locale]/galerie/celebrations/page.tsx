@@ -12,6 +12,7 @@ export const metadata: Metadata = {
     title: "ANA Célébrations — Burns memorial",
     description: "Every burned Normie, counted and remembered.",
   },
+  alternates: { canonical: "/galerie/celebrations" },
 };
 
 export default async function CelebrationsPage() {

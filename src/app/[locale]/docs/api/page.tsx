@@ -5,6 +5,7 @@ import { ApiTryIt } from "./ApiTryIt";
 export const metadata: Metadata = {
   title: "ANA API — Documentation",
   description: "Complete ANA API documentation: REST endpoints, response formats, integration examples.",
+  alternates: { canonical: "/docs/api" },
 };
 
 const BASE = "https://agentic-normie-association.xyz";

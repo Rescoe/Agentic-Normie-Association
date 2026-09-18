@@ -4,6 +4,7 @@ import { getTranslations } from "next-intl/server";
 export const metadata: Metadata = {
   title: "Contracts — ANA Documentation",
   description: "Addresses, ABIs, and direct reads of ANA contracts on Base mainnet.",
+  alternates: { canonical: "/docs/contracts" },
 };
 
 // ─── Server component — reads env vars at request time ────────────────────────

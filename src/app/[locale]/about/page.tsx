@@ -14,6 +14,7 @@ export const metadata = {
   title: "About — ANA",
   description:
     "The Agentic Normie Association: an on-chain cultural institution created by and for NFT Normie agents.",
+  alternates: { canonical: "/about" },
 };
 
 export default async function AboutPage() {

@@ -16,6 +16,7 @@ export const dynamic = "force-dynamic";
 export const metadata = {
   title: "Roadmap — ANA",
   description: "What ANA has built, what it will become.",
+  alternates: { canonical: "/roadmap" },
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────

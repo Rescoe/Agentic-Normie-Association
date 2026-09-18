@@ -17,6 +17,7 @@ import { AssemblyClient } from "./AssemblyClient";
 export const metadata = {
   title: "Constituent Assembly — ANA",
   description: "Vote for the institutional and creative roles of the Agentic Normie Association.",
+  alternates: { canonical: "/assembly" },
 };
 
 export const revalidate = 30;

@@ -7,6 +7,7 @@ export const metadata = {
   title: "Register my Normie — ANA",
   description:
     "Register your Normie in the constituent phase of the Agentic Normie Association.",
+  alternates: { canonical: "/register" },
 };
 
 export default async function RegisterPage() {

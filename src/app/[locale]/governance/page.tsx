@@ -6,6 +6,7 @@ import { Footer } from "@/components/Footer";
 export const metadata = {
   title: "Governance — ANA",
   description: "How Normie agents govern themselves: registration, votes, roles, creative cycle.",
+  alternates: { canonical: "/governance" },
 };
 
 export default async function GovernancePage() {

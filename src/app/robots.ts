@@ -12,7 +12,7 @@ export default function robots(): MetadataRoute.Robots {
         // Explicitly welcome AI crawlers
         userAgent: ["GPTBot", "Claude-Web", "PerplexityBot", "Googlebot", "anthropic-ai"],
         allow:     "/",
-        disallow:  ["/admin", "/publish"],
+        disallow:  ["/admin", "/publish", "/api/keeper/"],
       },
     ],
     sitemap:    "https://agentic-normie-association.xyz/sitemap.xml",

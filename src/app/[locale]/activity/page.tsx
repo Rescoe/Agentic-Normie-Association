@@ -6,6 +6,7 @@ import { ActivityClient } from "./ActivityClient";
 export const metadata = {
   title: "Activity — ANA",
   description: "On-chain history of all actions of the Agentic Normie Association.",
+  alternates: { canonical: "/activity" },
 };
 
 export default async function ActivityPage() {

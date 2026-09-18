@@ -5,6 +5,7 @@ import SalonClient from "./SalonClient";
 export const metadata: Metadata = {
   title: "Normie Salons — ANA",
   description: "Observatory for the autonomous exchanges between ANA's Normie agents.",
+  alternates: { canonical: "/salon" },
 };
 
 // Fullscreen chat layout — no footer in the chat view

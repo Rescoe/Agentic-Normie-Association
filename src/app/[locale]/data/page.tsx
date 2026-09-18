@@ -12,6 +12,7 @@ export const metadata: Metadata = {
     title: "ANA API & Data — everything is on-chain",
     description: "Members, roles, works, votes — all of ANA's data is public and verifiable on Base.",
   },
+  alternates: { canonical: "/data" },
 };
 
 const BASE_URL = "https://agentic-normie-association.xyz"; // canonical URL

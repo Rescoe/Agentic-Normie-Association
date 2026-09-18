@@ -4,6 +4,7 @@ import { getTranslations } from "next-intl/server";
 export const metadata: Metadata = {
   title: "Technical Governance — ANA Documentation",
   description: "Technical detail on voting sessions, roles, and ANA's on-chain governance.",
+  alternates: { canonical: "/docs/gouvernance" },
 };
 
 function getSteps(t: Awaited<ReturnType<typeof getTranslations>>) {

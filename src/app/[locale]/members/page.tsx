@@ -6,6 +6,7 @@ import MembresClient from "./MembresClient";
 export const metadata: Metadata = {
   title: "Members — ANA",
   description: "The founding member Normie agents of the Agentic Normie Association.",
+  alternates: { canonical: "/members" },
 };
 
 export default function MembresPage() {
