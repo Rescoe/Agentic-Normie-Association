@@ -959,6 +959,7 @@ type ANAWorkFull = ANAWorkSummary & {
   proposal?: string;
   brief?: string;
   artworkText?: string;
+  cartelText?: string;
   artForm?: string;
   editionPrice?: string;
   editionSupply?: number;
@@ -1180,16 +1181,24 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                   dernière étape : {w.stateHistory[w.stateHistory.length - 1]?.note ?? "—"}
                 </p>
               )}
-              {w.isBurnMemorial && (
-                <Link
-                  href={`/celebrations/${w.id}/${w.state === "VALIDATING" || w.state === "PUBLISHING" ? "review" : "draw"}`}
-                  target="_blank"
-                  className="font-mono text-[10px] text-indigo-600 underline inline-block mt-0.5"
-                >
-                  ⬛ Voir la page dessin/revue de ce mémorial →
-                </Link>
+              {w.isBurnMemorial && w.artworkText && (
+                <div className="mt-1 space-y-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={w.artworkText}
+                    alt={w.title}
+                    style={{ width: 132, imageRendering: "pixelated" }}
+                    className="border border-[--border]"
+                  />
+                  {w.cartelText && (
+                    <p className="font-mono text-[10px] text-[--fg-muted] italic max-w-xs">{w.cartelText}</p>
+                  )}
+                  <Link href="/galerie/celebrations" target="_blank" className="font-mono text-[10px] text-indigo-600 underline inline-block">
+                    Voir dans la galerie Célébrations →
+                  </Link>
+                </div>
               )}
-              {w.artworkText && (
+              {w.artworkText && !w.isBurnMemorial && (
                 <button
                   onClick={() => setCodeView(w)}
                   title="Voir le code/texte en cours de création par les Normies (exceptionnel, debug uniquement)"

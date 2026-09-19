@@ -16,7 +16,7 @@ import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, ANA_EDITIONS_ABI, CONTRACT_AD
 import {
   getActiveWorks, listWorks, getWork, updateWork, advanceState, addVote,
   hasVoted, tallyVotes, buildWorkHtml, createWork, getFoundingWork,
-  VOTE_WINDOW_MS, nextInDispatchRotation,
+  VOTE_WINDOW_MS, CELEBRATION_VOTE_WINDOW_MS, nextInDispatchRotation,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
 import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
@@ -234,12 +234,24 @@ async function stepProposed(work: ANAWork, personas: NormiePersona[]): Promise<b
 }
 
 async function castVote(persona: NormiePersona, work: ANAWork): Promise<WorkVote | null> {
-  const raw = await groq(
-    [
-      { role: "system", content: buildSystemPrompt(persona) },
-      {
-        role: "user",
-        content: `You are ${persona.name} (Normie #${persona.tokenId}), an ANA member.
+  // Memorials are already fully created by the time their vote opens (see
+  // memorialArt.ts) — the vote is moderation of a finished piece, not
+  // approval of an idea, and there's no author/curator role left to fill.
+  const userContent = work.isBurnMemorial
+    ? `You are ${persona.name} (Normie #${persona.tokenId}), an ANA member.
+Archetype: ${persona.archetype ?? "unknown"}
+Traits: ${(persona.traits ?? []).join(", ") || "—"}
+
+A fellow member has already created a memorial piece — vote to approve or reject it for on-chain publication. This is moderation, not brainstorming: vote HONESTLY on whether it's a fitting, genuine piece, not on whether you'd have made something different.
+
+Title: "${work.title}"
+Context: ${work.proposal}
+${work.cartelText ? `Artist statement: ${work.cartelText}` : ""}
+Created by: ${work.proposedByName}
+
+JSON only:
+{"vote":"yes"|"no"|"abstain","reason":"Your reason in 1-2 sentences from your unique perspective."}`
+    : `You are ${persona.name} (Normie #${persona.tokenId}), an ANA member.
 Archetype: ${persona.archetype ?? "unknown"}
 Traits: ${(persona.traits ?? []).join(", ") || "—"}
 
@@ -253,8 +265,12 @@ Proposed by: ${work.proposedByName}
 
 JSON only:
 {"vote":"yes"|"no"|"abstain","reason":"Your reason in 1-2 sentences from your unique perspective.","interestedIn":"author"|"curator"|"none"}
-If vote "yes": which role suits you in this creation? ("author" = create, "curator" = validate, "none" = no preference)`,
-      },
+If vote "yes": which role suits you in this creation? ("author" = create, "curator" = validate, "none" = no preference)`;
+
+  const raw = await groq(
+    [
+      { role: "system", content: buildSystemPrompt(persona) },
+      { role: "user", content: userContent },
     ],
     { model: MODEL_FAST, maxTokens: 120, temp: 0.75, json: true }
   );
@@ -310,9 +326,10 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
   const refreshed = await getWork(work.id);
   if (!refreshed) return cast > 0;
 
-  const remaining   = personas.filter(p => !hasVoted(refreshed, p.tokenId));
-  const timeExpired = refreshed.voteOpenedAt != null
-    && Date.now() - refreshed.voteOpenedAt > VOTE_WINDOW_MS;
+  const remaining    = personas.filter(p => !hasVoted(refreshed, p.tokenId));
+  const effectiveWindow = refreshed.isBurnMemorial ? CELEBRATION_VOTE_WINDOW_MS : VOTE_WINDOW_MS;
+  const timeExpired  = refreshed.voteOpenedAt != null
+    && Date.now() - refreshed.voteOpenedAt > effectiveWindow;
 
   if (remaining.length === 0 || timeExpired) {
     const { yes, no, abs, passed } = tallyVotes(refreshed);
@@ -355,6 +372,15 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
     if (work.salonId && work.salonId !== AGORA_SALON_ID) {
       await closeSalon(work.salonId, 0).catch(() => null);
     }
+    return true;
+  }
+
+  // Memorials are already fully created (drawPixels/artworkText/author/
+  // curator/rapporteur all set at proposal time — see check-burns.ts /
+  // request-memorial.ts) and the vote above just moderated them. Nothing
+  // left to brief or create — straight to publishing.
+  if (work.artForm === "pixel-drawing") {
+    await advanceState(work.id, "PUBLISHING", "Vote passed — already created, publishing directly");
     return true;
   }
 
@@ -429,16 +455,6 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
     console.log(`[work-lifecycle] No bureau — roles from vote: Author: ${author.name}, Curator: ${curator.name}, Rapporteur: ${rapporteur.name}`);
   }
 
-  // Celebration works are hand-drawn by the member the burn already selected
-  // (work.proposedBy) — not by whichever Normie the vote/rotation dispatched
-  // as Author. Override just that role; curator/rapporteur stay as dispatched
-  // (curator isn't used to judge this artForm — see stepValidating's peer
-  // review branch — but kept for consistent record-keeping in the certificate).
-  if (work.suggestedForm === "pixel-drawing") {
-    author = personas.find(p => p.tokenId === work.proposedBy)
-      ?? ({ tokenId: work.proposedBy, name: work.proposedByName, imageUrl: "" } as NormiePersona);
-  }
-
   await updateWork(work.id, {
     rapporteurTokenId: rapporteur.tokenId,
     rapporteurName:    rapporteur.name,
@@ -457,20 +473,9 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
 }
 
 async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
-  // Celebration works skip the Rapporteur LLM entirely — no brief to write for
-  // a piece the proposer draws themselves, and the whole point of this artForm
-  // is a pipeline that doesn't depend on Groq calls to advance.
-  if (work.suggestedForm === "pixel-drawing") {
-    await updateWork(work.id, {
-      artForm:       "pixel-drawing",
-      ambitionLevel: "quick",
-      brief:         work.proposal,
-      briefAt:       Date.now(),
-    });
-    await advanceState(work.id, "CREATING", `${work.proposedByName} will draw this celebration directly`);
-    return true;
-  }
-
+  // Memorials (artForm "pixel-drawing") never reach BRIEFING — stepVoteTallied
+  // sends them straight from VOTE_TALLIED to PUBLISHING, since they're
+  // already fully created by proposal time (see memorialArt.ts).
   const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId) ?? personas[0];
   if (!rapporteur) { console.error(`[work-lifecycle] BRIEFING: no rapporteur for ${work.id}`); return false; }
 
@@ -673,20 +678,9 @@ async function buildAuthorHistoryBlock(authorTokenId: number | undefined, exclud
   }
 }
 
-/**
- * CREATING for artForm "pixel-drawing" — no Author LLM call. Waits for the
- * proposer to submit their drawing via POST /api/draw/submit (mode:
- * "celebration"), which writes drawSubmissionId/artworkText on the work. A
- * no-op (false) tick just means "still waiting to be drawn".
- */
-async function stepAwaitDrawSubmission(work: ANAWork): Promise<boolean> {
-  if (!work.drawSubmissionId || !work.artworkText) return false;
-  await advanceState(work.id, "VALIDATING", `Drawing submitted by ${work.proposedByName}`);
-  return true;
-}
-
 async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean | string> {
-  if (work.artForm === "pixel-drawing") return await stepAwaitDrawSubmission(work);
+  // Memorials (artForm "pixel-drawing") never reach CREATING — they're fully
+  // created (drawPixels/artworkText) at proposal time, see memorialArt.ts.
 
   const author = personas.find(p => p.tokenId === work.authorTokenId);
   if (!author) return false;
@@ -886,35 +880,10 @@ async function rejectOrRevise(
   return true;
 }
 
-/**
- * VALIDATING for artForm "pixel-drawing" — no Curator LLM call. A member
- * picked by rotation (excluding the proposer/drawer — no self-review) must
- * approve or reject via POST /api/works/[id]/peer-review. Two no-op legs:
- * first tick after CREATING assigns the reviewer, later ticks just wait for
- * their decision to land.
- */
-async function stepPeerReview(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
-  if (!work.peerReviewerTokenId) {
-    const candidateIds = personas.map(p => p.tokenId);
-    if (candidateIds.length === 0) return false;
-    const reviewerId = await nextInDispatchRotation("reviewer", candidateIds, [work.proposedBy]);
-    await updateWork(work.id, { peerReviewerTokenId: reviewerId });
-    console.log(`[work-lifecycle] ${work.id}: peer reviewer assigned — #${reviewerId}`);
-    return true;
-  }
-
-  if (!work.peerReviewDecision) return false; // waiting on the reviewer's decision
-
-  if (work.peerReviewDecision === "approved") {
-    await advanceState(work.id, "PUBLISHING", `Approved by peer reviewer #${work.peerReviewerTokenId}`);
-  } else {
-    await advanceState(work.id, "REJECTED", `Rejected by peer reviewer #${work.peerReviewerTokenId}${work.peerReviewNote ? `: ${work.peerReviewNote}` : ""}`);
-  }
-  return true;
-}
-
 async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
-  if (work.artForm === "pixel-drawing") return await stepPeerReview(work, personas);
+  // Memorials (artForm "pixel-drawing") never reach VALIDATING — moderation
+  // for them is the member vote, run right after creation (see
+  // stepVoteTallied's early PUBLISHING branch), not a Curator step here.
 
   const curator = personas.find(p => p.tokenId === work.curatorTokenId);
   if (!curator) return false;
@@ -1624,28 +1593,50 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    const result = await advanceWork(work, personas);
+    let result = await advanceWork(work, personas);
     if (from === "CREATING") creatingUsedThisTick = true;
+    let stalledAt = from; // state whose step function actually produced `result` — tracked separately from `from` because of the cascade below
+
+    // Memorials: cascade through as many further states as possible in this
+    // SAME tick (capped) instead of waiting up to 2h per state transition —
+    // the whole burn -> vote -> publish pipeline is budgeted at ~4h total,
+    // which a single 2h cron tick can't guarantee otherwise. Safe to do only
+    // for these: creation needs no LLM call (already done at proposal time),
+    // and stepVoteOpen already resolves synchronously once every member has
+    // voted, so there's nothing here that risks a long-running loop.
+    if (work.isBurnMemorial && result === true) {
+      for (let cascade = 0; cascade < 6; cascade++) {
+        const current = await getWork(work.id);
+        if (!current || current.state === "PUBLISHED" || current.state === "REJECTED") break;
+        stalledAt = current.state;
+        result = await advanceWork(current, personas);
+        if (result !== true) break;
+      }
+    }
+
     const advanced = result === true;
     const error    = typeof result === "string" ? result : undefined;
 
     // VOTE_OPEN legitimately returns false while waiting on the 24h voting window
     // (not everyone has voted yet) — that is normal, not a failure, never auto-reject it.
+    // Uses stalledAt (where advanceWork actually stopped), not the work's
+    // original `from` state, so a memorial that cascades past VOTE_OPEN and
+    // then genuinely fails at e.g. PUBLISHING isn't mistaken for "still voting".
     let autoRejected = false;
-    if (!advanced && from !== "VOTE_OPEN") {
+    if (!advanced && stalledAt !== "VOTE_OPEN") {
       // Any other non-advancing step counts — even steps that only return false
       // on failure (no descriptive string) must not block the pipeline forever.
-      const reason    = error ?? `no progress at ${from} (step returned false — likely a transient LLM/data issue)`;
+      const reason    = error ?? `no progress at ${stalledAt} (step returned false — likely a transient LLM/data issue)`;
       const failCount = (work.pipelineFailCount ?? 0) + 1;
       if (failCount >= MAX_PIPELINE_FAILS) {
-        await advanceState(work.id, "REJECTED", `Auto-rejected after ${failCount} failures at ${from}: ${reason.slice(0, 200)}`);
+        await advanceState(work.id, "REJECTED", `Auto-rejected after ${failCount} failures at ${stalledAt}: ${reason.slice(0, 200)}`);
         await updateWork(work.id, { validationNote: reason.slice(0, 300), pipelineFailCount: failCount });
-        await announceInSalon(work, "pipeline_failed", personas, { failedState: from, error: reason });
+        await announceInSalon(work, "pipeline_failed", personas, { failedState: stalledAt, error: reason });
         if (work.salonId && work.salonId !== AGORA_SALON_ID) {
           await closeSalon(work.salonId, 0).catch(() => null);
         }
         autoRejected = true;
-        console.warn(`[work-lifecycle] "${work.title}" auto-rejected after ${failCount} consecutive failures at ${from}`);
+        console.warn(`[work-lifecycle] "${work.title}" auto-rejected after ${failCount} consecutive failures at ${stalledAt}`);
       } else {
         await updateWork(work.id, { pipelineFailCount: failCount });
       }

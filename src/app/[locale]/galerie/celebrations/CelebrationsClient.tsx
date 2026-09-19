@@ -2,7 +2,6 @@
 
 import { useTranslations } from "next-intl";
 import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
 import { useAccount, useWriteContract } from "wagmi";
 import { CELEBRATION_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 
@@ -125,34 +124,30 @@ interface MemorialResult {
 }
 
 interface MemorialWork {
-  id:                  string;
-  title:               string;
-  state:               string;
-  burnedTokenId?:      number;
-  proposedBy:          number;
-  proposedByName:      string;
-  peerReviewerTokenId?: number;
-  peerReviewDecision?:  "approved" | "rejected";
+  id:              string;
+  title:           string;
+  state:           string;
+  burnedTokenId?:  number;
+  proposedBy:      number;
+  proposedByName:  string;
+  artworkText?:    string; // BMP data URI, present as soon as the work exists
+  cartelText?:     string; // artist statement
 }
 
 const STATE_LABEL: Record<string, string> = {
-  PROPOSED: "Proposé", VOTE_OPEN: "Vote en cours", VOTE_TALLIED: "Vote clos",
-  BRIEFING: "Préparation", CREATING: "En attente de dessin", VALIDATING: "En revue",
+  VOTE_OPEN: "Vote en cours", VOTE_TALLIED: "Vote clos",
   PUBLISHING: "Publication…", PUBLISHED: "Publié", REJECTED: "Rejeté",
 };
-
-function nextStepHref(w: MemorialWork): string {
-  return w.state === "VALIDATING" || w.state === "PUBLISHING"
-    ? `/celebrations/${w.id}/review`
-    : `/celebrations/${w.id}/draw`;
-}
 
 /**
  * Lets any visitor nominate a burned Normie (from the list above, or by
  * typing a tokenId) for a memorial work — instead of waiting for the
  * check-burns cron's aggregate detection. Mainly a way to test the full
- * celebration → drawing → peer review → proof-of-draw pipeline on demand,
- * but also a real path for the community to flag a burn ANA missed.
+ * celebration → vote → proof-of-draw pipeline on demand, but also a real
+ * path for the community to flag a burn ANA missed. The memorial itself
+ * (a real creative act by the member picked to propose it, informed by the
+ * burned Normie's persona — see memorialArt.ts) is created instantly; only
+ * the member vote that moderates it takes any time.
  */
 async function requestMemorial(tokenId: number): Promise<MemorialResult> {
   try {
@@ -163,7 +158,7 @@ async function requestMemorial(tokenId: number): Promise<MemorialResult> {
     });
     const data = await res.json();
     if (res.ok) {
-      return { ok: true, workId: data.workId, message: `Mémorial créé (${data.workId}) — proposeur/dessinateur : ${data.proposerName} (#${data.proposerTokenId}).` };
+      return { ok: true, workId: data.workId, message: `Mémorial créé (${data.workId}) par ${data.proposerName} (#${data.proposerTokenId}) — vote en cours.` };
     }
     return { ok: false, workId: data.workId, message: data.error ?? "Échec de la demande." };
   } catch {
@@ -274,39 +269,29 @@ export function CelebrationsClient() {
         <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Demander un mémorial</p>
         <p className="font-mono text-[11px] text-[--fg-muted]">
           Survole un Normie ci-dessous et clique « ◈ Mémorial », ou entre directement un numéro de token.
-          Un membre ANA est sélectionné au hasard pour dessiner le mémorial — il devra le soumettre puis un pair devra le valider.
+          Un membre ANA est sélectionné au hasard pour créer le mémorial — sa pièce est générée instantanément, puis soumise au vote des autres membres comme modération.
         </p>
         <RequestMemorialForm onSubmit={handleRequestMemorial} submitting={requestingTokenId != null} />
         {memorialResult && (
           <p className={`font-mono text-[11px] ${memorialResult.ok ? "text-green-400" : "text-red-400"}`}>
             {memorialResult.message}
-            {memorialResult.workId && (
-              <>
-                {" "}
-                <Link href={`/celebrations/${memorialResult.workId}/draw`} className="underline">
-                  Voir / dessiner →
-                </Link>
-              </>
-            )}
           </p>
         )}
 
         {memorials.length > 0 && (
-          <div className="space-y-1.5 pt-2 border-t border-[--border]">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">Mémoriaux ({memorials.length})</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-2 border-t border-[--border]">
             {memorials.map(m => (
-              <div key={m.id} className="flex items-center justify-between gap-3 font-mono text-[11px]">
-                <span className="text-[--fg-muted] truncate">
-                  {m.burnedTokenId != null ? `#${m.burnedTokenId}` : "—"} · {m.title} · {m.proposedByName}
-                </span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className={m.state === "PUBLISHED" ? "text-green-400" : m.state === "REJECTED" ? "text-red-400" : "text-[--fg-muted]"}>
-                    {STATE_LABEL[m.state] ?? m.state}
-                  </span>
-                  {m.state !== "PUBLISHED" && m.state !== "REJECTED" && (
-                    <Link href={nextStepHref(m)} className="underline text-[--fg]">Voir →</Link>
-                  )}
-                </span>
+              <div key={m.id} className="border border-[--border] bg-[--bg] p-2 space-y-1">
+                {m.artworkText && (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img src={m.artworkText} alt={m.title} className="w-full" style={{ imageRendering: "pixelated" }} />
+                )}
+                <p className="font-mono text-[10px] text-[--fg-muted] truncate" title={m.title}>
+                  {m.burnedTokenId != null ? `#${m.burnedTokenId} — ` : ""}{m.title}
+                </p>
+                <p className={`font-mono text-[10px] ${m.state === "PUBLISHED" ? "text-green-400" : m.state === "REJECTED" ? "text-red-400" : "text-[--fg-muted]"}`}>
+                  {STATE_LABEL[m.state] ?? m.state}
+                </p>
               </div>
             ))}
           </div>
@@ -341,14 +326,12 @@ export function CelebrationsClient() {
                     #{b.tokenId}
                   </span>
                   {existing ? (
-                    <Link
-                      href={nextStepHref(existing)}
-                      onClick={e => e.stopPropagation()}
+                    <span
                       className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-green-400"
                       title={`Mémorial déjà ${STATE_LABEL[existing.state] ?? existing.state}`}
                     >
                       ✓ {STATE_LABEL[existing.state] ?? existing.state}
-                    </Link>
+                    </span>
                   ) : (
                     <button
                       onClick={e => { e.preventDefault(); e.stopPropagation(); void handleRequestMemorial(b.tokenId); }}

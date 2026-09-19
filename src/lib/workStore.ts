@@ -124,26 +124,23 @@ export interface ANAWork {
   foundingContext?:   Array<{ name: string; content: string; timestamp: number }>;
   allElectedRoles?:   Array<{ roleLabel: string; tokenId: number; name: string }>;
 
-  // Human draw submission (artForm "pixel-drawing") — filled by POST /api/draw/submit,
-  // consumed by stepAwaitDrawSubmission in work-lifecycle. Bypasses the Author LLM.
-  // drawPixels/drawCanvasW/drawCanvasH are the raw grayscale bytes — proof-of-draw
-  // reads them via GET /api/ana-art/feed once the work is PUBLISHED. artworkText
-  // holds a BMP-wrapped copy instead, for the certificate's <img> tag (a
-  // rendering convenience, not the source proof-of-draw consumes).
-  drawSubmissionId?: string;
-  drawSubmittedBy?:  number;
-  drawSubmittedAt?:  number;
+  // Memorial visual (artForm "pixel-drawing") — generated instantly at
+  // creation (memorialArt.ts, no LLM/human involved, see check-burns.ts /
+  // request-memorial.ts) rather than produced later in CREATING. drawPixels/
+  // drawCanvasW/drawCanvasH are the raw grayscale bytes proof-of-draw reads
+  // via GET /api/ana-art/feed once the work is PUBLISHED; artworkText holds a
+  // BMP-wrapped copy for the certificate's <img> tag (a rendering
+  // convenience, not the source proof-of-draw consumes). Moderation for this
+  // artForm is the same member vote every other work goes through
+  // (stepVoteOpen/stepVoteTallied), just running after creation instead of
+  // before it — see stepVoteTallied's early PUBLISHING branch.
   drawPixels?:       string;
   drawCanvasW?:      number;
   drawCanvasH?:      number;
-
-  // Peer review (artForm "pixel-drawing") — a human member's approval, replacing the
-  // Curator LLM judgment for this artForm. Assigned by rotation, decided via
-  // POST /api/works/[id]/peer-review.
-  peerReviewerTokenId?: number;
-  peerReviewDecision?:  "approved" | "rejected";
-  peerReviewNote?:      string;
-  peerReviewedAt?:      number;
+  // The proposer's own artist statement about this specific piece (LLM,
+  // written alongside the shapes — see memorialArt.ts). Gallery/certificate
+  // only: never sent to proof-of-draw (GET /api/ana-art/feed omits it).
+  cartelText?:       string;
 }
 
 interface DispatchRotation {
@@ -162,6 +159,13 @@ interface WorkStore {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
+// Memorials are already fully created (instant, deterministic art — see
+// memorialArt.ts) by the time their vote opens, and the whole burn -> vote ->
+// publish pipeline is budgeted at ~4h end to end — a 24h fallback window
+// would blow that budget if even one member's vote fails/stalls. In practice
+// stepVoteOpen resolves in a single tick once every member has voted; this
+// is only the fallback for stragglers.
+export const CELEBRATION_VOTE_WINDOW_MS = 90 * 60 * 1000; // 90 min max for celebration votes
 
 const NEON_KEY    = "work-store";
 const DATA_FILE   = path.join(process.cwd(), "data", "works.json");
@@ -619,7 +623,8 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
   // no origin to get wrong.
   const artwork = work.artForm === "pixel-drawing" && work.artworkText
     ? `<img src="${escapeHtml(work.artworkText)}" alt="${escapeHtml(work.title)}" style="width:100%;max-width:400px;image-rendering:pixelated;border:1px solid var(--b);background:#fff;display:block;margin:0 auto" />
-<p class="meta" style="margin-top:.4rem;text-align:center">Pixel drawing by ${escapeHtml(work.proposedByName)}</p>`
+<p class="meta" style="margin-top:.4rem;text-align:center">By ${escapeHtml(work.proposedByName)}</p>
+${work.cartelText ? `<p class="block" style="margin-top:.8rem;font-style:italic">${escapeHtml(work.cartelText)}</p>` : ""}`
     : work.artworkText && isHtmlArtwork(work.artworkText)
     ? (work.collectionAddress
         ? `<iframe src="/api/works/html/by-collection/${work.collectionAddress}" sandbox="allow-scripts" loading="lazy" style="width:100%;aspect-ratio:4/3;border:1px solid var(--b);background:#000;display:block" title="${escapeHtml(work.title)}"></iframe>

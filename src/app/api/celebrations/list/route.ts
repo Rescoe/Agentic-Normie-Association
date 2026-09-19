@@ -13,14 +13,14 @@ export async function GET() {
     .sort((a, b) => b.proposedAt - a.proposedAt)
     .slice(0, 50)
     .map(w => ({
-      id:                w.id,
-      title:             w.title,
-      state:             w.state,
-      burnedTokenId:     w.burnedTokenId,
-      proposedBy:        w.proposedBy,
-      proposedByName:    w.proposedByName,
-      peerReviewerTokenId: w.peerReviewerTokenId,
-      peerReviewDecision:  w.peerReviewDecision,
+      id:             w.id,
+      title:          w.title,
+      state:          w.state,
+      burnedTokenId:  w.burnedTokenId,
+      proposedBy:     w.proposedBy,
+      proposedByName: w.proposedByName,
+      artworkText:    w.artworkText,
+      cartelText:     w.cartelText,
     }));
 
   return NextResponse.json({ works });

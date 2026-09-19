@@ -1,9 +1,12 @@
 /**
  * POST /api/keeper/check-burns
  * Daily cron: compares current Normies NFT totalSupply (Ethereum mainnet)
- * with the last recorded count. If a burn is detected, creates a memorial
- * work proposal in the PROPOSED state for the ANA to process, and registers
- * a CelebrationRegistry entry per burned Normie (Base) so its last owner can
+ * with the last recorded count. If a burn is detected, a random member
+ * creates a memorial piece for it instantly (memorialArt.ts — their own
+ * persona/history, informed by the burned Normie(s)' identity) and the work
+ * is created already in VOTE_OPEN, so the member vote can moderate it right
+ * away instead of gating creation beforehand. Also registers a
+ * CelebrationRegistry entry per burned Normie (Base) so its last owner can
  * later claim a free edition of the work made in its honor.
  *
  * Requires:
@@ -22,6 +25,8 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { getBurnedTokens } from "@/lib/normiesApi";
 import { registerCelebrationOnChain, CELEBRATION_TYPE } from "@/server/relayer/celebrationPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
+import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
+import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 // Minimal ERC721 ABI — totalSupply + the standard Transfer event
 const ERC721_SUPPLY_ABI = [
@@ -234,23 +239,55 @@ export async function POST(req: NextRequest) {
     ? `A Normie was burned. The collection goes from ${lastSupply} to ${currentSupply}.`
     : `${burned} Normies were burned. The collection goes from ${lastSupply} to ${currentSupply}.`;
 
-  // Pinned (not left to the Rapporteur's judgment) so memorial works are reliably
-  // a human-drawn piece: the proposer above draws it themselves (see
-  // stepAwaitDrawSubmission in work-lifecycle) rather than an LLM Author
-  // generating text/code — this is what makes the celebration pipeline light
-  // enough to run in parallel with ANA's regular generative works.
-  const memorialForm = "pixel-drawing";
+  // All burned tokenIds in this batch — fed to the proposer as context (a
+  // collective piece honoring everyone burned, not just one) and the first
+  // one recorded as burnedTokenId for display/dedup purposes.
+  let burnedTokenIds: number[] = [];
+  try {
+    const recentBurns = await getBurnedTokens(burned, 0);
+    burnedTokenIds = recentBurns.map(t => Number(t.tokenId)).filter(id => Number.isFinite(id));
+  } catch (e) {
+    console.warn("[check-burns] getBurnedTokens (for memorial context) failed:", e);
+  }
+
+  // A real creative act by the proposer (their own persona/history, informed
+  // by the burned Normie(s)' identity) — not a mechanically generated
+  // pattern. See memorialArt.ts. Created synchronously so the work is fully
+  // formed the moment it's proposed; the vote below (stepVoteOpen/
+  // stepVoteTallied, unchanged) moderates it after the fact.
+  const { pixels, cartel } = await createMemorialArtwork({
+    proposer, burnedTokenIds: burnedTokenIds.length > 0 ? burnedTokenIds : [currentSupply], otherMembers: [],
+  });
+  const drawPixelsB64 = Buffer.from(pixels).toString("base64");
+  const artworkText   = pixelsToBmpDataUri(pixels, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H);
+
+  const title = burned === 1 ? "Memory of an absence" : `Eulogy for ${burned} absences`;
+  const proposal = `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ${proposer.name} created this memorial piece on behalf of the association.`;
 
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
     proposedAt:     Date.now(),
-    title:          burned === 1 ? "Memory of an absence" : `Eulogy for ${burned} absences`,
-    proposal:       `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ANA proposes creating a memorial work — ${proposer.name} will draw a small pixel piece on finitude, burning, and the permanence of what remains on-chain.`,
-    suggestedForm:  memorialForm,
+    title,
+    proposal,
+    suggestedForm:  "pixel-drawing",
+    artForm:        "pixel-drawing",
     isBurnMemorial: true,
+    burnedTokenId:  burnedTokenIds[0],
     salonId:        "salon_agora_ana",
-  });
+    voteOpenedAt:   Date.now(),
+    drawPixels:     drawPixelsB64,
+    drawCanvasW:    MEMORIAL_CANVAS_W,
+    drawCanvasH:    MEMORIAL_CANVAS_H,
+    artworkText,
+    cartelText:     cartel,
+    authorTokenId:     proposer.tokenId,
+    authorName:        proposer.name,
+    curatorTokenId:    proposer.tokenId,
+    curatorName:       proposer.name,
+    rapporteurTokenId: proposer.tokenId,
+    rapporteurName:    proposer.name,
+  }, "VOTE_OPEN");
 
   // Best-effort — never blocks the memorial work if it fails.
   const celebrationIds = await registerBurnCelebrations(burned, work.id).catch(e => {

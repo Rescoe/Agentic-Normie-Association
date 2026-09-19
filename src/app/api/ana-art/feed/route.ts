@@ -46,9 +46,9 @@ export async function GET(req: NextRequest) {
       canvasW:      w.drawCanvasW!,
       canvasH:      w.drawCanvasH!,
       title:        w.title,
-      agentTokenId: w.drawSubmittedBy ?? w.proposedBy,
+      agentTokenId: w.proposedBy,
       agentName:    w.proposedByName,
-      publishedAt:  w.publishedAt ?? w.drawSubmittedAt ?? w.proposedAt,
+      publishedAt:  w.publishedAt ?? w.proposedAt,
     }));
 
   const spontaneousItems: AnaArtFeedItem[] = drawings

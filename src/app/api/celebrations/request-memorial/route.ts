@@ -6,6 +6,8 @@ import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, createWork } from "@/lib/workStore";
 import { buildPersona } from "@/lib/normiesPersona";
 import { checkMemorialRequestLimit, recordMemorialRequest } from "@/lib/salonStore";
+import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
+import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 const client = createPublicClient({
   chain:     base,
@@ -80,16 +82,16 @@ function getClientIp(req: NextRequest): string {
 
 /**
  * POST /api/celebrations/request-memorial — lets any visitor nominate a
- * specific (real or test) burned tokenId for a memorial, instead of waiting
- * for the check-burns cron's aggregate supply-diff detection. Same creation
- * shape as check-burns (random member proposer/drawer, artForm
- * "pixel-drawing", isBurnMemorial) but tied to one explicit tokenId
- * (burnedTokenId) and exempt from the same "one active work" gate — see
- * check-burns/route.ts for why that gate excludes memorials.
+ * specific burned tokenId for a memorial, instead of waiting for the
+ * check-burns cron's aggregate supply-diff detection. Same creation shape as
+ * check-burns: generates the memorial's visual instantly (memorialArt.ts, no
+ * LLM/human involved), creates the work already in VOTE_OPEN, exempt from
+ * the "one active work" gate (see check-burns/route.ts). The vote
+ * (stepVoteOpen/stepVoteTallied) is what moderates it, post-creation.
  *
  * Public and lightly rate-limited (10 min/IP) rather than wallet-gated: this
- * only ever *proposes* a memorial, it doesn't touch funds or on-chain state,
- * and the real gate is downstream (peer review before publication).
+ * only ever creates a work already subject to the same member vote every
+ * other ANA work goes through, it doesn't touch funds or on-chain state.
  */
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req);
@@ -136,17 +138,39 @@ export async function POST(req: NextRequest) {
   try { proposer = await buildPersona(proposerId); }
   catch { return NextResponse.json({ error: "Impossible de construire le persona du proposeur" }, { status: 503 }); }
 
+  // A real creative act by the proposer (own persona/history, informed by
+  // the burned Normie's identity) — see memorialArt.ts. The work goes
+  // straight to VOTE_OPEN, already fully created; the vote moderates it.
+  const { pixels, cartel } = await createMemorialArtwork({
+    proposer, burnedTokenIds: [tokenId!], otherMembers: [],
+  });
+  const drawPixelsB64 = Buffer.from(pixels).toString("base64");
+  const artworkText   = pixelsToBmpDataUri(pixels, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H);
+
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
     proposedAt:     Date.now(),
     title:          `Memory of Normie #${tokenId}`,
-    proposal:       `Normie #${tokenId} was burned. In its memory, ANA proposes a memorial work — ${proposer.name} will draw a small pixel piece on finitude, burning, and the permanence of what remains on-chain.`,
+    proposal:       `Normie #${tokenId} was burned. In its memory, ${proposer.name} created this memorial piece on behalf of the association.`,
     suggestedForm:  "pixel-drawing",
+    artForm:        "pixel-drawing",
     isBurnMemorial: true,
     burnedTokenId:  tokenId,
     salonId:        "salon_agora_ana",
-  });
+    voteOpenedAt:   Date.now(),
+    drawPixels:     drawPixelsB64,
+    drawCanvasW:    MEMORIAL_CANVAS_W,
+    drawCanvasH:    MEMORIAL_CANVAS_H,
+    artworkText,
+    cartelText:     cartel,
+    authorTokenId:     proposer.tokenId,
+    authorName:        proposer.name,
+    curatorTokenId:    proposer.tokenId,
+    curatorName:       proposer.name,
+    rapporteurTokenId: proposer.tokenId,
+    rapporteurName:    proposer.name,
+  }, "VOTE_OPEN");
 
   await recordMemorialRequest(ip);
 
