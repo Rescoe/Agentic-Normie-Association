@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useAccount, useWriteContract } from "wagmi";
 import { CELEBRATION_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
@@ -124,6 +124,29 @@ interface MemorialResult {
   workId?: string;
 }
 
+interface MemorialWork {
+  id:                  string;
+  title:               string;
+  state:               string;
+  burnedTokenId?:      number;
+  proposedBy:          number;
+  proposedByName:      string;
+  peerReviewerTokenId?: number;
+  peerReviewDecision?:  "approved" | "rejected";
+}
+
+const STATE_LABEL: Record<string, string> = {
+  PROPOSED: "Proposé", VOTE_OPEN: "Vote en cours", VOTE_TALLIED: "Vote clos",
+  BRIEFING: "Préparation", CREATING: "En attente de dessin", VALIDATING: "En revue",
+  PUBLISHING: "Publication…", PUBLISHED: "Publié", REJECTED: "Rejeté",
+};
+
+function nextStepHref(w: MemorialWork): string {
+  return w.state === "VALIDATING" || w.state === "PUBLISHING"
+    ? `/celebrations/${w.id}/review`
+    : `/celebrations/${w.id}/draw`;
+}
+
 /**
  * Lets any visitor nominate a burned Normie (from the list above, or by
  * typing a tokenId) for a memorial work — instead of waiting for the
@@ -182,13 +205,23 @@ export function CelebrationsClient() {
   const t = useTranslations("celebrations");
   const [stats, setStats]   = useState<BurnStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [memorials, setMemorials] = useState<MemorialWork[]>([]);
   const [memorialResult, setMemorialResult] = useState<MemorialResult | null>(null);
   const [requestingTokenId, setRequestingTokenId] = useState<number | null>(null);
 
+  const loadMemorials = useCallback(() => {
+    fetch("/api/celebrations/list")
+      .then(res => res.json())
+      .then(data => setMemorials(Array.isArray(data.works) ? data.works : []))
+      .catch(() => setMemorials([]));
+  }, []);
+
   async function handleRequestMemorial(tokenId: number) {
     setRequestingTokenId(tokenId);
-    setMemorialResult(await requestMemorial(tokenId));
+    const result = await requestMemorial(tokenId);
+    setMemorialResult(result);
     setRequestingTokenId(null);
+    if (result.ok) loadMemorials();
   }
 
   useEffect(() => {
@@ -198,8 +231,11 @@ export function CelebrationsClient() {
       .then(data => { if (!cancelled) setStats(data); })
       .catch(() => { if (!cancelled) setStats({ totalBurned: 0, totalSupply: 10000, recentBurns: [], error: "fetch_failed" }); })
       .finally(() => { if (!cancelled) setLoading(false); });
+    loadMemorials();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadMemorials]);
+
+  const memorialByTokenId = new Map(memorials.filter(m => m.burnedTokenId != null).map(m => [m.burnedTokenId!, m]));
 
   if (loading) {
     return <p className="font-mono text-xs text-[--fg-muted]">{t("loading")}</p>;
@@ -233,51 +269,11 @@ export function CelebrationsClient() {
         </div>
       </div>
 
-      {/* ── Recent burns grid ── */}
-      <div>
-        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-6">{t("recent.label")}</p>
-        {stats.recentBurns.length === 0 ? (
-          <p className="font-mono text-xs text-[--fg-muted]">{t("recent.empty")}</p>
-        ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-px bg-[--border]">
-            {stats.recentBurns.map(b => (
-              <a
-                key={b.tokenId}
-                href={`https://etherscan.io/tx/${b.txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-[--bg-card] aspect-square relative group"
-                title={`#${b.tokenId} — ${new Date(b.burnedAt).toLocaleDateString()}`}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={b.imageUrl}
-                  alt={`Normie #${b.tokenId}`}
-                  className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all"
-                />
-                <span className="absolute bottom-1 left-1 font-mono text-[10px] bg-[--bg] px-1 text-[--fg-muted]">
-                  #{b.tokenId}
-                </span>
-                <button
-                  onClick={e => { e.preventDefault(); e.stopPropagation(); void handleRequestMemorial(b.tokenId); }}
-                  disabled={requestingTokenId === b.tokenId}
-                  className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-[--fg-muted] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[--fg] disabled:opacity-100 disabled:cursor-wait"
-                  title={`Demander un mémorial pour #${b.tokenId}`}
-                >
-                  {requestingTokenId === b.tokenId ? "…" : "◈ Mémorial"}
-                </button>
-              </a>
-            ))}
-          </div>
-        )}
-        <p className="font-mono text-[11px] text-[--fg-muted] mt-4">{t("recent.footnote")}</p>
-      </div>
-
       {/* ── Demander un mémorial : déclenche la pipeline sans attendre le cron ── */}
       <div className="border border-[--border] bg-[--bg-card] p-6 space-y-3">
         <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Demander un mémorial</p>
         <p className="font-mono text-[11px] text-[--fg-muted]">
-          Survole un Normie ci-dessus et clique « ◈ Mémorial », ou entre directement un numéro de token.
+          Survole un Normie ci-dessous et clique « ◈ Mémorial », ou entre directement un numéro de token.
           Un membre ANA est sélectionné au hasard pour dessiner le mémorial — il devra le soumettre puis un pair devra le valider.
         </p>
         <RequestMemorialForm onSubmit={handleRequestMemorial} submitting={requestingTokenId != null} />
@@ -294,6 +290,81 @@ export function CelebrationsClient() {
             )}
           </p>
         )}
+
+        {memorials.length > 0 && (
+          <div className="space-y-1.5 pt-2 border-t border-[--border]">
+            <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">Mémoriaux ({memorials.length})</p>
+            {memorials.map(m => (
+              <div key={m.id} className="flex items-center justify-between gap-3 font-mono text-[11px]">
+                <span className="text-[--fg-muted] truncate">
+                  {m.burnedTokenId != null ? `#${m.burnedTokenId}` : "—"} · {m.title} · {m.proposedByName}
+                </span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <span className={m.state === "PUBLISHED" ? "text-green-400" : m.state === "REJECTED" ? "text-red-400" : "text-[--fg-muted]"}>
+                    {STATE_LABEL[m.state] ?? m.state}
+                  </span>
+                  {m.state !== "PUBLISHED" && m.state !== "REJECTED" && (
+                    <Link href={nextStepHref(m)} className="underline text-[--fg]">Voir →</Link>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Recent burns grid ── */}
+      <div>
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-6">{t("recent.label")}</p>
+        {stats.recentBurns.length === 0 ? (
+          <p className="font-mono text-xs text-[--fg-muted]">{t("recent.empty")}</p>
+        ) : (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-px bg-[--border]">
+            {stats.recentBurns.map(b => {
+              const existing = memorialByTokenId.get(b.tokenId);
+              return (
+                <a
+                  key={b.tokenId}
+                  href={`https://etherscan.io/tx/${b.txHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-[--bg-card] aspect-square relative group"
+                  title={`#${b.tokenId} — ${new Date(b.burnedAt).toLocaleDateString()}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={b.imageUrl}
+                    alt={`Normie #${b.tokenId}`}
+                    className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all"
+                  />
+                  <span className="absolute bottom-1 left-1 font-mono text-[10px] bg-[--bg] px-1 text-[--fg-muted]">
+                    #{b.tokenId}
+                  </span>
+                  {existing ? (
+                    <Link
+                      href={nextStepHref(existing)}
+                      onClick={e => e.stopPropagation()}
+                      className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-green-400"
+                      title={`Mémorial déjà ${STATE_LABEL[existing.state] ?? existing.state}`}
+                    >
+                      ✓ {STATE_LABEL[existing.state] ?? existing.state}
+                    </Link>
+                  ) : (
+                    <button
+                      onClick={e => { e.preventDefault(); e.stopPropagation(); void handleRequestMemorial(b.tokenId); }}
+                      disabled={requestingTokenId === b.tokenId}
+                      className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-[--fg-muted] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[--fg] disabled:opacity-100 disabled:cursor-wait"
+                      title={`Demander un mémorial pour #${b.tokenId}`}
+                    >
+                      {requestingTokenId === b.tokenId ? "…" : "◈ Mémorial"}
+                    </button>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        )}
+        <p className="font-mono text-[11px] text-[--fg-muted] mt-4">{t("recent.footnote")}</p>
       </div>
 
     </div>
