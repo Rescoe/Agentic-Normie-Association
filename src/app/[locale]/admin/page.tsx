@@ -1036,6 +1036,23 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
     } finally { setRejectingId(null); }
   };
 
+  const [forcingVoteId, setForcingVoteId] = useState<string | null>(null);
+  const forceVoteResult = async (workId: string, result: "pass" | "fail") => {
+    setForcingVoteId(workId);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify({ forceVoteResult: { workId, result } }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
+      else void refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setForcingVoteId(null); }
+  };
+
   // Recreates a memorial for the same burned Normie via request-memorial — its
   // own dedup check excludes REJECTED works, so this only works once the old
   // attempt is actually REJECTED (either already, or via rejectAndRecall below).
@@ -1246,6 +1263,27 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                   <Link href="/galerie/celebrations" target="_blank" className="font-mono text-[10px] text-indigo-600 underline inline-block">
                     Voir dans la galerie Célébrations →
                   </Link>
+                </div>
+              )}
+              {w.isBurnMemorial && w.state === "VOTE_OPEN" && (
+                <div className="flex items-center gap-2 flex-wrap mt-1">
+                  <span className="font-mono text-[10px] text-[--fg-muted]">Test — forcer le vote :</span>
+                  <button
+                    onClick={() => void forceVoteResult(w.id, "pass")}
+                    disabled={forcingVoteId === w.id}
+                    title="Force le passage en VOTE_TALLIED (approuvé) et enchaîne jusqu'à la publication, sans attendre de vraies votes LLM"
+                    className="font-mono text-[10px] text-green-700 border border-green-300 px-2 py-0.5 hover:bg-green-50/20 disabled:opacity-40"
+                  >
+                    {forcingVoteId === w.id ? "…" : "✅ Forcer approbation"}
+                  </button>
+                  <button
+                    onClick={() => void forceVoteResult(w.id, "fail")}
+                    disabled={forcingVoteId === w.id}
+                    title="Force un échec de vote — déclenche la recréation immédiate par un autre membre et rouvre le vote (ne rejette jamais le mémorial)"
+                    className="font-mono text-[10px] text-orange-700 border border-orange-300 px-2 py-0.5 hover:bg-orange-50/20 disabled:opacity-40"
+                  >
+                    {forcingVoteId === w.id ? "…" : "❌ Forcer échec (→ recréation)"}
+                  </button>
                 </div>
               )}
               {w.isBurnMemorial && (

@@ -27,6 +27,8 @@ import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
+import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
+import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 const MODEL        = "openai/gpt-oss-120b";
 // Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
@@ -368,6 +370,47 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
   await announceInSalon(work, "vote_result", personas);
 
   if (!passed) {
+    // A memorial's vote is aesthetic/moderation feedback on a finished piece,
+    // not a verdict on whether the burn deserves one — it always gets one.
+    // Instead of a terminal REJECTED, a different member takes over as
+    // proposer, makes a fresh attempt (still informed by the same burned
+    // Normie's identity), and the vote reopens on that new piece. Only an
+    // admin's own forceReject (see POST handler) can actually end a memorial
+    // in REJECTED — that's a deliberate archive action, not this path.
+    if (work.isBurnMemorial) {
+      const candidates = personas.filter(p => p.tokenId !== work.proposedBy);
+      const pool = candidates.length > 0 ? candidates : personas;
+      const newProposer = pool[Math.floor(Math.random() * pool.length)];
+
+      const { pixels, cartel } = await createMemorialArtwork({
+        proposer: newProposer,
+        burnedTokenIds: work.burnedTokenId != null ? [work.burnedTokenId] : [],
+        otherMembers: [],
+      });
+      const drawPixelsB64 = Buffer.from(pixels).toString("base64");
+      const artworkText   = pixelsToBmpDataUri(pixels, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H);
+
+      await updateWork(work.id, {
+        proposedBy: newProposer.tokenId, proposedByName: newProposer.name,
+        drawPixels: drawPixelsB64, artworkText, cartelText: cartel,
+        authorTokenId: newProposer.tokenId, authorName: newProposer.name,
+        curatorTokenId: newProposer.tokenId, curatorName: newProposer.name,
+        rapporteurTokenId: newProposer.tokenId, rapporteurName: newProposer.name,
+        votes: [], yesCount: 0, noCount: 0, absCount: 0,
+        voteResult: undefined, voteClosedAt: undefined, voteOpenedAt: Date.now(),
+        revisionCount: (work.revisionCount ?? 0) + 1,
+      });
+      await advanceState(
+        work.id, "VOTE_OPEN",
+        `Moderation vote didn't pass (${work.yesCount ?? 0} oui / ${work.noCount ?? 0} non) — recreated by ${newProposer.name}, vote reopened`,
+      );
+      await announceInSalon(
+        { ...work, proposedBy: newProposer.tokenId, proposedByName: newProposer.name },
+        "vote_opened", personas,
+      ).catch(() => null);
+      return true;
+    }
+
     await advanceState(work.id, "REJECTED", "Majority not reached");
     if (work.salonId && work.salonId !== AGORA_SALON_ID) {
       await closeSalon(work.salonId, 0).catch(() => null);
@@ -1498,7 +1541,11 @@ export async function POST(req: NextRequest) {
 
   // Admin-only: force a stuck work to REJECTED so the pipeline can restart.
   // Body: { forceReject: "<workId>" }
-  let body: { forceReject?: string; retryGenerative?: string } = {};
+  let body: {
+    forceReject?: string;
+    retryGenerative?: string;
+    forceVoteResult?: { workId: string; result: "pass" | "fail" };
+  } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
   if (body.forceReject) {
@@ -1557,6 +1604,44 @@ export async function POST(req: NextRequest) {
 
   if (personas.length === 0) {
     return NextResponse.json({ error: "Normies API unavailable" }, { status: 503 });
+  }
+
+  // Admin-only: force a VOTE_OPEN work's outcome instead of waiting on real
+  // member votes (which go through Groq and can be slow, rate-limited, or —
+  // during heavy manual testing — briefly failing outright). Lets the full
+  // creation → vote → publish pipeline be exercised end-to-end on demand.
+  // "fail" doesn't reject a memorial (see stepVoteTallied) — it exercises the
+  // same recreate-and-reopen path a real "no" majority would trigger.
+  // Body: { forceVoteResult: { workId, result: "pass" | "fail" } }
+  if (body.forceVoteResult) {
+    if (!isAdminCall) return NextResponse.json({ error: "forceVoteResult requires a valid admin signature" }, { status: 403 });
+    const { workId, result } = body.forceVoteResult;
+    const target = await getWork(workId);
+    if (!target) return NextResponse.json({ error: `Work ${workId} not found` }, { status: 404 });
+    if (target.state !== "VOTE_OPEN") {
+      return NextResponse.json({ error: `Work is ${target.state}, not VOTE_OPEN — nothing to force` }, { status: 409 });
+    }
+
+    await updateWork(target.id, {
+      voteClosedAt: Date.now(),
+      voteResult:   result === "pass" ? "passed" : "rejected",
+      totalVoters:  personas.length,
+    });
+    await advanceState(target.id, "VOTE_TALLIED", `Forced ${result} by admin (test)`);
+
+    // Cascade forward in the same tick — same reasoning as the memorial
+    // fast-path below, so one click shows the actual downstream effect
+    // (publication, or the fresh recreated piece) instead of requiring a
+    // second manual "Déclencher work-lifecycle" click.
+    let current = await getWork(target.id);
+    for (let i = 0; i < 6 && current && current.state !== "PUBLISHED" && current.state !== "REJECTED"; i++) {
+      const r = await advanceWork(current, personas);
+      if (r !== true) break;
+      current = await getWork(target.id);
+    }
+
+    console.log(`[work-lifecycle] admin forced vote "${result}" on ${target.id} "${target.title}" — now ${current?.state}`);
+    return NextResponse.json({ ok: true, workId: target.id, forced: result, state: current?.state });
   }
 
   // Check if AG constitutive is complete → auto-create founding work (runs every tick)
