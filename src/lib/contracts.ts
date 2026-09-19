@@ -31,7 +31,12 @@ export const CONTRACT_ADDRESSES = {
   CollectionFactory:    process.env.NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS     ?? "",
   ANACollectionFactory: process.env.NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS ?? "",
   CelebrationRegistry:  process.env.NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS   ?? "",
-  ANAMemorials:         process.env.NEXT_PUBLIC_ANA_MEMORIALS_ADDRESS          ?? "",
+  // Not NEXT_PUBLIC_-prefixed (Vercel rejected that name) — this address is
+  // therefore only readable server-side. Any client component that needs it
+  // (minting/claiming UI) must fetch it from an API route instead of
+  // importing CONTRACT_ADDRESSES.ANAMemorials directly — see
+  // /api/memorials/list, which includes it in its response for exactly this.
+  ANAMemorials:         process.env.ANA_MEMORIALS_ADDRESS                      ?? "",
 } as const;
 
 // ─── Role constants (mirrors Roles.sol) ───────────────────────────────────────

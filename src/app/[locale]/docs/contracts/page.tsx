@@ -128,6 +128,20 @@ function getDeployedContracts(t: Awaited<ReturnType<typeof getTranslations>>) {
     ],
   },
   {
+    name:    "ANAMemorials",
+    envKey:  "ANA_MEMORIALS_ADDRESS",
+    status:  t("status.deployed"),
+    color:   "text-amber-400 border-amber-400/30",
+    desc:    "Collection ERC-721 unique et partagée pour tous les mémoriaux de burn — remplace le déploiement d'une ANAEditions par mémorial. Voir la documentation dédiée pour les paliers de paiement et le claim gratuit garanti.",
+    reads: [
+      { fn: "claimFree(memorialId, burnedTokenId)",  returns: "gratuit — dernier propriétaire du Normie honoré" },
+      { fn: "mintRequester(memorialId) payable",      returns: "réservé au demandeur du mémorial" },
+      { fn: "mintPublic(memorialId) payable",         returns: "ouvert à tous" },
+      { fn: "getSeries(memorialId)",                  returns: "MemorialSeries{...}" },
+      { fn: "getSeriesCount()",                       returns: "uint256" },
+    ],
+  },
+  {
     name:    "NormiesERC721",
     envKey:  null,
     status:  t("status.ethereum"),

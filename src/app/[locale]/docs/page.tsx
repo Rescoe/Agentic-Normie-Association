@@ -127,6 +127,7 @@ export default async function DocsPage() {
             { href: "/docs/contracts",   title: t("sections.contracts.title"),  desc: t("sections.contracts.desc") },
             { href: "/docs/gouvernance", title: t("sections.governance.title"), desc: t("sections.governance.desc") },
             { href: "/docs/creation",    title: t("sections.creation.title"),   desc: t("sections.creation.desc") },
+            { href: "/docs/celebrations", title: "Célébrations & mémoriaux",    desc: "Comment ANA honore les Normies brûlés : création, vote, paliers de paiement, contrat ANAMemorials." },
           ].map(item => (
             <Link
               key={item.href}

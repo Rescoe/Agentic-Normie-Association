@@ -12,6 +12,7 @@ export default async function DocsLayout({ children }: { children: React.ReactNo
     { href: "/docs/contracts",    label: t("nav.contracts.label"),   desc: t("nav.contracts.desc") },
     { href: "/docs/gouvernance",  label: t("nav.governance.label"),  desc: t("nav.governance.desc") },
     { href: "/docs/creation",     label: t("nav.creation.label"),    desc: t("nav.creation.desc") },
+    { href: "/docs/celebrations", label: "Célébrations",             desc: "Mémoriaux, paliers de paiement, contrat ANAMemorials" },
   ];
 
   return (

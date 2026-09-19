@@ -3,7 +3,11 @@
 import { useTranslations } from "next-intl";
 import { useEffect, useState, useCallback } from "react";
 import { useAccount, useWriteContract } from "wagmi";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { formatEther } from "viem";
 import { CELEBRATION_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { MemorialMintPanel } from "./MemorialMintPanel";
+import type { MemorialPricingConfig } from "@/lib/memorialPricing";
 
 interface RecentBurn {
   tokenId:     number;
@@ -149,16 +153,19 @@ const STATE_LABEL: Record<string, string> = {
  * burned Normie's persona — see memorialArt.ts) is created instantly; only
  * the member vote that moderates it takes any time.
  */
-async function requestMemorial(tokenId: number): Promise<MemorialResult> {
+async function requestMemorial(tokenId: number, tier: 1 | 2 | 3, requesterWallet: string): Promise<MemorialResult> {
   try {
     const res = await fetch("/api/celebrations/request-memorial", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ tokenId }),
+      body:    JSON.stringify({ tokenId, tier, requesterWallet }),
     });
     const data = await res.json();
     if (res.ok) {
-      return { ok: true, workId: data.workId, message: `Mémorial créé (${data.workId}) par ${data.proposerName} (#${data.proposerTokenId}) — vote en cours.` };
+      const warn = data.requesterAlreadyEntitledToFreeClaim
+        ? " Tu es aussi l'ancien propriétaire de ce Normie — tu as déjà droit à une édition gratuite séparée, pas besoin de payer pour celle-ci en plus."
+        : "";
+      return { ok: true, workId: data.workId, message: `Mémorial créé (${data.workId}) par ${data.proposerName} (#${data.proposerTokenId}) — vote en cours.${warn}` };
     }
     return { ok: false, workId: data.workId, message: data.error ?? "Échec de la demande." };
   } catch {
@@ -166,32 +173,90 @@ async function requestMemorial(tokenId: number): Promise<MemorialResult> {
   }
 }
 
-function RequestMemorialForm({ onSubmit, submitting }: { onSubmit: (tokenId: number) => void; submitting: boolean }) {
+const TIER_LABEL: Record<1 | 2 | 3, string> = {
+  1: "Juste mon édition",
+  2: "Mon édition + ouvrir au public",
+  3: "Mon édition + claim ouvert (durée limitée)",
+};
+
+/**
+ * Tier selection + wallet capture for a paid memorial request. No payment
+ * happens here — the requester's wallet is just reserved a slot in the
+ * memorial's "requester" pool (see MemorialMintPanel); they pay later by
+ * calling mintRequester() themselves once the memorial is PUBLISHED. Pricing
+ * is fetched from /api/admin/memorial-pricing (GET is public) so the numbers
+ * shown always match what registerMemorial() will actually use.
+ */
+function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
+  onSubmit: (tokenId: number, tier: 1 | 2 | 3, wallet: string) => void;
+  submitting: boolean;
+  prefillTokenId?: number | null;
+}) {
+  const { address } = useAccount();
   const [tokenId, setTokenId] = useState("");
+  const [tier, setTier] = useState<1 | 2 | 3>(1);
+  const [pricing, setPricing] = useState<MemorialPricingConfig | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/memorial-pricing").then(r => r.json()).then(setPricing).catch(() => null);
+  }, []);
+
+  useEffect(() => {
+    if (prefillTokenId != null) setTokenId(String(prefillTokenId));
+  }, [prefillTokenId]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const id = parseInt(tokenId, 10);
-    if (Number.isInteger(id) && id >= 0) onSubmit(id);
+    if (Number.isInteger(id) && id >= 0 && address) onSubmit(id, tier, address);
   }
 
+  const tierConfig = pricing ? { 1: pricing.tier1, 2: pricing.tier2, 3: pricing.tier3 }[tier] : null;
+
   return (
-    <form onSubmit={submit} className="flex items-center gap-2">
-      <input
-        type="number"
-        min={0}
-        value={tokenId}
-        onChange={e => setTokenId(e.target.value)}
-        placeholder="Numéro de token"
-        className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1.5 w-32 text-[--fg]"
-      />
-      <button
-        type="submit"
-        disabled={submitting || !tokenId}
-        className="font-mono text-[10px] border border-[--fg] px-2 py-1.5 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
-      >
-        {submitting ? "…" : "Demander un mémorial"}
-      </button>
+    <form onSubmit={submit} className="space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          type="number"
+          min={0}
+          value={tokenId}
+          onChange={e => setTokenId(e.target.value)}
+          placeholder="Numéro de token"
+          className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1.5 w-32 text-[--fg]"
+        />
+        {!address ? (
+          <ConnectButton />
+        ) : (
+          <button
+            type="submit"
+            disabled={submitting || !tokenId}
+            className="font-mono text-[10px] border border-[--fg] px-2 py-1.5 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
+          >
+            {submitting ? "…" : "Demander un mémorial"}
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {([1, 2, 3] as const).map(t => {
+          const cfg = pricing ? { 1: pricing.tier1, 2: pricing.tier2, 3: pricing.tier3 }[t] : null;
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTier(t)}
+              className={`font-mono text-[10px] border px-2 py-1 text-left ${tier === t ? "border-[--fg] text-[--fg]" : "border-[--border] text-[--fg-muted]"}`}
+            >
+              {TIER_LABEL[t]}
+              {cfg && <span className="block text-[--fg-muted]">{formatEther(BigInt(cfg.priceWei))} ETH{cfg.publicSupply > 0 ? ` · ${cfg.publicSupply} publiques` : cfg.openEnded ? " · ouvert" : ""}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {tierConfig && (
+        <p className="font-mono text-[10px] text-[--fg-muted]">
+          Ton édition n&apos;est pas payée maintenant — une fois le mémorial publié, tu la réclames toi-même (et tu payes alors) depuis la section &quot;Éditions des mémoriaux&quot; plus bas.
+        </p>
+      )}
     </form>
   );
 }
@@ -203,6 +268,7 @@ export function CelebrationsClient() {
   const [memorials, setMemorials] = useState<MemorialWork[]>([]);
   const [memorialResult, setMemorialResult] = useState<MemorialResult | null>(null);
   const [requestingTokenId, setRequestingTokenId] = useState<number | null>(null);
+  const [prefillTokenId, setPrefillTokenId] = useState<number | null>(null);
 
   const loadMemorials = useCallback(() => {
     fetch("/api/celebrations/list")
@@ -211,9 +277,9 @@ export function CelebrationsClient() {
       .catch(() => setMemorials([]));
   }, []);
 
-  async function handleRequestMemorial(tokenId: number) {
+  async function handleRequestMemorial(tokenId: number, tier: 1 | 2 | 3, wallet: string) {
     setRequestingTokenId(tokenId);
-    const result = await requestMemorial(tokenId);
+    const result = await requestMemorial(tokenId, tier, wallet);
     setMemorialResult(result);
     setRequestingTokenId(null);
     if (result.ok) loadMemorials();
@@ -245,8 +311,11 @@ export function CelebrationsClient() {
   return (
     <div className="space-y-16">
 
-      {/* ── Sponsored claims for the connected wallet, if any ── */}
+      {/* ── Sponsored claims for the connected wallet, if any (legacy, per-work collections) ── */}
       <ClaimableCelebrations />
+
+      {/* ── Mint/claim panel for the shared ANAMemorials collection ── */}
+      <MemorialMintPanel />
 
       {/* ── Live counter — read straight from api.normies.art, no copy kept ── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[--border]">
@@ -265,13 +334,14 @@ export function CelebrationsClient() {
       </div>
 
       {/* ── Demander un mémorial : déclenche la pipeline sans attendre le cron ── */}
-      <div className="border border-[--border] bg-[--bg-card] p-6 space-y-3">
+      <div id="request-memorial-form" className="border border-[--border] bg-[--bg-card] p-6 space-y-3">
         <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Demander un mémorial</p>
         <p className="font-mono text-[11px] text-[--fg-muted]">
           Survole un Normie ci-dessous et clique « ◈ Mémorial », ou entre directement un numéro de token.
           Un membre ANA est sélectionné au hasard pour créer le mémorial — sa pièce est générée instantanément, puis soumise au vote des autres membres comme modération.
+          Choisis un palier : ton wallet est connecté, mais rien n&apos;est débité maintenant — tu payes plus tard en réclamant ton édition une fois le mémorial publié.
         </p>
-        <RequestMemorialForm onSubmit={handleRequestMemorial} submitting={requestingTokenId != null} />
+        <RequestMemorialForm onSubmit={handleRequestMemorial} submitting={requestingTokenId != null} prefillTokenId={prefillTokenId} />
         {memorialResult && (
           <p className={`font-mono text-[11px] ${memorialResult.ok ? "text-green-400" : "text-red-400"}`}>
             {memorialResult.message}
@@ -334,12 +404,15 @@ export function CelebrationsClient() {
                     </span>
                   ) : (
                     <button
-                      onClick={e => { e.preventDefault(); e.stopPropagation(); void handleRequestMemorial(b.tokenId); }}
-                      disabled={requestingTokenId === b.tokenId}
-                      className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-[--fg-muted] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[--fg] disabled:opacity-100 disabled:cursor-wait"
-                      title={`Demander un mémorial pour #${b.tokenId}`}
+                      onClick={e => {
+                        e.preventDefault(); e.stopPropagation();
+                        setPrefillTokenId(b.tokenId);
+                        document.getElementById("request-memorial-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }}
+                      className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-[--fg-muted] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[--fg]"
+                      title={`Demander un mémorial pour #${b.tokenId} — choisis un palier ci-dessus`}
                     >
-                      {requestingTokenId === b.tokenId ? "…" : "◈ Mémorial"}
+                      ◈ Mémorial
                     </button>
                   )}
                 </a>
