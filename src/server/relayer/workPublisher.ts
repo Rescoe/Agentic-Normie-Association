@@ -138,10 +138,16 @@ export async function deployCollection(
         BigInt(params.editionCount),
         params.editionPrice,
       ],
-      // Same public-RPC eth_estimateGas flakiness as publish()/initialize() —
-      // this call's calldata is small so it's less exposed, but skipping
-      // estimation here too costs nothing and closes the same class of failure.
-      gas: 3_000_000n,
+      // Same public-RPC eth_estimateGas flakiness as publish()/initialize().
+      // Was 3_000_000n — too low: a previously successful createCollection()
+      // on this exact contract used 3,149,925 gas (confirmed on Basescan),
+      // so 3M reverted out-of-gas at ~98% of the cap on every attempt this
+      // session, silently (deployCollection's failure was never surfaced —
+      // see stepPublishing's console.warn-only handling), which meant
+      // collectionAddress never got set and buildWorkHtml() kept falling
+      // back to the oversized inline-image certificate, which then also
+      // failed publish()'s own gas budget. 6M gives real margin.
+      gas: 6_000_000n,
     });
 
     await logTxSubmitted({

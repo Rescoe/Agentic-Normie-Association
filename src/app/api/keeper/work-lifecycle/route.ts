@@ -1160,6 +1160,13 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
         console.log(`[work-lifecycle] collection deployed: ${collectionAddress}`);
       } else if (deployResult.error) {
         console.warn(`[work-lifecycle] collection deploy failed (non-fatal): ${deployResult.error}`);
+        // Non-fatal to the overall step (publish() is still attempted below),
+        // but this was previously invisible in the admin panel — a failed
+        // deploy silently left collectionAddress unset, which for a memorial
+        // meant buildWorkHtml() fell back to embedding the full image inline,
+        // which then also failed publish()'s own gas budget — two failures,
+        // only the second one ever visible. Surface this one too.
+        await updateWork(work.id, { validationNote: `deployCollection: ${deployResult.error.slice(0, 280)}` });
       }
     }
 
