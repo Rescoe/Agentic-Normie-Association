@@ -369,6 +369,14 @@ export async function recordSalonMessage(ip: string): Promise<void> {
   return recordIpRateLimit("salonmsg", ip);
 }
 
+export async function checkMemorialRequestLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs?: number }> {
+  return checkIpRateLimit("memorial", ip);
+}
+
+export async function recordMemorialRequest(ip: string): Promise<void> {
+  return recordIpRateLimit("memorial", ip);
+}
+
 // ─── Name registry ────────────────────────────────────────────────────────────
 
 export async function registerName(tokenId: number, name: string): Promise<void> {

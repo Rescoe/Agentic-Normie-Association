@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useAccount, useWriteContract } from "wagmi";
 import { CELEBRATION_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 
@@ -117,10 +118,78 @@ function ClaimableCelebrations() {
   );
 }
 
+interface MemorialResult {
+  ok: boolean;
+  message: string;
+  workId?: string;
+}
+
+/**
+ * Lets any visitor nominate a burned Normie (from the list above, or by
+ * typing a tokenId) for a memorial work — instead of waiting for the
+ * check-burns cron's aggregate detection. Mainly a way to test the full
+ * celebration → drawing → peer review → proof-of-draw pipeline on demand,
+ * but also a real path for the community to flag a burn ANA missed.
+ */
+async function requestMemorial(tokenId: number): Promise<MemorialResult> {
+  try {
+    const res = await fetch("/api/celebrations/request-memorial", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ tokenId }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      return { ok: true, workId: data.workId, message: `Mémorial créé (${data.workId}) — proposeur/dessinateur : ${data.proposerName} (#${data.proposerTokenId}).` };
+    }
+    return { ok: false, workId: data.workId, message: data.error ?? "Échec de la demande." };
+  } catch {
+    return { ok: false, message: "Erreur réseau." };
+  }
+}
+
+function RequestMemorialForm({ onSubmit, submitting }: { onSubmit: (tokenId: number) => void; submitting: boolean }) {
+  const [tokenId, setTokenId] = useState("");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const id = parseInt(tokenId, 10);
+    if (Number.isInteger(id) && id >= 0) onSubmit(id);
+  }
+
+  return (
+    <form onSubmit={submit} className="flex items-center gap-2">
+      <input
+        type="number"
+        min={0}
+        value={tokenId}
+        onChange={e => setTokenId(e.target.value)}
+        placeholder="Numéro de token"
+        className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1.5 w-32 text-[--fg]"
+      />
+      <button
+        type="submit"
+        disabled={submitting || !tokenId}
+        className="font-mono text-[10px] border border-[--fg] px-2 py-1.5 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
+      >
+        {submitting ? "…" : "Demander un mémorial"}
+      </button>
+    </form>
+  );
+}
+
 export function CelebrationsClient() {
   const t = useTranslations("celebrations");
   const [stats, setStats]   = useState<BurnStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [memorialResult, setMemorialResult] = useState<MemorialResult | null>(null);
+  const [requestingTokenId, setRequestingTokenId] = useState<number | null>(null);
+
+  async function handleRequestMemorial(tokenId: number) {
+    setRequestingTokenId(tokenId);
+    setMemorialResult(await requestMemorial(tokenId));
+    setRequestingTokenId(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -189,11 +258,42 @@ export function CelebrationsClient() {
                 <span className="absolute bottom-1 left-1 font-mono text-[10px] bg-[--bg] px-1 text-[--fg-muted]">
                   #{b.tokenId}
                 </span>
+                <button
+                  onClick={e => { e.preventDefault(); e.stopPropagation(); void handleRequestMemorial(b.tokenId); }}
+                  disabled={requestingTokenId === b.tokenId}
+                  className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-[--fg-muted] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[--fg] disabled:opacity-100 disabled:cursor-wait"
+                  title={`Demander un mémorial pour #${b.tokenId}`}
+                >
+                  {requestingTokenId === b.tokenId ? "…" : "◈ Mémorial"}
+                </button>
               </a>
             ))}
           </div>
         )}
         <p className="font-mono text-[11px] text-[--fg-muted] mt-4">{t("recent.footnote")}</p>
+      </div>
+
+      {/* ── Demander un mémorial : déclenche la pipeline sans attendre le cron ── */}
+      <div className="border border-[--border] bg-[--bg-card] p-6 space-y-3">
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Demander un mémorial</p>
+        <p className="font-mono text-[11px] text-[--fg-muted]">
+          Survole un Normie ci-dessus et clique « ◈ Mémorial », ou entre directement un numéro de token.
+          Un membre ANA est sélectionné au hasard pour dessiner le mémorial — il devra le soumettre puis un pair devra le valider.
+        </p>
+        <RequestMemorialForm onSubmit={handleRequestMemorial} submitting={requestingTokenId != null} />
+        {memorialResult && (
+          <p className={`font-mono text-[11px] ${memorialResult.ok ? "text-green-400" : "text-red-400"}`}>
+            {memorialResult.message}
+            {memorialResult.workId && (
+              <>
+                {" "}
+                <Link href={`/celebrations/${memorialResult.workId}/draw`} className="underline">
+                  Voir / dessiner →
+                </Link>
+              </>
+            )}
+          </p>
+        )}
       </div>
 
     </div>
