@@ -138,6 +138,10 @@ export async function deployCollection(
         BigInt(params.editionCount),
         params.editionPrice,
       ],
+      // Same public-RPC eth_estimateGas flakiness as publish()/initialize() —
+      // this call's calldata is small so it's less exposed, but skipping
+      // estimation here too costs nothing and closes the same class of failure.
+      gas: 3_000_000n,
     });
 
     await logTxSubmitted({
@@ -241,6 +245,15 @@ export async function publishWork(
       abi:          WORK_REGISTRY_ABI,
       functionName: "publish",
       args:         [content, BigInt(authorTokenId), BigInt(curatorTokenId), BigInt(rapporteurTokenId)],
+      // Same fix as initializeCollection() below: mainnet.base.org's public RPC
+      // fails eth_estimateGas outright (generic "Transaction creation failed",
+      // no revert reason) once calldata/storage cost climbs — publish() SSTOREs
+      // the full certificate `content` string, so a large certificate (e.g. an
+      // embedded image) hit exactly this even with all of publish()'s own
+      // require()s already known to pass (checked above). An explicit gas value
+      // skips eth_estimateGas entirely. 15M matches initializeCollection's
+      // already-proven-safe budget for this same node.
+      gas: 15_000_000n,
     });
 
     await logTxSubmitted({
