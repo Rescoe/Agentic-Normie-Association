@@ -961,6 +961,7 @@ type ANAWorkFull = ANAWorkSummary & {
   artworkText?: string;
   cartelText?: string;
   artForm?: string;
+  burnedTokenId?: number;
   editionPrice?: string;
   editionSupply?: number;
   validationNote?: string;
@@ -1003,6 +1004,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   const [lcError,  setLcError]  = useState<string | null>(null);
   const [lcRunning, setLcRunning] = useState(false);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [recallingId, setRecallingId] = useState<string | null>(null);
   const [genStatus, setGenStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [genMessage, setGenMessage] = useState<string | null>(null);
   const [codeView, setCodeView] = useState<ANAWorkFull | null>(null);
@@ -1032,6 +1034,54 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally { setRejectingId(null); }
+  };
+
+  // Recreates a memorial for the same burned Normie via request-memorial — its
+  // own dedup check excludes REJECTED works, so this only works once the old
+  // attempt is actually REJECTED (either already, or via rejectAndRecall below).
+  const recallMemorial = async (w: ANAWorkFull) => {
+    if (w.burnedTokenId == null) { alert("burnedTokenId manquant sur cette œuvre — impossible de rappeler automatiquement."); return; }
+    setRecallingId(w.id);
+    try {
+      const r = await fetch("/api/celebrations/request-memorial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenId: w.burnedTokenId }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
+      else void refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setRecallingId(null); }
+  };
+
+  // Rejects a memorial still in progress AND immediately recreates one for the
+  // same Normie — so a bad/stuck piece never leaves a burn un-memorialized.
+  const rejectAndRecallMemorial = async (w: ANAWorkFull) => {
+    if (w.burnedTokenId == null) { alert("burnedTokenId manquant sur cette œuvre — impossible de rappeler automatiquement."); return; }
+    if (!confirm(`Rejeter "${w.title}" et recréer immédiatement un nouveau mémorial pour Normie #${w.burnedTokenId} ?`)) return;
+    setRecallingId(w.id);
+    try {
+      const rr = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify({ forceReject: w.id }),
+      });
+      const rd = await rr.json() as Record<string, unknown>;
+      if (!rr.ok) { alert((rd.error as string) ?? `HTTP ${rr.status}`); return; }
+
+      const r = await fetch("/api/celebrations/request-memorial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenId: w.burnedTokenId }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) alert(`Rejeté, mais le nouveau mémorial a échoué : ${(d.error as string) ?? r.status}`);
+      void refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setRecallingId(null); }
   };
 
   const runLifecycle = async () => {
@@ -1198,6 +1248,18 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                   </Link>
                 </div>
               )}
+              {w.isBurnMemorial && (
+                <button
+                  onClick={() => void rejectAndRecallMemorial(w)}
+                  disabled={recallingId === w.id || w.burnedTokenId == null}
+                  title={w.burnedTokenId != null
+                    ? `Rejette ce mémorial et en recrée immédiatement un nouveau pour Normie #${w.burnedTokenId}`
+                    : "burnedTokenId manquant sur cette œuvre — impossible de rappeler automatiquement"}
+                  className="font-mono text-[10px] text-red-600 border border-red-300 px-2 py-1 hover:bg-red-50/20 disabled:opacity-40 mt-1"
+                >
+                  {recallingId === w.id ? "…" : `⛔ Rejeter & rappeler le mémorial${w.burnedTokenId != null ? ` #${w.burnedTokenId}` : ""}`}
+                </button>
+              )}
               {w.artworkText && !w.isBurnMemorial && (
                 <button
                   onClick={() => setCodeView(w)}
@@ -1299,6 +1361,18 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                       className="font-mono text-[10px] text-purple-600 border border-purple-300 px-2 py-0.5 hover:bg-purple-50/20 disabled:opacity-40"
                     >
                       {retryingId === w.id ? "…" : "↻ Relancer"}
+                    </button>
+                  )}
+                  {w.state === "REJECTED" && w.isBurnMemorial && (
+                    <button
+                      onClick={() => void recallMemorial(w)}
+                      disabled={recallingId === w.id || w.burnedTokenId == null}
+                      title={w.burnedTokenId != null
+                        ? `Recrée un nouveau mémorial pour Normie #${w.burnedTokenId}`
+                        : "burnedTokenId manquant sur cette œuvre — impossible de rappeler automatiquement"}
+                      className="font-mono text-[10px] text-red-600 border border-red-300 px-2 py-0.5 hover:bg-red-50/20 disabled:opacity-40"
+                    >
+                      {recallingId === w.id ? "…" : `↻ Rappeler le mémorial${w.burnedTokenId != null ? ` #${w.burnedTokenId}` : ""}`}
                     </button>
                   )}
                   <span className={`font-mono text-xs font-bold ${STATE_COLOR[w.state] ?? ""}`}>{w.state}</span>
