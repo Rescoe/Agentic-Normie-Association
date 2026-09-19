@@ -593,6 +593,48 @@ export async function POST(req: NextRequest) {
   // ── Monthly synthesis check (runs before exchange, at most once per 30 days) ──
   const synthesisResult = await runMonthlySynthesis();
 
+  // Coin-flip between "discuss" and "advance" whenever something is actually
+  // in progress (a work, a celebration...) — this trigger used to always do
+  // the salon exchange and, separately, always piggyback a work-lifecycle
+  // advance on top when a work was active, i.e. both every time. Changed to
+  // mutually exclusive with equal odds per the porteur's request: as much
+  // chance of stimulating a discussion as of advancing the thing in progress,
+  // not both stacked on every single call. Nothing active → always discuss,
+  // there's nothing to advance.
+  const activeWorks   = await getActiveWorks();
+  const shouldAdvance = activeWorks.length > 0 && Math.random() < 0.5;
+
+  if (shouldAdvance) {
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret) {
+      return NextResponse.json({ error: "CRON_SECRET not configured — cannot advance" }, { status: 500 });
+    }
+    const host = req.headers.get("host");
+    if (!host) {
+      return NextResponse.json({ error: "Could not resolve self URL (missing host header)" }, { status: 500 });
+    }
+    // Self-call (not a direct function import) to avoid coupling this route to
+    // work-lifecycle's internals — same x-cron-secret auth work-lifecycle
+    // already accepts, added here rather than exposed to the caller.
+    const selfUrl = `${req.nextUrl.protocol}//${host}/api/keeper/work-lifecycle`;
+    const r = await fetch(selfUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
+      body: "{}",
+    });
+    const workLifecycle = r.ok ? await r.json() as Record<string, unknown> : { error: `HTTP ${r.status}` };
+
+    if (!isCron && !isAdminCall) await recordStim(getClientIp(req));
+
+    return NextResponse.json({
+      mode: "advance",
+      activeWorks: activeWorks.length,
+      workLifecycle,
+      synthesis: synthesisResult.ran ? synthesisResult : null,
+      isCron,
+    });
+  }
+
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) {
     return NextResponse.json({ message: "No ANA members found" });
@@ -683,35 +725,8 @@ export async function POST(req: NextRequest) {
 
   const synthInfo = await getSynthesisInfo();
 
-  // Piggyback a work-lifecycle advance on this same trigger — salon-exchange
-  // fires far more often than work-lifecycle's own 2h cron (every 30 min, or
-  // instantly on an admin/user stim), so an active work sitting in VOTE_OPEN
-  // or PUBLISHING gets many more chances to progress instead of waiting up to
-  // 2h idle even when someone is actively engaging with ANA right now.
-  // Self-call (not a direct function import) to avoid coupling this route to
-  // work-lifecycle's internals — same x-cron-secret auth work-lifecycle
-  // already accepts, added here rather than exposed to the caller.
-  let workLifecycle: Record<string, unknown> | null = null;
-  try {
-    const active = await getActiveWorks();
-    const cronSecret = process.env.CRON_SECRET;
-    if (active.length > 0 && cronSecret) {
-      const host = req.headers.get("host");
-      if (host) {
-        const selfUrl = `${req.nextUrl.protocol}//${host}/api/keeper/work-lifecycle`;
-        const r = await fetch(selfUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
-          body: "{}",
-        });
-        if (r.ok) workLifecycle = await r.json();
-      }
-    }
-  } catch (e) {
-    console.warn("[salon-exchange] work-lifecycle piggyback failed (non-fatal):", e);
-  }
-
   return NextResponse.json({
+    mode: "discuss",
     memberCount:        memberIds.length,
     salonsRun:          results.length,
     totalMessages:      allGenerated.length,
@@ -722,7 +737,6 @@ export async function POST(req: NextRequest) {
     nextSynthesisDate:  new Date(synthInfo.nextSynthesisAt).toISOString(),
     workProposal,
     thematicSalon: thematicSalon.created ? thematicSalon : null,
-    workLifecycle,
     isCron,
   });
 }
