@@ -622,7 +622,18 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
   // the URL itself served the artwork fine when opened directly. A relative URL has
   // no origin to get wrong.
   const artwork = work.artForm === "pixel-drawing" && work.artworkText
-    ? `<img src="${escapeHtml(work.artworkText)}" alt="${escapeHtml(work.title)}" style="width:100%;max-width:400px;image-rendering:pixelated;border:1px solid var(--b);background:#fff;display:block;margin:0 auto" />
+    ? work.collectionAddress
+      // The base64 BMP roughly doubles the certificate's real size once
+      // double-base64'd for on-chain storage — pushed WorkRegistry.publish()
+      // past its gas budget (see needsCollection's comment in work-lifecycle).
+      // The image is still fully on-chain via ANAEditions.initialize(), just
+      // not duplicated a second time here — same pattern as generative works
+      // below, which reference their collection instead of inlining content.
+      ? `<p class="meta" style="text-align:center">⬛ Pixel piece by ${escapeHtml(work.proposedByName)} — stored on-chain in ANAEditions collection <a href="https://basescan.org/address/${work.collectionAddress}" style="color:#a78bfa;text-decoration:none" target="_blank">${work.collectionAddress}</a></p>
+${work.cartelText ? `<p class="block" style="margin-top:.8rem;font-style:italic">${escapeHtml(work.cartelText)}</p>` : ""}`
+      // Fallback if the collection deploy failed (non-fatal elsewhere) —
+      // better an oversized-but-complete certificate than a missing image.
+      : `<img src="${escapeHtml(work.artworkText)}" alt="${escapeHtml(work.title)}" style="width:100%;max-width:400px;image-rendering:pixelated;border:1px solid var(--b);background:#fff;display:block;margin:0 auto" />
 <p class="meta" style="margin-top:.4rem;text-align:center">By ${escapeHtml(work.proposedByName)}</p>
 ${work.cartelText ? `<p class="block" style="margin-top:.8rem;font-style:italic">${escapeHtml(work.cartelText)}</p>` : ""}`
     : work.artworkText && isHtmlArtwork(work.artworkText)

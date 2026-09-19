@@ -1135,8 +1135,15 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
     // (artworkContent) lives on-chain. Without it the gallery/certificate have nothing real
     // to render. Celebration-linked works need one too — the sponsored claim() mints from
     // it, so a free memorial poem still gets a (free-priced) collection. Other text works
-    // only get one when sold as paid editions.
-    const needsCollection = editionPriceWei > 0n || detectHtmlForm(work) || !!(work.celebrationIds && work.celebrationIds.length > 0);
+    // only get one when sold as paid editions. Memorials (isBurnMemorial) always need one
+    // too, regardless of price/celebration: buildWorkHtml() points the certificate at the
+    // collection instead of inlining the full pixel image a second time — a memorial's
+    // BMP (base64) roughly doubled the certificate's real size once double-base64'd, which
+    // pushed WorkRegistry.publish()'s SSTORE cost past 15M gas (observed: reverted with
+    // gasUsed exactly 15,000,000 — genuinely out of gas, not the earlier RPC-estimation
+    // issue). The image itself is still fully on-chain via ANAEditions.initialize()'s
+    // artworkContent — this avoids storing it a second time, not losing it.
+    const needsCollection = editionPriceWei > 0n || detectHtmlForm(work) || !!(work.celebrationIds && work.celebrationIds.length > 0) || work.isBurnMemorial;
     if (!collectionAddress && needsCollection) {
       const deployResult = await deployCollection({
         authorTokenId:     work.authorTokenId!,
