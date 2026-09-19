@@ -38,7 +38,7 @@ export function DrawClient({ workId }: { workId: string }) {
 
   const [work, setWork]         = useState<WorkSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [advancing, setAdvancing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [tokenId, setTokenId]   = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -74,13 +74,10 @@ export function DrawClient({ workId }: { workId: string }) {
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }, [work?.state]);
 
-  async function handleAdvance() {
-    setAdvancing(true);
-    try {
-      await fetch(`/api/celebrations/${workId}/advance`, { method: "POST" });
-    } catch { /* ignore, just reload below */ }
+  async function handleRefresh() {
+    setRefreshing(true);
     await loadWork();
-    setAdvancing(false);
+    setRefreshing(false);
   }
 
   function canvasPos(e: React.PointerEvent<HTMLCanvasElement>): { x: number; y: number } {
@@ -203,14 +200,16 @@ export function DrawClient({ workId }: { workId: string }) {
       {PRE_CREATING_STATES.includes(work.state) && (
         <div className="border border-[--border] bg-[--bg-card] p-4 space-y-2">
           <p className="font-mono text-xs text-[--fg-muted]">
-            Ce mémorial n'a pas encore atteint l'étape de dessin (vote/briefing en cours). Fais avancer la pipeline manuellement plutôt que d'attendre le cron (2h).
+            Ce mémorial n'a pas encore atteint l'étape de dessin (vote/briefing en cours) — un administrateur doit faire
+            avancer la pipeline depuis le panneau admin (« 🎨 Déclencher work-lifecycle »), ou attendre le prochain
+            passage du cron (2h).
           </p>
           <button
-            onClick={handleAdvance}
-            disabled={advancing}
-            className="font-mono text-[10px] border border-[--fg] px-3 py-1.5 hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="font-mono text-[10px] border border-[--border] px-3 py-1.5 text-[--fg-muted] hover:text-[--fg] disabled:opacity-50"
           >
-            {advancing ? "Avancement…" : "Faire avancer maintenant"}
+            {refreshing ? "…" : "↻ Actualiser"}
           </button>
         </div>
       )}

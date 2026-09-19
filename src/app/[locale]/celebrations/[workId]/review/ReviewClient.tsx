@@ -32,7 +32,7 @@ export function ReviewClient({ workId }: { workId: string }) {
 
   const [work, setWork] = useState<WorkSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [advancing, setAdvancing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [tokenId, setTokenId] = useState("");
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState<"approved" | "rejected" | null>(null);
@@ -52,11 +52,10 @@ export function ReviewClient({ workId }: { workId: string }) {
 
   useEffect(() => { loadWork(); }, [loadWork]);
 
-  async function handleAdvance() {
-    setAdvancing(true);
-    try { await fetch(`/api/celebrations/${workId}/advance`, { method: "POST" }); } catch { /* ignore */ }
+  async function handleRefresh() {
+    setRefreshing(true);
     await loadWork();
-    setAdvancing(false);
+    setRefreshing(false);
   }
 
   async function handleDecision(decision: "approved" | "rejected") {
@@ -112,14 +111,14 @@ export function ReviewClient({ workId }: { workId: string }) {
           <p className="font-mono text-xs text-[--fg-muted]">
             {!work.drawSubmissionId
               ? "Le dessin n'a pas encore été soumis par le proposeur."
-              : "Le dessin est soumis mais le pair reviewer n'est pas encore assigné — fais avancer la pipeline."}
+              : "Le dessin est soumis mais le pair reviewer n'est pas encore assigné — un administrateur doit faire avancer la pipeline depuis le panneau admin (« 🎨 Déclencher work-lifecycle »)."}
           </p>
           <button
-            onClick={handleAdvance}
-            disabled={advancing}
-            className="font-mono text-[10px] border border-[--fg] px-3 py-1.5 hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="font-mono text-[10px] border border-[--border] px-3 py-1.5 text-[--fg-muted] hover:text-[--fg] disabled:opacity-50"
           >
-            {advancing ? "Avancement…" : "Faire avancer maintenant"}
+            {refreshing ? "…" : "↻ Actualiser"}
           </button>
         </div>
       )}

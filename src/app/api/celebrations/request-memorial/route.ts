@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
-import { base } from "viem/chains";
+import { base, mainnet } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, createWork } from "@/lib/workStore";
 import { buildPersona } from "@/lib/normiesPersona";
@@ -12,6 +12,24 @@ const client = createPublicClient({
   transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org", { timeout: 15_000 }),
 });
 
+// Same mainnet client + burn semantics as check-burns/route.ts: Normies are
+// real ERC721 burns (owner mapping cleared), not transfers to a dead address
+// — so ownerOf() reverting is exactly what "burned" means for this contract.
+const mainnetClient = createPublicClient({
+  chain:     mainnet,
+  transport: http(process.env.ETH_MAINNET_RPC_URL ?? "https://ethereum-rpc.publicnode.com", { timeout: 15_000 }),
+});
+
+const ERC721_OWNER_ABI = [
+  {
+    inputs:  [{ internalType: "uint256", name: "tokenId", type: "uint256" }],
+    name:    "ownerOf",
+    outputs: [{ internalType: "address", name: "", type: "address" }],
+    stateMutability: "view",
+    type:    "function",
+  },
+] as const;
+
 async function getMemberIds(): Promise<number[]> {
   try {
     const raw = await client.readContract({
@@ -21,6 +39,35 @@ async function getMemberIds(): Promise<number[]> {
     });
     return (raw as bigint[]).map(Number);
   } catch { return []; }
+}
+
+/**
+ * Verifies tokenId is actually burned on-chain before letting anyone spend a
+ * member's drawing effort on it. Fails closed: if we can't reach the chain
+ * or the contract isn't configured, this rejects rather than silently
+ * trusting the caller's claim.
+ */
+async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?: string }> {
+  const addr = process.env.NORMIES_CONTRACT_ADDRESS as `0x${string}` | undefined;
+  if (!addr) return { burned: false, error: "NORMIES_CONTRACT_ADDRESS non configuré — vérification impossible" };
+
+  try {
+    await mainnetClient.readContract({
+      address: addr, abi: ERC721_OWNER_ABI, functionName: "ownerOf", args: [BigInt(tokenId)],
+    });
+    // Call succeeded → the token still has an owner → it is NOT burned.
+    return { burned: false, error: `Normie #${tokenId} n'est pas brûlé (il a encore un propriétaire).` };
+  } catch (e) {
+    // ownerOf() reverts for a burned (or never-minted) tokenId — this is the
+    // standard ERC721 signal check-burns' own detection relies on too.
+    // A tokenId that was simply never minted reverts identically; treating
+    // that as "burned" here is an acceptable edge case (it still can't
+    // resolve to a real prior owner/persona either way), not a security gap.
+    if (e instanceof Error && /timeout|network|fetch/i.test(e.message)) {
+      return { burned: false, error: "Impossible de vérifier le statut on-chain — réessaie." };
+    }
+    return { burned: true };
+  }
 }
 
 function getClientIp(req: NextRequest): string {
@@ -62,6 +109,11 @@ export async function POST(req: NextRequest) {
   const tokenId = body.tokenId;
   if (!Number.isInteger(tokenId) || tokenId! < 0) {
     return NextResponse.json({ error: "tokenId (integer) requis" }, { status: 400 });
+  }
+
+  const burnCheck = await verifyBurned(tokenId!);
+  if (!burnCheck.burned) {
+    return NextResponse.json({ error: burnCheck.error ?? "Ce Normie n'est pas brûlé" }, { status: 409 });
   }
 
   const existing = (await listWorks()).find(

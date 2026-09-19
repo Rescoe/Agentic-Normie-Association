@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
   useAccount,
   useReadContract,
@@ -1178,6 +1179,15 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                 <p className="font-mono text-xs text-[--fg-muted]">
                   dernière étape : {w.stateHistory[w.stateHistory.length - 1]?.note ?? "—"}
                 </p>
+              )}
+              {w.isBurnMemorial && (
+                <Link
+                  href={`/celebrations/${w.id}/${w.state === "VALIDATING" || w.state === "PUBLISHING" ? "review" : "draw"}`}
+                  target="_blank"
+                  className="font-mono text-[10px] text-indigo-600 underline inline-block mt-0.5"
+                >
+                  ⬛ Voir la page dessin/revue de ce mémorial →
+                </Link>
               )}
               {w.artworkText && (
                 <button
