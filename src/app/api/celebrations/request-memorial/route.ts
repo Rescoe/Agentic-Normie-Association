@@ -6,7 +6,10 @@ import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, createWork } from "@/lib/workStore";
 import { buildPersona } from "@/lib/normiesPersona";
 import { checkMemorialRequestLimit, recordMemorialRequest } from "@/lib/salonStore";
-import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
+import {
+  createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H,
+  MEMORIAL_EDITION_PRICE, MEMORIAL_EDITION_SUPPLY,
+} from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 const client = createPublicClient({
@@ -164,6 +167,8 @@ export async function POST(req: NextRequest) {
     drawCanvasH:    MEMORIAL_CANVAS_H,
     artworkText,
     cartelText:     cartel,
+    editionPrice:   MEMORIAL_EDITION_PRICE,
+    editionSupply:  MEMORIAL_EDITION_SUPPLY,
     authorTokenId:     proposer.tokenId,
     authorName:        proposer.name,
     curatorTokenId:    proposer.tokenId,

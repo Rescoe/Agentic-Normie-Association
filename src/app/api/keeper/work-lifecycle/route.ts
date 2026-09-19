@@ -27,7 +27,10 @@ import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
-import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
+import {
+  createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H,
+  MEMORIAL_EDITION_PRICE, MEMORIAL_EDITION_SUPPLY,
+} from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 const MODEL        = "openai/gpt-oss-120b";
@@ -45,6 +48,25 @@ const MODEL_FAST   = "openai/gpt-oss-120b";
 // on, since a structural-validation retry or a curator's rejection both report
 // advanced:true and never increment this counter (see rejectOrRevise below).
 const MAX_PIPELINE_FAILS = 4;
+
+// stepBriefing prompts the Rapporteur LLM to pick editionPrice from exactly
+// these values and editionSupply in [1,100] (see the prompt below) — but that
+// was never enforced in code, only requested in the prompt text. A
+// non-compliant response (observed in production: editions priced at 1 ETH)
+// went straight to chain unvalidated. clampEditionParams() is the actual
+// enforcement — the allowed price set here must stay in sync with the prompt.
+const ALLOWED_EDITION_PRICES = ["0.0005", "0.001", "0.005", "0.01", "0.05"];
+function clampEditionParams(price: string | undefined, supply: number | undefined): {
+  editionPrice?: string; editionSupply?: number;
+} {
+  const editionPrice = price != null && ALLOWED_EDITION_PRICES.includes(price)
+    ? price
+    : (price != null ? ALLOWED_EDITION_PRICES[0] : undefined); // non-compliant value → safest tier, not silently trusted
+  const editionSupply = typeof supply === "number" && Number.isFinite(supply)
+    ? Math.max(1, Math.min(100, Math.round(supply)))
+    : undefined;
+  return { editionPrice, editionSupply };
+}
 
 // Revisions are intentionally uncapped — ANA values getting a piece right over
 // getting it done quickly (a work can take as many rounds, or as long, as it
@@ -393,6 +415,7 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
       await updateWork(work.id, {
         proposedBy: newProposer.tokenId, proposedByName: newProposer.name,
         drawPixels: drawPixelsB64, artworkText, cartelText: cartel,
+        editionPrice: MEMORIAL_EDITION_PRICE, editionSupply: MEMORIAL_EDITION_SUPPLY,
         authorTokenId: newProposer.tokenId, authorName: newProposer.name,
         curatorTokenId: newProposer.tokenId, curatorName: newProposer.name,
         rapporteurTokenId: newProposer.tokenId, rapporteurName: newProposer.name,
@@ -642,8 +665,7 @@ Respond in JSON:
       };
       brief         = parsed.brief ?? rawBrief;
       artForm       = parsed.artForm;
-      editionPrice  = parsed.editionPrice;
-      editionSupply = typeof parsed.editionSupply === "number" ? parsed.editionSupply : undefined;
+      ({ editionPrice, editionSupply } = clampEditionParams(parsed.editionPrice, parsed.editionSupply));
       ambitionLevel = (["quick", "standard", "ambitious"] as const).includes(parsed.ambitionLevel as never)
         ? parsed.ambitionLevel as ANAWork["ambitionLevel"]
         : "standard";

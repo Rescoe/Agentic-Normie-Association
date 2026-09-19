@@ -25,7 +25,10 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { getBurnedTokens } from "@/lib/normiesApi";
 import { registerCelebrationOnChain, CELEBRATION_TYPE } from "@/server/relayer/celebrationPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
-import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
+import {
+  createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H,
+  MEMORIAL_EDITION_PRICE, MEMORIAL_EDITION_SUPPLY,
+} from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 // Minimal ERC721 ABI — totalSupply + the standard Transfer event
@@ -281,6 +284,8 @@ export async function POST(req: NextRequest) {
     drawCanvasH:    MEMORIAL_CANVAS_H,
     artworkText,
     cartelText:     cartel,
+    editionPrice:   MEMORIAL_EDITION_PRICE,
+    editionSupply:  MEMORIAL_EDITION_SUPPLY,
     authorTokenId:     proposer.tokenId,
     authorName:        proposer.name,
     curatorTokenId:    proposer.tokenId,

@@ -683,6 +683,34 @@ export async function POST(req: NextRequest) {
 
   const synthInfo = await getSynthesisInfo();
 
+  // Piggyback a work-lifecycle advance on this same trigger — salon-exchange
+  // fires far more often than work-lifecycle's own 2h cron (every 30 min, or
+  // instantly on an admin/user stim), so an active work sitting in VOTE_OPEN
+  // or PUBLISHING gets many more chances to progress instead of waiting up to
+  // 2h idle even when someone is actively engaging with ANA right now.
+  // Self-call (not a direct function import) to avoid coupling this route to
+  // work-lifecycle's internals — same x-cron-secret auth work-lifecycle
+  // already accepts, added here rather than exposed to the caller.
+  let workLifecycle: Record<string, unknown> | null = null;
+  try {
+    const active = await getActiveWorks();
+    const cronSecret = process.env.CRON_SECRET;
+    if (active.length > 0 && cronSecret) {
+      const host = req.headers.get("host");
+      if (host) {
+        const selfUrl = `${req.nextUrl.protocol}//${host}/api/keeper/work-lifecycle`;
+        const r = await fetch(selfUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
+          body: "{}",
+        });
+        if (r.ok) workLifecycle = await r.json();
+      }
+    }
+  } catch (e) {
+    console.warn("[salon-exchange] work-lifecycle piggyback failed (non-fatal):", e);
+  }
+
   return NextResponse.json({
     memberCount:        memberIds.length,
     salonsRun:          results.length,
@@ -694,6 +722,7 @@ export async function POST(req: NextRequest) {
     nextSynthesisDate:  new Date(synthInfo.nextSynthesisAt).toISOString(),
     workProposal,
     thematicSalon: thematicSalon.created ? thematicSalon : null,
+    workLifecycle,
     isCron,
   });
 }

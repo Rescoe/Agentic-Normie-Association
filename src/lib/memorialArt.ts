@@ -26,6 +26,16 @@ import { listWorks } from "@/lib/workStore";
 export const MEMORIAL_CANVAS_W = 264;
 export const MEMORIAL_CANVAS_H = 176;
 
+// Memorials are never for sale — the piece honors a departed member, it isn't
+// a Normie-priced edition. Set explicitly at creation (check-burns.ts,
+// request-memorial.ts, and the vote-retry recreation in work-lifecycle.ts)
+// rather than left undefined: stepBriefing (where standard works get an
+// LLM-chosen price) never runs for isBurnMemorial works, so this was already
+// the de facto behavior (stepPublishing treats undefined editionPrice as 0)
+// — making it explicit documents the intent instead of relying on a fallback.
+export const MEMORIAL_EDITION_PRICE  = "0";
+export const MEMORIAL_EDITION_SUPPLY = 1;
+
 const MODEL      = "openai/gpt-oss-120b";
 const MAX_SHAPES = 28;
 const MAX_BURNED_IN_PROMPT = 5; // cap prompt size/cost for very large batch burns
