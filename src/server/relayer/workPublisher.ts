@@ -153,6 +153,12 @@ export async function deployCollection(
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
+    if (receipt.status !== "success") {
+      const err = `createCollection reverted on-chain (gasUsed: ${receipt.gasUsed}) — tx: ${hash}`;
+      await logTxFailed(hash, err);
+      return { success: false, error: err, txHash: hash };
+    }
+
     // Parse CollectionDeployed event: topics[2] = indexed collectionAddr
     let collectionAddress: `0x${string}` | undefined;
     for (const log of receipt.logs) {
@@ -265,6 +271,20 @@ export async function publishWork(
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
 
+    // waitForTransactionReceipt() does NOT throw on a reverted transaction — it
+    // resolves with receipt.status:"reverted" and the caller is expected to
+    // check it. This code never did: with gas:15_000_000n now bypassing
+    // eth_estimateGas's own pre-flight simulation (see above), a genuinely
+    // reverted publish() got silently treated as "succeeded, just couldn't
+    // decode the event" (the exact "will retry" message this was masking) —
+    // every retry then repeated the SAME revert, burning gas each time,
+    // instead of surfacing the real problem.
+    if (receipt.status !== "success") {
+      const err = `publish() reverted on-chain (gasUsed: ${receipt.gasUsed}) — tx: ${hash}`;
+      await logTxFailed(hash, err);
+      return { success: false, error: err, txHash: hash };
+    }
+
     let onChainWorkId: number | undefined;
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== registryAddr.toLowerCase()) continue;
@@ -363,6 +383,11 @@ export async function initializeCollection(
     });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+    if (receipt.status !== "success") {
+      const err = `initialize() reverted on-chain (gasUsed: ${receipt.gasUsed}) — tx: ${hash}`;
+      await logTxFailed(hash, err);
+      return { success: false, error: err };
+    }
     console.log(`[workPublisher] collection initialized — workId=${params.workId} collection=${params.collectionAddress}`);
     await logTxConfirmed(hash, receipt.blockNumber, { collectionAddress: params.collectionAddress });
 
