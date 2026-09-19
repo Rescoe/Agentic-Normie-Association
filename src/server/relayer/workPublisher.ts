@@ -280,6 +280,30 @@ export async function publishWork(
       } catch { /* not WorkPublished */ }
     }
 
+    // Fallback if decodeEventLog couldn't match any log to the local ABI (e.g.
+    // the deployed contract's event layout drifted from what's in this repo) —
+    // this previously left onChainWorkId undefined, which stepPublishing()
+    // treated as a retryable failure and called publish() AGAIN next tick.
+    // Since the tx already succeeded, that silently created a SECOND (and on
+    // every further retry, another) duplicate Work entry on-chain, burning
+    // real gas each time with no way to recover the original workId. publish()
+    // always appends exactly one Work, so works.length-1 right after this
+    // confirmed tx IS this work's id — safe as long as publish() is only ever
+    // called by this relayer (true today: no other caller in this codebase).
+    if (onChainWorkId == null) {
+      try {
+        const count = await publicClient.readContract({
+          address: registryAddr, abi: WORK_REGISTRY_ABI, functionName: "getWorkCount",
+        }) as bigint;
+        if (count > 0n) {
+          onChainWorkId = Number(count) - 1;
+          console.warn(`[workPublisher] WorkPublished event not decoded — recovered workId=${onChainWorkId} via getWorkCount() (tx: ${hash})`);
+        }
+      } catch (e) {
+        console.error(`[workPublisher] getWorkCount() fallback also failed:`, e);
+      }
+    }
+
     console.log(`[workPublisher] published — workId=${onChainWorkId} tx=${hash}`);
     await logTxConfirmed(hash, receipt.blockNumber, { onChainWorkId });
     await checkAndSweepRelayer(account.address, key);

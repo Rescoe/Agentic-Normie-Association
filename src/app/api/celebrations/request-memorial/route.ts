@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base, mainnet } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { listWorks, createWork } from "@/lib/workStore";
+import { listWorks, createWork, updateWork } from "@/lib/workStore";
 import { buildPersona } from "@/lib/normiesPersona";
 import { checkMemorialRequestLimit, recordMemorialRequest } from "@/lib/salonStore";
 import {
@@ -11,6 +11,7 @@ import {
   MEMORIAL_EDITION_PRICE, MEMORIAL_EDITION_SUPPLY,
 } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
+import { registerCelebrationForToken } from "@/server/relayer/celebrationPublisher";
 
 const client = createPublicClient({
   chain:     base,
@@ -176,6 +177,18 @@ export async function POST(req: NextRequest) {
     rapporteurTokenId: proposer.tokenId,
     rapporteurName:    proposer.name,
   }, "VOTE_OPEN");
+
+  // Best-effort — never blocks the memorial work if it fails. Lets this burned
+  // Normie's last owner claim a free edition later, same as an auto-detected
+  // burn (check-burns.ts's registerBurnCelebrations) — a manual request isn't
+  // a second-class memorial.
+  const celebrationIds = await registerCelebrationForToken(tokenId!, work.id).catch(e => {
+    console.error("[request-memorial] registerCelebrationForToken error:", e);
+    return [] as number[];
+  });
+  if (celebrationIds.length > 0) {
+    await updateWork(work.id, { celebrationIds });
+  }
 
   await recordMemorialRequest(ip);
 
