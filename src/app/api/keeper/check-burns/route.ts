@@ -193,15 +193,20 @@ export async function POST(req: NextRequest) {
 
   console.log(`[check-burns] ${burned} burn(s) detected!`);
 
-  // Don't create memorial if a work is already in active state. Critically, do NOT
-  // advance the supply baseline here: this used to call updateNormieSupply(currentSupply)
-  // even on skip, which silently discarded every burn detected during that run — the
-  // next check would diff against a baseline that already "knew about" today's burns,
-  // so they never got memorialized and never will. Leaving lastSupply untouched means
-  // `burned` keeps accumulating across skipped runs until a slot actually opens up.
-  const activeWorks = await getActiveWorks();
+  // Don't create memorial if a *non-memorial* work is already in active state.
+  // Memorials are exempt from this gate (and from each other) so celebrations
+  // actually get a chance to run instead of being deferred behind whatever
+  // standard work happens to be in progress — which was in practice almost
+  // always, hence CelebrationRegistry staying empty despite real burns.
+  // Critically, do NOT advance the supply baseline here: this used to call
+  // updateNormieSupply(currentSupply) even on skip, which silently discarded
+  // every burn detected during that run — the next check would diff against a
+  // baseline that already "knew about" today's burns, so they never got
+  // memorialized and never will. Leaving lastSupply untouched means `burned`
+  // keeps accumulating across skipped runs until a slot actually opens up.
+  const activeWorks = await getActiveWorks({ excludeMemorials: true });
   if (activeWorks.length > 0) {
-    console.log(`[check-burns] ${burned} burn(s) pending, ${activeWorks.length} work(s) already active — deferring memorial, baseline not advanced`);
+    console.log(`[check-burns] ${burned} burn(s) pending, ${activeWorks.length} non-memorial work(s) already active — deferring memorial, baseline not advanced`);
     return NextResponse.json({
       supply:      currentSupply,
       burns:       burned,
@@ -230,15 +235,18 @@ export async function POST(req: NextRequest) {
     : `${burned} Normies were burned. The collection goes from ${lastSupply} to ${currentSupply}.`;
 
   // Pinned (not left to the Rapporteur's judgment) so memorial works are reliably
-  // text — that's what the sponsored claim flow below assumes and tests against.
-  const memorialForm = Math.random() < 0.5 ? "poem" : "manifesto";
+  // a human-drawn piece: the proposer above draws it themselves (see
+  // stepAwaitDrawSubmission in work-lifecycle) rather than an LLM Author
+  // generating text/code — this is what makes the celebration pipeline light
+  // enough to run in parallel with ANA's regular generative works.
+  const memorialForm = "pixel-drawing";
 
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
     proposedAt:     Date.now(),
     title:          burned === 1 ? "Memory of an absence" : `Eulogy for ${burned} absences`,
-    proposal:       `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ANA proposes creating a memorial work — a ${memorialForm} on finitude, burning, and the permanence of what remains on-chain.`,
+    proposal:       `${burnsText} In memory of ${burned === 1 ? "this" : "these"} departed Normie${burned > 1 ? "s" : ""}, ANA proposes creating a memorial work — ${proposer.name} will draw a small pixel piece on finitude, burning, and the permanence of what remains on-chain.`,
     suggestedForm:  memorialForm,
     isBurnMemorial: true,
     salonId:        "salon_agora_ana",

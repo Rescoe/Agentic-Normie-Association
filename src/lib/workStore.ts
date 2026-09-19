@@ -123,12 +123,34 @@ export interface ANAWork {
   isFoundingWork?:    boolean;
   foundingContext?:   Array<{ name: string; content: string; timestamp: number }>;
   allElectedRoles?:   Array<{ roleLabel: string; tokenId: number; name: string }>;
+
+  // Human draw submission (artForm "pixel-drawing") — filled by POST /api/draw/submit,
+  // consumed by stepAwaitDrawSubmission in work-lifecycle. Bypasses the Author LLM.
+  // drawPixels/drawCanvasW/drawCanvasH are the raw grayscale bytes — proof-of-draw
+  // reads them via GET /api/ana-art/feed once the work is PUBLISHED. artworkText
+  // holds a BMP-wrapped copy instead, for the certificate's <img> tag (a
+  // rendering convenience, not the source proof-of-draw consumes).
+  drawSubmissionId?: string;
+  drawSubmittedBy?:  number;
+  drawSubmittedAt?:  number;
+  drawPixels?:       string;
+  drawCanvasW?:      number;
+  drawCanvasH?:      number;
+
+  // Peer review (artForm "pixel-drawing") — a human member's approval, replacing the
+  // Curator LLM judgment for this artForm. Assigned by rotation, decided via
+  // POST /api/works/[id]/peer-review.
+  peerReviewerTokenId?: number;
+  peerReviewDecision?:  "approved" | "rejected";
+  peerReviewNote?:      string;
+  peerReviewedAt?:      number;
 }
 
 interface DispatchRotation {
   author:     number; // cursor into the sorted member-tokenId list, advances on each dispatch
   curator:    number;
   rapporteur: number;
+  reviewer:   number;
 }
 
 interface WorkStore {
@@ -304,8 +326,9 @@ export async function getWork(id: string): Promise<ANAWork | null> {
   return (await getStore()).works[id] ?? null;
 }
 
-export async function getActiveWorks(): Promise<ANAWork[]> {
-  return (await listWorks()).filter(w => ACTIVE_STATES.includes(w.state));
+export async function getActiveWorks(opts?: { excludeMemorials?: boolean }): Promise<ANAWork[]> {
+  return (await listWorks()).filter(w =>
+    ACTIVE_STATES.includes(w.state) && !(opts?.excludeMemorials && w.isBurnMemorial));
 }
 
 export async function createWork(
@@ -396,7 +419,7 @@ export async function updateNormieSupply(supply: number): Promise<void> {
 // reputation score exists, the elected officer's "arbitration" can become a
 // real choice informed by that score instead of blind rotation.
 
-export type DispatchRole = "author" | "curator" | "rapporteur";
+export type DispatchRole = "author" | "curator" | "rapporteur" | "reviewer";
 
 /**
  * Picks the next Normie tokenId for `role` from `candidates` (sorted ascending
@@ -412,7 +435,7 @@ export async function nextInDispatchRotation(
   if (sorted.length === 0) throw new Error("nextInDispatchRotation: no candidates");
 
   const store = await getStore();
-  const rotation: DispatchRotation = store.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0 };
+  const rotation: DispatchRotation = store.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0, reviewer: 0 };
   const start = rotation[role] % sorted.length;
 
   let picked = sorted[start];
@@ -427,7 +450,7 @@ export async function nextInDispatchRotation(
   }
 
   await mutate(s => {
-    s.dispatchRotation = { ...(s.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0 }), [role]: nextCursor };
+    s.dispatchRotation = { ...(s.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0, reviewer: 0 }), [role]: nextCursor };
   });
 
   return picked;
@@ -594,7 +617,10 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
   // then correctly blocked the iframe (browser shows "content blocked"), even though
   // the URL itself served the artwork fine when opened directly. A relative URL has
   // no origin to get wrong.
-  const artwork = work.artworkText && isHtmlArtwork(work.artworkText)
+  const artwork = work.artForm === "pixel-drawing" && work.artworkText
+    ? `<img src="${escapeHtml(work.artworkText)}" alt="${escapeHtml(work.title)}" style="width:100%;max-width:400px;image-rendering:pixelated;border:1px solid var(--b);background:#fff;display:block;margin:0 auto" />
+<p class="meta" style="margin-top:.4rem;text-align:center">Pixel drawing by ${escapeHtml(work.proposedByName)}</p>`
+    : work.artworkText && isHtmlArtwork(work.artworkText)
     ? (work.collectionAddress
         ? `<iframe src="/api/works/html/by-collection/${work.collectionAddress}" sandbox="allow-scripts" loading="lazy" style="width:100%;aspect-ratio:4/3;border:1px solid var(--b);background:#000;display:block" title="${escapeHtml(work.title)}"></iframe>
 <p class="meta" style="margin-top:.4rem">Generative / visual artwork — stored on-chain in ANAEditions collection <a href="https://basescan.org/address/${work.collectionAddress}" style="color:#a78bfa;text-decoration:none" target="_blank">${work.collectionAddress}</a></p>`

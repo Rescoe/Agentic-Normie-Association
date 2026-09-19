@@ -429,6 +429,16 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
     console.log(`[work-lifecycle] No bureau — roles from vote: Author: ${author.name}, Curator: ${curator.name}, Rapporteur: ${rapporteur.name}`);
   }
 
+  // Celebration works are hand-drawn by the member the burn already selected
+  // (work.proposedBy) — not by whichever Normie the vote/rotation dispatched
+  // as Author. Override just that role; curator/rapporteur stay as dispatched
+  // (curator isn't used to judge this artForm — see stepValidating's peer
+  // review branch — but kept for consistent record-keeping in the certificate).
+  if (work.suggestedForm === "pixel-drawing") {
+    author = personas.find(p => p.tokenId === work.proposedBy)
+      ?? ({ tokenId: work.proposedBy, name: work.proposedByName, imageUrl: "" } as NormiePersona);
+  }
+
   await updateWork(work.id, {
     rapporteurTokenId: rapporteur.tokenId,
     rapporteurName:    rapporteur.name,
@@ -447,6 +457,20 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
 }
 
 async function stepBriefing(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+  // Celebration works skip the Rapporteur LLM entirely — no brief to write for
+  // a piece the proposer draws themselves, and the whole point of this artForm
+  // is a pipeline that doesn't depend on Groq calls to advance.
+  if (work.suggestedForm === "pixel-drawing") {
+    await updateWork(work.id, {
+      artForm:       "pixel-drawing",
+      ambitionLevel: "quick",
+      brief:         work.proposal,
+      briefAt:       Date.now(),
+    });
+    await advanceState(work.id, "CREATING", `${work.proposedByName} will draw this celebration directly`);
+    return true;
+  }
+
   const rapporteur = personas.find(p => p.tokenId === work.rapporteurTokenId) ?? personas[0];
   if (!rapporteur) { console.error(`[work-lifecycle] BRIEFING: no rapporteur for ${work.id}`); return false; }
 
@@ -649,7 +673,21 @@ async function buildAuthorHistoryBlock(authorTokenId: number | undefined, exclud
   }
 }
 
+/**
+ * CREATING for artForm "pixel-drawing" — no Author LLM call. Waits for the
+ * proposer to submit their drawing via POST /api/draw/submit (mode:
+ * "celebration"), which writes drawSubmissionId/artworkText on the work. A
+ * no-op (false) tick just means "still waiting to be drawn".
+ */
+async function stepAwaitDrawSubmission(work: ANAWork): Promise<boolean> {
+  if (!work.drawSubmissionId || !work.artworkText) return false;
+  await advanceState(work.id, "VALIDATING", `Drawing submitted by ${work.proposedByName}`);
+  return true;
+}
+
 async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<boolean | string> {
+  if (work.artForm === "pixel-drawing") return await stepAwaitDrawSubmission(work);
+
   const author = personas.find(p => p.tokenId === work.authorTokenId);
   if (!author) return false;
 
@@ -848,7 +886,36 @@ async function rejectOrRevise(
   return true;
 }
 
+/**
+ * VALIDATING for artForm "pixel-drawing" — no Curator LLM call. A member
+ * picked by rotation (excluding the proposer/drawer — no self-review) must
+ * approve or reject via POST /api/works/[id]/peer-review. Two no-op legs:
+ * first tick after CREATING assigns the reviewer, later ticks just wait for
+ * their decision to land.
+ */
+async function stepPeerReview(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+  if (!work.peerReviewerTokenId) {
+    const candidateIds = personas.map(p => p.tokenId);
+    if (candidateIds.length === 0) return false;
+    const reviewerId = await nextInDispatchRotation("reviewer", candidateIds, [work.proposedBy]);
+    await updateWork(work.id, { peerReviewerTokenId: reviewerId });
+    console.log(`[work-lifecycle] ${work.id}: peer reviewer assigned — #${reviewerId}`);
+    return true;
+  }
+
+  if (!work.peerReviewDecision) return false; // waiting on the reviewer's decision
+
+  if (work.peerReviewDecision === "approved") {
+    await advanceState(work.id, "PUBLISHING", `Approved by peer reviewer #${work.peerReviewerTokenId}`);
+  } else {
+    await advanceState(work.id, "REJECTED", `Rejected by peer reviewer #${work.peerReviewerTokenId}${work.peerReviewNote ? `: ${work.peerReviewNote}` : ""}`);
+  }
+  return true;
+}
+
 async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+  if (work.artForm === "pixel-drawing") return await stepPeerReview(work, personas);
+
   const curator = personas.find(p => p.tokenId === work.curatorTokenId);
   if (!curator) return false;
 
@@ -1159,6 +1226,9 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   }
 
   // ── Step 5: All done → advance to PUBLISHED ──
+  // Published "pixel-drawing" celebrations aren't pushed anywhere from here —
+  // proof-of-draw pulls them itself (GET /api/ana-art/feed), the same way it
+  // pulls approved spontaneous drawings.
   await advanceState(work.id, "PUBLISHED", `tx: ${work.txHash?.slice(0, 12)}`);
 
   if (work.salonId && work.salonId !== AGORA_SALON_ID) {
