@@ -10,7 +10,7 @@
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, parseEther } from "viem";
 import { base } from "viem/chains";
 import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, ANA_EDITIONS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
@@ -23,14 +23,12 @@ import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqu
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
+import { registerMemorialOnChain, addReservedClaimsOnChain } from "@/server/relayer/memorialPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
-import {
-  createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H,
-  MEMORIAL_EDITION_PRICE, MEMORIAL_EDITION_SUPPLY,
-} from "@/lib/memorialArt";
+import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
 
 const MODEL        = "openai/gpt-oss-120b";
@@ -406,16 +404,21 @@ async function stepVoteTallied(work: ANAWork, personas: NormiePersona[]): Promis
 
       const { pixels, cartel } = await createMemorialArtwork({
         proposer: newProposer,
-        burnedTokenIds: work.burnedTokenId != null ? [work.burnedTokenId] : [],
+        burnedTokenIds: work.burnedTokenIds ?? (work.burnedTokenId != null ? [work.burnedTokenId] : []),
         otherMembers: [],
       });
       const drawPixelsB64 = Buffer.from(pixels).toString("base64");
       const artworkText   = pixelsToBmpDataUri(pixels, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H);
 
+      // editionPrice/editionSupply and every memorialKind/tier/pool field are
+      // deliberately NOT reset here — a recreation is a new artwork attempt
+      // for the SAME event (same pricing tier, same reserved claims, same
+      // batch), not a new event. Omitting them from this partial update
+      // leaves whatever request-memorial.ts/batch-memorial/route.ts already
+      // set at creation untouched.
       await updateWork(work.id, {
         proposedBy: newProposer.tokenId, proposedByName: newProposer.name,
         drawPixels: drawPixelsB64, artworkText, cartelText: cartel,
-        editionPrice: MEMORIAL_EDITION_PRICE, editionSupply: MEMORIAL_EDITION_SUPPLY,
         authorTokenId: newProposer.tokenId, authorName: newProposer.name,
         curatorTokenId: newProposer.tokenId, curatorName: newProposer.name,
         rapporteurTokenId: newProposer.tokenId, rapporteurName: newProposer.name,
@@ -1107,7 +1110,111 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
   return await rejectOrRevise(work, personas, curator, note, attempt);
 }
 
+/**
+ * Publishing path for a memorial created after ANAMemorials existed
+ * (work.memorialKind set — see memorialBatchQueue.ts/batch-memorial/route.ts
+ * and request-memorial/route.ts). Replaces deployCollection+initializeCollection
+ * with registerMemorial+addReservedClaims on the shared contract — no
+ * collection deployment, no per-memorial contract at all. A memorial with
+ * memorialKind == null predates this and stays on stepPublishing's legacy
+ * path below indefinitely.
+ */
+async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> {
+  if (!work.authorTokenId || !work.artworkText) {
+    const msg = `PUBLISHING (memorial): incomplete data (missing ${[
+      !work.authorTokenId && "authorTokenId", !work.artworkText && "artworkText",
+    ].filter(Boolean).join(", ")})`;
+    console.error(`[work-lifecycle] ${msg} for ${work.id}`);
+    return msg;
+  }
+
+  let onChainWorkId = work.onChainWorkId;
+
+  // ── Step 1: publish the governance certificate ──
+  // The certificate references ANAMemorials' fixed address directly
+  // (buildWorkHtml, work.memorialKind branch) — no per-memorial address to
+  // wait for the way the legacy path waits on collectionAddress.
+  if (onChainWorkId == null) {
+    const html = await buildWorkHtml(work);
+    const result = await publishWork(html, work.authorTokenId, work.curatorTokenId ?? work.authorTokenId, work.rapporteurTokenId ?? work.authorTokenId, work.id);
+
+    if (!result.success) {
+      const errMsg = result.error ?? "publishWork failed (unknown)";
+      await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
+      return `publishWork failed: ${errMsg.slice(0, 200)}`;
+    }
+    if (result.onChainWorkId == null) {
+      const errMsg = "publishWork tx succeeded but WorkPublished event not decoded — will retry";
+      console.error(`[work-lifecycle] ${errMsg} (tx: ${result.txHash})`);
+      await updateWork(work.id, { validationNote: errMsg });
+      return errMsg;
+    }
+    onChainWorkId = result.onChainWorkId;
+    await updateWork(work.id, { txHash: result.txHash, onChainWorkId, publishedAt: Date.now() });
+    console.log(`[work-lifecycle] published memorial "${work.title}" — workId=${onChainWorkId} tx: ${result.txHash}`);
+  }
+
+  // ── Step 2: register the series on ANAMemorials (once) ──
+  let onChainMemorialId = work.onChainMemorialId;
+  if (onChainMemorialId == null) {
+    const editionPriceWei = work.editionPrice ? parseEther(work.editionPrice) : 0n;
+    const registerResult = await registerMemorialOnChain({
+      title:                  work.title,
+      artworkContent:         work.artworkText,
+      workId:                 onChainWorkId,
+      creatorProposerTokenId: work.proposedBy,
+      priceWei:               editionPriceWei,
+      publicSupply:           work.memorialPublicSupply ?? 0,
+      requesterSupply:        work.memorialRequesterSupply ?? 0,
+      requesterAddr:          work.memorialRequesterAddr,
+      openEnded:              work.memorialOpenEnded ?? false,
+      claimDurationSeconds:   work.memorialClaimDurationSeconds ?? 0,
+      workIdForLog:           work.id,
+    });
+
+    if (!registerResult.success) {
+      const errMsg = registerResult.error ?? "registerMemorial failed (unknown)";
+      await updateWork(work.id, { validationNote: `registerMemorial: ${errMsg.slice(0, 280)}` });
+      return `registerMemorial failed: ${errMsg.slice(0, 200)}`;
+    }
+    if (registerResult.memorialId == null) {
+      const errMsg = "registerMemorial tx succeeded but memorialId not recovered — will retry";
+      console.error(`[work-lifecycle] ${errMsg} (tx: ${registerResult.txHash})`);
+      await updateWork(work.id, { validationNote: errMsg });
+      return errMsg;
+    }
+    onChainMemorialId = registerResult.memorialId;
+    await updateWork(work.id, { onChainMemorialId });
+    console.log(`[work-lifecycle] registered memorial series #${onChainMemorialId} for "${work.title}"`);
+  }
+
+  // ── Step 3: reserve one free claim per honored burned Normie's last owner ──
+  const reservedEntries = Object.entries(work.reservedClaimRecipients ?? {});
+  if (reservedEntries.length > 0 && !work.reservedClaimsAdded) {
+    const burnedTokenIds     = reservedEntries.map(([tokenId]) => Number(tokenId));
+    const eligibleRecipients = reservedEntries.map(([, addr]) => addr);
+    const addResult = await addReservedClaimsOnChain({
+      memorialId: onChainMemorialId, burnedTokenIds, eligibleRecipients, workIdForLog: work.id,
+    });
+    if (!addResult.success) {
+      const errMsg = addResult.error ?? "addReservedClaims failed (unknown)";
+      await updateWork(work.id, { validationNote: `addReservedClaims: ${errMsg.slice(0, 280)}` });
+      return `addReservedClaims failed: ${errMsg.slice(0, 200)}`;
+    }
+    await updateWork(work.id, { reservedClaimsAdded: true });
+    console.log(`[work-lifecycle] reserved ${burnedTokenIds.length} free claim(s) on memorial #${onChainMemorialId}`);
+  }
+
+  await advanceState(work.id, "PUBLISHED", `tx: ${work.txHash?.slice(0, 12)} · memorial #${onChainMemorialId}`);
+  if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+    await closeSalon(work.salonId, 0).catch(() => null);
+  }
+  return true;
+}
+
 async function stepPublishing(work: ANAWork): Promise<boolean | string> {
+  if (work.memorialKind) return stepPublishingMemorial(work);
+
   if (!work.authorTokenId || !work.curatorTokenId || !work.rapporteurTokenId || !work.artworkText) {
     const msg = `PUBLISHING: incomplete data (missing ${[
       !work.authorTokenId     && "authorTokenId",

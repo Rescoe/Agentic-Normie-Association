@@ -1,17 +1,16 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, formatEther, isAddress } from "viem";
 import { base, mainnet } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { listWorks, createWork, updateWork } from "@/lib/workStore";
+import { listWorks, createWork } from "@/lib/workStore";
 import { buildPersona } from "@/lib/normiesPersona";
 import { checkMemorialRequestLimit, recordMemorialRequest } from "@/lib/salonStore";
-import {
-  createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H,
-  MEMORIAL_EDITION_PRICE, MEMORIAL_EDITION_SUPPLY,
-} from "@/lib/memorialArt";
+import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
-import { registerCelebrationForToken } from "@/server/relayer/celebrationPublisher";
+import { getLastOwnerFromBurnTx } from "@/server/relayer/celebrationPublisher";
+import { getBurnedTokens } from "@/lib/normiesApi";
+import { resolveTier, type MemorialTierId } from "@/lib/memorialPricing";
 
 const client = createPublicClient({
   chain:     base,
@@ -76,6 +75,19 @@ async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?:
   }
 }
 
+/** Same "no point-lookup" scan already used by celebrationPublisher.ts's registerCelebrationForToken. */
+async function findLastOwner(tokenId: number, searchLimit = 500): Promise<string | null> {
+  try {
+    const recent = await getBurnedTokens(searchLimit, 0);
+    const match = recent.find(t => Number(t.tokenId) === tokenId);
+    if (!match) return null;
+    return await getLastOwnerFromBurnTx(match.txHash, match.tokenId);
+  } catch (e) {
+    console.warn(`[request-memorial] findLastOwner failed for #${tokenId}:`, e);
+    return null;
+  }
+}
+
 function getClientIp(req: NextRequest): string {
   return (
     req.headers.get("x-real-ip") ??
@@ -85,17 +97,26 @@ function getClientIp(req: NextRequest): string {
 }
 
 /**
- * POST /api/celebrations/request-memorial — lets any visitor nominate a
- * specific burned tokenId for a memorial, instead of waiting for the
- * check-burns cron's aggregate supply-diff detection. Same creation shape as
- * check-burns: generates the memorial's visual instantly (memorialArt.ts, no
- * LLM/human involved), creates the work already in VOTE_OPEN, exempt from
- * the "one active work" gate (see check-burns/route.ts). The vote
- * (stepVoteOpen/stepVoteTallied) is what moderates it, post-creation.
+ * POST /api/celebrations/request-memorial — lets a visitor pay to nominate a
+ * specific burned tokenId for a memorial, instead of waiting for the batch
+ * cron. Same creative shape as the batch path: generates the memorial's
+ * visual instantly (memorialArt.ts, LLM-driven), creates the work already in
+ * VOTE_OPEN. The vote (stepVoteOpen/stepVoteTallied) moderates it after the
+ * fact, same as every memorial.
  *
- * Public and lightly rate-limited (10 min/IP) rather than wallet-gated: this
- * only ever creates a work already subject to the same member vote every
- * other ANA work goes through, it doesn't touch funds or on-chain state.
+ * No payment is collected HERE — `requesterWallet` is reserved a slot in the
+ * memorial's requester pool (ANAMemorials.sol), and actually pays (their own
+ * gas + the tier's price) later, by calling mintRequester() themselves once
+ * the memorial is PUBLISHED. This route just captures which wallet and which
+ * tier shape the requester chose.
+ *
+ * The burned Normie's own last owner ALWAYS gets a separate, free, reserved
+ * claim regardless of who requests or pays — resolved here the same way the
+ * batch path resolves it, independent of `requesterWallet`.
+ *
+ * Public and lightly rate-limited (10 min/IP) rather than wallet-signature-
+ * gated: this only ever creates a work subject to the same member vote every
+ * other ANA work goes through, and reserves a purchase OPTION, not a charge.
  */
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req);
@@ -108,7 +129,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { tokenId?: number };
+  let body: { tokenId?: number; tier?: number; requesterWallet?: string };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
 
@@ -117,13 +138,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "tokenId (integer) requis" }, { status: 400 });
   }
 
+  const tier = body.tier;
+  if (tier !== 1 && tier !== 2 && tier !== 3) {
+    return NextResponse.json({ error: "tier (1, 2 ou 3) requis" }, { status: 400 });
+  }
+
+  const requesterWallet = body.requesterWallet;
+  if (!requesterWallet || !isAddress(requesterWallet)) {
+    return NextResponse.json({ error: "requesterWallet (adresse valide) requis" }, { status: 400 });
+  }
+
   const burnCheck = await verifyBurned(tokenId!);
   if (!burnCheck.burned) {
     return NextResponse.json({ error: burnCheck.error ?? "Ce Normie n'est pas brûlé" }, { status: 409 });
   }
 
   const existing = (await listWorks()).find(
-    w => w.burnedTokenId === tokenId && w.state !== "REJECTED",
+    w => (w.burnedTokenId === tokenId || w.burnedTokenIds?.includes(tokenId!)) && w.state !== "REJECTED",
   );
   if (existing) {
     return NextResponse.json(
@@ -151,6 +182,11 @@ export async function POST(req: NextRequest) {
   const drawPixelsB64 = Buffer.from(pixels).toString("base64");
   const artworkText   = pixelsToBmpDataUri(pixels, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H);
 
+  const tierConfig = await resolveTier(tier as MemorialTierId);
+  const lastOwner  = await findLastOwner(tokenId!);
+  const reservedClaimRecipients: Record<number, string> = {};
+  if (lastOwner) reservedClaimRecipients[tokenId!] = lastOwner;
+
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
@@ -161,6 +197,15 @@ export async function POST(req: NextRequest) {
     artForm:        "pixel-drawing",
     isBurnMemorial: true,
     burnedTokenId:  tokenId,
+    burnedTokenIds: [tokenId!],
+    memorialKind:   "requested",
+    memorialTier:   tier as MemorialTierId,
+    memorialPublicSupply:         tierConfig.publicSupply,
+    memorialRequesterSupply:      tierConfig.requesterSupply,
+    memorialRequesterAddr:        requesterWallet,
+    memorialOpenEnded:            tierConfig.openEnded,
+    memorialClaimDurationSeconds: tierConfig.claimDurationSeconds,
+    reservedClaimRecipients,
     salonId:        "salon_agora_ana",
     voteOpenedAt:   Date.now(),
     drawPixels:     drawPixelsB64,
@@ -168,8 +213,11 @@ export async function POST(req: NextRequest) {
     drawCanvasH:    MEMORIAL_CANVAS_H,
     artworkText,
     cartelText:     cartel,
-    editionPrice:   MEMORIAL_EDITION_PRICE,
-    editionSupply:  MEMORIAL_EDITION_SUPPLY,
+    // editionPrice is an ETH-decimal string throughout ANAWork (legacy field) —
+    // convert once here so stepPublishing's memorial branch can parse it back
+    // to wei the same way the batch path does.
+    editionPrice:   formatEther(BigInt(tierConfig.priceWei)),
+    editionSupply:  tierConfig.publicSupply + tierConfig.requesterSupply,
     authorTokenId:     proposer.tokenId,
     authorName:        proposer.name,
     curatorTokenId:    proposer.tokenId,
@@ -178,24 +226,21 @@ export async function POST(req: NextRequest) {
     rapporteurName:    proposer.name,
   }, "VOTE_OPEN");
 
-  // Best-effort — never blocks the memorial work if it fails. Lets this burned
-  // Normie's last owner claim a free edition later, same as an auto-detected
-  // burn (check-burns.ts's registerBurnCelebrations) — a manual request isn't
-  // a second-class memorial.
-  const celebrationIds = await registerCelebrationForToken(tokenId!, work.id).catch(e => {
-    console.error("[request-memorial] registerCelebrationForToken error:", e);
-    return [] as number[];
-  });
-  if (celebrationIds.length > 0) {
-    await updateWork(work.id, { celebrationIds });
-  }
-
   await recordMemorialRequest(ip);
 
   return NextResponse.json({
     ok: true,
-    workId:       work.id,
+    workId:          work.id,
     proposerTokenId: proposer.tokenId,
-    proposerName: proposer.name,
+    proposerName:    proposer.name,
+    tier,
+    reservedFreeClaimForLastOwner: !!lastOwner,
+    // Flags the case where the requester IS the burned Normie's last owner —
+    // they're already separately entitled to a free claimFree() edition, so
+    // paying for the requester-pool tier too means two near-identical
+    // editions for one event. Not blocked (the contract keeps the pools
+    // structurally separate either way), but worth surfacing in the UI
+    // before payment — see the plan's "tier-1 double-entitlement" note.
+    requesterAlreadyEntitledToFreeClaim: !!lastOwner && lastOwner.toLowerCase() === requesterWallet.toLowerCase(),
   });
 }

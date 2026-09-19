@@ -16,6 +16,7 @@ export {
   ANAEditionsAbi         as ANA_EDITIONS_ABI,
   ANACollectionFactoryAbi as ANA_COLLECTION_FACTORY_ABI,
   CelebrationRegistryAbi as CELEBRATION_REGISTRY_ABI,
+  ANAMemorialsAbi        as ANA_MEMORIALS_ABI,
 } from "./abis";
 
 // ─── Addresses (from environment) ────────────────────────────────────────────
@@ -30,6 +31,7 @@ export const CONTRACT_ADDRESSES = {
   CollectionFactory:    process.env.NEXT_PUBLIC_COLLECTION_FACTORY_ADDRESS     ?? "",
   ANACollectionFactory: process.env.NEXT_PUBLIC_ANA_COLLECTION_FACTORY_ADDRESS ?? "",
   CelebrationRegistry:  process.env.NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS   ?? "",
+  ANAMemorials:         process.env.NEXT_PUBLIC_ANA_MEMORIALS_ADDRESS          ?? "",
 } as const;
 
 // ─── Role constants (mirrors Roles.sol) ───────────────────────────────────────

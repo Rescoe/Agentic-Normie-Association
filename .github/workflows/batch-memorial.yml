@@ -1,0 +1,32 @@
+name: ANA — Batch Memorial
+
+on:
+  schedule:
+    # Weekly, Sunday 03:00 UTC — drains the burns queued by check-burns.yml's
+    # 15-min detection tick into ONE collective memorial. Batching (instead of
+    # one memorial per burn) is what keeps the relayer solvent: creation now
+    # costs 2 relayer-paid transactions per WEEK regardless of how many burns
+    # happened, instead of 3 per burn.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  batch-memorial:
+    name: Create the weekly collective memorial
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: POST /api/keeper/batch-memorial
+        run: |
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ vars.ANA_APP_URL }}/api/keeper/batch-memorial" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
+            -d '{}')
+          echo "HTTP $STATUS"
+          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Batch memorial failed with HTTP $STATUS"
+            exit 1
+          fi

@@ -12,6 +12,7 @@
 
 import fs   from "fs";
 import path from "path";
+import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,27 @@ export interface ANAWork {
   // written alongside the shapes — see memorialArt.ts). Gallery/certificate
   // only: never sent to proof-of-draw (GET /api/ana-art/feed omits it).
   cartelText?:       string;
+
+  // Shared ANAMemorials contract (replaces the old one-ANAEditions-per-memorial
+  // pattern for every memorial created after this field existed — see
+  // memorialPublisher.ts, batch-memorial/route.ts, request-memorial/route.ts).
+  // A memorial with memorialKind == null predates this and stays on the old
+  // deployCollection/publish/initialize rails (workPublisher.ts) — the two
+  // coexist indefinitely, discriminated by this field's presence.
+  burnedTokenIds?:          number[]; // plural — a batch honors several; burnedTokenId (singular) kept for display
+  memorialKind?:            "batch" | "requested";
+  memorialTier?:            1 | 2 | 3; // "requested" only
+  memorialPublicSupply?:    number;
+  memorialRequesterSupply?: number;
+  memorialRequesterAddr?:   string;
+  memorialOpenEnded?:       boolean;
+  memorialClaimDurationSeconds?: number;
+  // burnedTokenId -> resolved last-owner wallet, one guaranteed free ANAMemorials
+  // claim per entry (see ANAMemorials.sol's reservedClaims — structurally
+  // separate from public/requester pools, never exhausted by their sales).
+  reservedClaimRecipients?: Record<number, string>;
+  onChainMemorialId?:       number; // series index in the shared ANAMemorials contract
+  reservedClaimsAdded?:     boolean; // guards against re-adding (wasted gas) on a PUBLISHING retry
 }
 
 interface DispatchRotation {
@@ -621,21 +643,32 @@ export async function buildWorkHtml(work: ANAWork): Promise<string> {
   // then correctly blocked the iframe (browser shows "content blocked"), even though
   // the URL itself served the artwork fine when opened directly. A relative URL has
   // no origin to get wrong.
+  const cartelBlock = work.cartelText
+    ? `<p class="block" style="margin-top:.8rem;font-style:italic">${escapeHtml(work.cartelText)}</p>` : "";
   const artwork = work.artForm === "pixel-drawing" && work.artworkText
-    ? work.collectionAddress
-      // The base64 BMP roughly doubles the certificate's real size once
-      // double-base64'd for on-chain storage — pushed WorkRegistry.publish()
-      // past its gas budget (see needsCollection's comment in work-lifecycle).
-      // The image is still fully on-chain via ANAEditions.initialize(), just
-      // not duplicated a second time here — same pattern as generative works
-      // below, which reference their collection instead of inlining content.
+    ? work.memorialKind && CONTRACT_ADDRESSES.ANAMemorials
+      // New shared-collection model (ANAMemorials) — the contract address is
+      // fixed and known ahead of registerMemorial() actually running, unlike
+      // the old per-memorial ANAEditions deploy, so this branch doesn't need
+      // to wait on onChainMemorialId the way the legacy branch below waits on
+      // collectionAddress.
+      ? `<p class="meta" style="text-align:center">⬛ Pixel piece by ${escapeHtml(work.proposedByName)} — stored on-chain in the shared ANA Memorials collection <a href="https://basescan.org/address/${CONTRACT_ADDRESSES.ANAMemorials}" style="color:#a78bfa;text-decoration:none" target="_blank">${CONTRACT_ADDRESSES.ANAMemorials}</a></p>
+${cartelBlock}`
+    : work.collectionAddress
+      // Legacy per-memorial-collection model (work.memorialKind == null,
+      // created before ANAMemorials existed). The base64 BMP roughly doubles
+      // the certificate's real size once double-base64'd for on-chain
+      // storage — pushed WorkRegistry.publish() past its gas budget (see
+      // needsCollection's comment in work-lifecycle). The image is still
+      // fully on-chain via ANAEditions.initialize(), just not duplicated a
+      // second time here — same pattern as generative works below.
       ? `<p class="meta" style="text-align:center">⬛ Pixel piece by ${escapeHtml(work.proposedByName)} — stored on-chain in ANAEditions collection <a href="https://basescan.org/address/${work.collectionAddress}" style="color:#a78bfa;text-decoration:none" target="_blank">${work.collectionAddress}</a></p>
-${work.cartelText ? `<p class="block" style="margin-top:.8rem;font-style:italic">${escapeHtml(work.cartelText)}</p>` : ""}`
+${cartelBlock}`
       // Fallback if the collection deploy failed (non-fatal elsewhere) —
       // better an oversized-but-complete certificate than a missing image.
       : `<img src="${escapeHtml(work.artworkText)}" alt="${escapeHtml(work.title)}" style="width:100%;max-width:400px;image-rendering:pixelated;border:1px solid var(--b);background:#fff;display:block;margin:0 auto" />
 <p class="meta" style="margin-top:.4rem;text-align:center">By ${escapeHtml(work.proposedByName)}</p>
-${work.cartelText ? `<p class="block" style="margin-top:.8rem;font-style:italic">${escapeHtml(work.cartelText)}</p>` : ""}`
+${cartelBlock}`
     : work.artworkText && isHtmlArtwork(work.artworkText)
     ? (work.collectionAddress
         ? `<iframe src="/api/works/html/by-collection/${work.collectionAddress}" sandbox="allow-scripts" loading="lazy" style="width:100%;aspect-ratio:4/3;border:1px solid var(--b);background:#000;display:block" title="${escapeHtml(work.title)}"></iframe>
