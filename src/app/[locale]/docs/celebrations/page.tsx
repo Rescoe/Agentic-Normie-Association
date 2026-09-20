@@ -77,8 +77,12 @@ export default async function DocsCelebrationsPage() {
             <p className="text-sm text-[--fg-muted] leading-relaxed">
               Sur <Link href="/galerie/celebrations" className="underline hover:no-underline">la page Célébrations</Link>,
               n&apos;importe qui peut nommer un tokenId brûlé précis (vérifié on-chain) et choisir un des 3 paliers
-              ci-dessous. Aucun paiement n&apos;est collecté à ce moment — seule une place est réservée ; le
-              paiement a lieu plus tard, quand le demandeur réclame lui-même son édition.
+              ci-dessous. <strong>Le paiement a lieu immédiatement</strong> — le demandeur appelle lui-même
+              <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1 mx-1">tip()</code>
+              pour le prix du palier, avant même que le mémorial existe. Ça garantit que le relayer est rémunéré
+              pour le coût de création, que le mémorial soit ensuite acheté par d&apos;autres ou non. Son édition
+              réservée est ensuite gratuite à réclamer (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code>)
+              une fois le mémorial publié — déjà payée en amont.
             </p>
           </div>
         </div>
@@ -164,7 +168,8 @@ export default async function DocsCelebrationsPage() {
               <div className="space-y-1">
                 {[
                   { fn: "claimFree(memorialId, burnedTokenId)",  returns: "gratuit — réservé au dernier propriétaire du Normie honoré" },
-                  { fn: "mintRequester(memorialId) payable",     returns: "réservé à l'adresse qui a demandé ce mémorial" },
+                  { fn: "mintRequester(memorialId)",             returns: "gratuit — déjà payé via tip() à la demande ; réservé au demandeur" },
+                  { fn: "setSeriesPrice(memorialId, newPriceWei) — owner", returns: "ajuste le prix public d'une série déjà enregistrée" },
                   { fn: "mintPublic(memorialId) payable",        returns: "ouvert à tous, tant que le pool public n'est pas épuisé/expiré" },
                   { fn: "tip() payable",                         returns: "pourboire direct au relayer, aucune édition mintée" },
                   { fn: "getSeries(memorialId)",                 returns: "MemorialSeries{title, priceWei, publicSupply, publicMinted, requesterSupply, requesterMinted, requesterAddr, openEnded, claimDeadline, ...}" },
@@ -193,6 +198,18 @@ import { ANA_MEMORIALS_ABI } from "./abis/ANAMemorials";
 
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 const [account] = await client.getAddresses();
+
+// Paiement d'une demande ciblée — AVANT que le mémorial existe. Le hash de
+// cette transaction est envoyé à POST /api/celebrations/request-memorial,
+// qui la vérifie (montant, expéditeur, destinataire) avant de créer quoi
+// que ce soit.
+const tipTxHash = await client.writeContract({
+  account,
+  address: "${memorialsAddr}",
+  abi: ANA_MEMORIALS_ABI,
+  functionName: "tip",
+  value: tierPriceWei,
+});
 
 // Palier public — remplace memorialId et priceWei par les valeurs réelles
 // (GET /api/memorials/list les donne pour chaque mémorial publié)

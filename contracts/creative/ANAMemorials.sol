@@ -95,6 +95,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     event Withdrawn(address indexed to, uint256 amount);
     event AuthorizationUpdated(address indexed addr, bool status);
     event VaultUpdated(address indexed addr);
+    event SeriesPriceUpdated(uint256 indexed memorialId, uint256 newPriceWei);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -235,16 +236,23 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         _settlePayment(memorialId, s.priceWei);
     }
 
-    /// @notice The wallet that paid to request this memorial claims its reserved slot.
-    function mintRequester(uint256 memorialId) external payable nonReentrant validMemorial(memorialId) returns (uint256 tokenId) {
+    /**
+     * @notice The wallet that paid to request this memorial claims its
+     *         reserved slot. Free — the requester already paid up front via
+     *         tip() before the memorial was even created (see
+     *         request-memorial/route.ts), so the relayer is compensated for
+     *         creation cost regardless of whether this is ever called. This
+     *         is the one difference from the first version of this contract,
+     *         which charged priceWei again here — that left the relayer with
+     *         no guaranteed payment if a requester never followed up.
+     */
+    function mintRequester(uint256 memorialId) external nonReentrant validMemorial(memorialId) returns (uint256 tokenId) {
         MemorialSeries storage s = series[memorialId];
         if (msg.sender != s.requesterAddr) revert NotEligible();
         if (s.requesterMinted >= s.requesterSupply) revert SoldOut();
-        if (msg.value < s.priceWei) revert InsufficientPayment(s.priceWei, msg.value);
 
         s.requesterMinted++;
         tokenId = _mintEdition(memorialId, msg.sender, "requester");
-        _settlePayment(memorialId, s.priceWei);
     }
 
     /**
@@ -340,6 +348,19 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         if (addr == address(0)) revert ZeroAddress();
         vaultAddr = addr;
         emit VaultUpdated(addr);
+    }
+
+    /**
+     * @notice Adjusts an already-registered series' per-edition price —
+     *         ETH's own price moves independently of what a memorial "should"
+     *         cost, and priceWei is otherwise fixed forever at registration.
+     *         Only affects mintPublic() going forward (mintRequester() is
+     *         free, claimFree() is always free) — editions already minted are
+     *         unaffected either way.
+     */
+    function setSeriesPrice(uint256 memorialId, uint256 newPriceWei) external onlyOwner validMemorial(memorialId) {
+        series[memorialId].priceWei = newPriceWei;
+        emit SeriesPriceUpdated(memorialId, newPriceWei);
     }
 
     // ─── Internal ─────────────────────────────────────────────────────────────

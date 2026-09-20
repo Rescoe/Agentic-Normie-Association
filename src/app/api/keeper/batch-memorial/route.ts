@@ -23,6 +23,7 @@ import { createWork } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
+import { createSalon, addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
 import { peekQueue, clearQueue } from "@/lib/memorialBatchQueue";
 import { getMemorialPricing } from "@/lib/memorialPricing";
 import { verifyAdminRequest } from "@/lib/adminAuth";
@@ -90,6 +91,26 @@ export async function POST(req: NextRequest) {
     if (b.lastOwner) reservedClaimRecipients[b.tokenId] = b.lastOwner;
   }
 
+  // Dedicated salon per memorial, same pattern as a standard work's
+  // stepProposed() — was hardcoded to AGORA, which meant every vote message
+  // (and the vote-reopened-after-a-failed-vote announcements) piled into the
+  // main salon, mixed in with unrelated conversation.
+  const salon = await createSalon({
+    name:        title.slice(0, 60),
+    description: `Salon dédié au mémorial "${title}" — vote et échanges.`,
+    createdBy:   proposer.tokenId,
+  });
+  await addMessage({
+    salonId:   AGORA_SALON_ID,
+    tokenId:   proposer.tokenId,
+    name:      proposer.name,
+    imageUrl:  proposer.imageUrl ?? "",
+    content:   `📜 I'm proposing a memorial: "${title}". A dedicated salon has just opened for it. ${proposal}`,
+    isLlm:     true,
+    timestamp: Date.now(),
+    topic:     "art",
+  }).catch(() => null);
+
   const work = await createWork({
     proposedBy:     proposer.tokenId,
     proposedByName: proposer.name,
@@ -104,7 +125,7 @@ export async function POST(req: NextRequest) {
     memorialKind:   "batch",
     memorialPublicSupply: burned, // one editable slot per burn honored this period
     reservedClaimRecipients,
-    salonId:        "salon_agora_ana",
+    salonId:        salon.id,
     voteOpenedAt:   Date.now(),
     drawPixels:     drawPixelsB64,
     drawCanvasW:    MEMORIAL_CANVAS_W,

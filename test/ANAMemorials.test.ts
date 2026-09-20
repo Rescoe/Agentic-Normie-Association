@@ -178,6 +178,15 @@ describe("ANAMemorials", function () {
       await memorials.connect(buyer1).mintPublic(id); // exhausts the PUBLIC pool only
       await expect(memorials.connect(requester).mintRequester(id)).to.not.be.reverted; // requester pool untouched
     });
+
+    it("is free even when the series has a nonzero priceWei — the requester already paid via tip() before creation", async () => {
+      const { memorials, relayer, requester } = await deployFixture();
+      const price = ethers.parseEther("0.001");
+      const id = await registerBasicMemorial(memorials, relayer, {
+        priceWei: price, requesterSupply: 1, requesterAddr: requester.address,
+      });
+      await expect(memorials.connect(requester).mintRequester(id)).to.not.be.reverted;
+    });
   });
 
   describe("claimFree — the reserved-claim guarantee", function () {
@@ -349,6 +358,30 @@ describe("ANAMemorials", function () {
         .to.be.revertedWithCustomError(memorials, "OwnableUnauthorizedAccount");
       await expect(memorials.connect(stranger).setVaultAddr(buyer1.address))
         .to.be.revertedWithCustomError(memorials, "OwnableUnauthorizedAccount");
+    });
+
+    it("setSeriesPrice: only the owner can call it, and it changes what mintPublic charges", async () => {
+      const { memorials, owner, relayer, stranger, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, {
+        priceWei: ethers.parseEther("0.01"), publicSupply: 10,
+      });
+
+      await expect(memorials.connect(stranger).setSeriesPrice(id, 123n))
+        .to.be.revertedWithCustomError(memorials, "OwnableUnauthorizedAccount");
+
+      const newPrice = ethers.parseEther("0.0005");
+      await memorials.connect(owner).setSeriesPrice(id, newPrice);
+      expect((await memorials.getSeries(id)).priceWei).to.equal(newPrice);
+
+      // The old (higher) price is no longer required — paying only the new,
+      // lower price now succeeds where it would have reverted InsufficientPayment before.
+      await expect(memorials.connect(buyer1).mintPublic(id, { value: newPrice })).to.not.be.reverted;
+    });
+
+    it("setSeriesPrice reverts for an unknown memorial", async () => {
+      const { memorials, owner } = await deployFixture();
+      await expect(memorials.connect(owner).setSeriesPrice(999, 1n))
+        .to.be.revertedWithCustomError(memorials, "UnknownMemorial");
     });
   });
 });

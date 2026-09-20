@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useAccount, useWriteContract } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { formatEther } from "viem";
-import { CELEBRATION_REGISTRY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { CELEBRATION_REGISTRY_ABI, ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { MemorialMintPanel } from "./MemorialMintPanel";
 import type { MemorialPricingConfig } from "@/lib/memorialPricing";
 
@@ -152,13 +152,19 @@ const STATE_LABEL: Record<string, string> = {
  * (a real creative act by the member picked to propose it, informed by the
  * burned Normie's persona — see memorialArt.ts) is created instantly; only
  * the member vote that moderates it takes any time.
+ *
+ * Payment happens BEFORE this call (RequestMemorialForm pays via
+ * ANAMemorials.tip() first) — paymentTxHash is proof, verified server-side.
  */
-async function requestMemorial(tokenId: number, tier: 1 | 2 | 3, requesterWallet: string): Promise<MemorialResult> {
+async function requestMemorial(
+  tokenId: number, tier: 1 | 2 | 3, requesterWallet: string, paymentTxHash: string,
+  publicSupply?: number, claimDurationSeconds?: number,
+): Promise<MemorialResult> {
   try {
     const res = await fetch("/api/celebrations/request-memorial", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ tokenId, tier, requesterWallet }),
+      body:    JSON.stringify({ tokenId, tier, requesterWallet, paymentTxHash, publicSupply, claimDurationSeconds }),
     });
     const data = await res.json();
     if (res.ok) {
@@ -180,41 +186,82 @@ const TIER_LABEL: Record<1 | 2 | 3, string> = {
 };
 
 /**
- * Tier selection + wallet capture for a paid memorial request. No payment
- * happens here — the requester's wallet is just reserved a slot in the
- * memorial's "requester" pool (see MemorialMintPanel); they pay later by
- * calling mintRequester() themselves once the memorial is PUBLISHED. Pricing
- * is fetched from /api/admin/memorial-pricing (GET is public) so the numbers
- * shown always match what registerMemorial() will actually use.
+ * Tier selection, quantity/durée (paliers 2 et 3), wallet, et paiement pour
+ * une demande de mémorial ciblée. Le paiement a lieu ICI, avant la demande :
+ * le wallet connecté appelle ANAMemorials.tip() pour le prix du palier
+ * choisi — ça garantit que le relayer est rémunéré pour le coût de création,
+ * qu'un achat public suive ou non. Le hash de cette transaction est envoyé
+ * à /api/celebrations/request-memorial, qui la vérifie avant de créer quoi
+ * que ce soit. Une vérification légère (Normie bien brûlé, pas déjà demandé)
+ * a lieu avant le paiement pour éviter de payer pour rien.
  */
 function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
-  onSubmit: (tokenId: number, tier: 1 | 2 | 3, wallet: string) => void;
+  onSubmit: (tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string, publicSupply?: number, claimDurationSeconds?: number) => void;
   submitting: boolean;
   prefillTokenId?: number | null;
 }) {
   const { address } = useAccount();
+  const { writeContractAsync } = useWriteContract();
   const [tokenId, setTokenId] = useState("");
   const [tier, setTier] = useState<1 | 2 | 3>(1);
   const [pricing, setPricing] = useState<MemorialPricingConfig | null>(null);
+  const [memorialsAddr, setMemorialsAddr] = useState("");
+  const [quantity, setQuantity] = useState(10);
+  const [durationDays, setDurationDays] = useState(30);
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/admin/memorial-pricing").then(r => r.json()).then(setPricing).catch(() => null);
+    fetch("/api/admin/memorial-pricing").then(r => r.json()).then((cfg: MemorialPricingConfig) => {
+      setPricing(cfg);
+      setQuantity(cfg.tier2.publicSupply);
+      setDurationDays(Math.round((cfg.tier3.claimDurationSeconds ?? 2_592_000) / 86_400));
+    }).catch(() => null);
+    fetch("/api/memorials/list").then(r => r.json()).then(d => setMemorialsAddr(d.contractAddress ?? "")).catch(() => null);
   }, []);
 
   useEffect(() => {
     if (prefillTokenId != null) setTokenId(String(prefillTokenId));
   }, [prefillTokenId]);
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     const id = parseInt(tokenId, 10);
-    if (Number.isInteger(id) && id >= 0 && address) onSubmit(id, tier, address);
+    if (!Number.isInteger(id) || id < 0 || !address || !pricing || !memorialsAddr) return;
+
+    setPayError(null);
+    setPaying(true);
+    try {
+      const check = await fetch(`/api/celebrations/verify-burned?tokenId=${id}`).then(r => r.json());
+      if (!check.burned) { setPayError("Ce Normie n'est pas brûlé."); return; }
+      if (check.alreadyRequested) { setPayError(`Un mémorial existe déjà pour ce Normie (${check.existingState}).`); return; }
+
+      const tierConfig = { 1: pricing.tier1, 2: pricing.tier2, 3: pricing.tier3 }[tier];
+      const txHash = await writeContractAsync({
+        address:      memorialsAddr as `0x${string}`,
+        abi:          ANA_MEMORIALS_ABI,
+        functionName: "tip",
+        value:        BigInt(tierConfig.priceWei),
+      });
+
+      onSubmit(
+        id, tier, address, txHash,
+        tier === 2 ? quantity : undefined,
+        tier === 3 ? durationDays * 86_400 : undefined,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPayError(msg.includes("User rejected") ? "Paiement annulé." : "Échec du paiement.");
+    } finally {
+      setPaying(false);
+    }
   }
 
   const tierConfig = pricing ? { 1: pricing.tier1, 2: pricing.tier2, 3: pricing.tier3 }[tier] : null;
+  const busy = submitting || paying;
 
   return (
-    <form onSubmit={submit} className="space-y-2">
+    <form onSubmit={e => void submit(e)} className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
         <input
           type="number"
@@ -229,10 +276,10 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
         ) : (
           <button
             type="submit"
-            disabled={submitting || !tokenId}
+            disabled={busy || !tokenId}
             className="font-mono text-[10px] border border-[--fg] px-2 py-1.5 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
           >
-            {submitting ? "…" : "Demander un mémorial"}
+            {paying ? "Paiement…" : submitting ? "…" : "Payer & demander un mémorial"}
           </button>
         )}
       </div>
@@ -252,11 +299,33 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
           );
         })}
       </div>
+      {tier === 2 && (
+        <label className="flex items-center gap-2 font-mono text-[10px] text-[--fg-muted]">
+          Éditions publiques ouvertes :
+          <input
+            type="number" min={1} max={500} value={quantity}
+            onChange={e => setQuantity(Math.max(1, Math.min(500, parseInt(e.target.value, 10) || 1)))}
+            className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1 w-20 text-[--fg]"
+          />
+        </label>
+      )}
+      {tier === 3 && (
+        <label className="flex items-center gap-2 font-mono text-[10px] text-[--fg-muted]">
+          Durée du claim ouvert (jours) :
+          <input
+            type="number" min={1} max={90} value={durationDays}
+            onChange={e => setDurationDays(Math.max(1, Math.min(90, parseInt(e.target.value, 10) || 1)))}
+            className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1 w-20 text-[--fg]"
+          />
+        </label>
+      )}
       {tierConfig && (
         <p className="font-mono text-[10px] text-[--fg-muted]">
-          Ton édition n&apos;est pas payée maintenant — une fois le mémorial publié, tu la réclames toi-même (et tu payes alors) depuis la section &quot;Éditions des mémoriaux&quot; plus bas.
+          Le paiement ({formatEther(BigInt(tierConfig.priceWei))} ETH) a lieu tout de suite — il couvre ton édition réservée,
+          que tu pourras réclamer gratuitement une fois le mémorial publié, depuis &quot;Éditions des mémoriaux&quot; plus bas.
         </p>
       )}
+      {payError && <p className="font-mono text-[10px] text-red-400">{payError}</p>}
     </form>
   );
 }
@@ -277,9 +346,12 @@ export function CelebrationsClient() {
       .catch(() => setMemorials([]));
   }, []);
 
-  async function handleRequestMemorial(tokenId: number, tier: 1 | 2 | 3, wallet: string) {
+  async function handleRequestMemorial(
+    tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string,
+    publicSupply?: number, claimDurationSeconds?: number,
+  ) {
     setRequestingTokenId(tokenId);
-    const result = await requestMemorial(tokenId, tier, wallet);
+    const result = await requestMemorial(tokenId, tier, wallet, paymentTxHash, publicSupply, claimDurationSeconds);
     setMemorialResult(result);
     setRequestingTokenId(null);
     if (result.ok) loadMemorials();

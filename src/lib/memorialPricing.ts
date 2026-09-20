@@ -28,11 +28,17 @@ export interface MemorialPricingConfig {
   batchPriceWei: string; // per-edition price for the automatic weekly/monthly batch memorial
 }
 
+// Lowered per the porteur's explicit numbers (19/09/2026) — given in tier
+// 1→2→3 order (0.0003, 0.001, 0.0015 ETH). Applied literally as specified,
+// even though it reverses the original "more volume = cheaper per edition"
+// intent (tier 3, the most open/highest-volume tier, ends up priced highest
+// here) — trivial to reorder via PUT /api/admin/memorial-pricing if that
+// wasn't the intent, no redeploy needed since this is off-chain config.
 export const DEFAULT_MEMORIAL_PRICING: MemorialPricingConfig = {
-  tier1: { priceWei: "2000000000000000",  publicSupply: 0,  requesterSupply: 1, openEnded: false },                             // 0.002 ETH
+  tier1: { priceWei: "300000000000000",   publicSupply: 0,  requesterSupply: 1, openEnded: false },                             // 0.0003 ETH
   tier2: { priceWei: "1000000000000000",  publicSupply: 10, requesterSupply: 1, openEnded: false },                             // 0.001 ETH, 10 public
-  tier3: { priceWei: "500000000000000",   publicSupply: 0,  requesterSupply: 1, openEnded: true, claimDurationSeconds: 30 * 86_400 }, // 0.0005 ETH, 30 days
-  batchPriceWei: "250000000000000", // 0.00025 ETH
+  tier3: { priceWei: "1500000000000000",  publicSupply: 0,  requesterSupply: 1, openEnded: true, claimDurationSeconds: 30 * 86_400 }, // 0.0015 ETH, 30 days
+  batchPriceWei: "100000000000000", // 0.0001 ETH — also lowered, not explicitly specified by the porteur
 };
 
 export async function getMemorialPricing(): Promise<MemorialPricingConfig> {

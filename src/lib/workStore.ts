@@ -163,6 +163,12 @@ export interface ANAWork {
   reservedClaimRecipients?: Record<number, string>;
   onChainMemorialId?:       number; // series index in the shared ANAMemorials contract
   reservedClaimsAdded?:     boolean; // guards against re-adding (wasted gas) on a PUBLISHING retry
+  // Proof the requester paid for a "requested" memorial BEFORE it was created
+  // (ANAMemorials.tip(), verified in request-memorial/route.ts) — the relayer
+  // is compensated for creation cost regardless of whether the memorial is
+  // ever voted through or the requester later claims their edition. Also
+  // used to reject a reused/replayed payment transaction.
+  memorialPaymentTxHash?:  string;
 }
 
 interface DispatchRotation {
@@ -187,7 +193,12 @@ export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
 // would blow that budget if even one member's vote fails/stalls. In practice
 // stepVoteOpen resolves in a single tick once every member has voted; this
 // is only the fallback for stragglers.
-export const CELEBRATION_VOTE_WINDOW_MS = 90 * 60 * 1000; // 90 min max for celebration votes
+// Was 90 min — with tallyVotes() now passing a memorial on a tie (including
+// 0/0), there's no need for a long window to accumulate real "yes" votes; it
+// only needs to give genuine "no" votes a chance to override the default
+// pass. 20 min plus the more frequent salon-exchange piggyback advance
+// (src/app/api/keeper/salon-exchange/route.ts) is enough for that.
+export const CELEBRATION_VOTE_WINDOW_MS = 20 * 60 * 1000;
 
 const NEON_KEY    = "work-store";
 const DATA_FILE   = path.join(process.cwd(), "data", "works.json");
@@ -505,7 +516,16 @@ export function tallyVotes(work: ANAWork): {
   const yes = work.votes.filter(v => v.vote === "yes").length;
   const no  = work.votes.filter(v => v.vote === "no").length;
   const abs = work.votes.filter(v => v.vote === "abstain").length;
-  return { yes, no, abs, passed: yes > no };
+  // Memorials only: a tie (including 0/0 — nobody managed to vote at all, e.g.
+  // a transient LLM outage) passes instead of failing. This is moderation of
+  // an already-created piece, not a governance decision — the burn already
+  // deserves its memorial; a real "no" majority is the only thing that should
+  // send it back for a fresh attempt (see stepVoteTallied). Without this, an
+  // outage where nobody casts a vote silently loops the same memorial forever
+  // (observed in production: 5+ recreate cycles, always 0 yes / 0 no).
+  // Standard governance works keep requiring a genuine yes-majority.
+  const passed = work.isBurnMemorial ? yes >= no : yes > no;
+  return { yes, no, abs, passed };
 }
 
 // ─── HTML builder (on-chain artifact) ────────────────────────────────────────

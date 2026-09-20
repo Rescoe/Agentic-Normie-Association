@@ -53,7 +53,7 @@ export function MemorialMintPanel() {
     memorialId: number,
     action:
       | { fn: "claimFree"; burnedTokenId: number }
-      | { fn: "mintRequester"; priceWei: string }
+      | { fn: "mintRequester" }
       | { fn: "mintPublic"; priceWei: string },
   ) {
     const key = `${memorialId}-${action.fn}`;
@@ -67,9 +67,11 @@ export function MemorialMintPanel() {
           args: [BigInt(memorialId), BigInt(action.burnedTokenId)],
         });
       } else if (action.fn === "mintRequester") {
+        // Free — the requester already paid via tip() at request time (see
+        // request-memorial/route.ts) — mintRequester() is non-payable now.
         await writeContractAsync({
           address, abi: ANA_MEMORIALS_ABI, functionName: "mintRequester",
-          args: [BigInt(memorialId)], value: BigInt(action.priceWei),
+          args: [BigInt(memorialId)],
         });
       } else {
         await writeContractAsync({
@@ -137,11 +139,11 @@ export function MemorialMintPanel() {
                   )}
                   {isRequester && (
                     <button
-                      onClick={() => void handleMint(item.memorialId, { fn: "mintRequester", priceWei: item.priceWei })}
+                      onClick={() => void handleMint(item.memorialId, { fn: "mintRequester" })}
                       disabled={pendingKey === `${item.memorialId}-mintRequester`}
                       className="font-mono text-[10px] border border-[--fg] px-2 py-1 hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait"
                     >
-                      {pendingKey === `${item.memorialId}-mintRequester` ? "…" : `Réclamer mon édition (${priceEth} ETH)`}
+                      {pendingKey === `${item.memorialId}-mintRequester` ? "…" : "Réclamer mon édition (déjà payée)"}
                     </button>
                   )}
                   {publicAvailable && (
