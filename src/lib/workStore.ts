@@ -169,6 +169,11 @@ export interface ANAWork {
   // ever voted through or the requester later claims their edition. Also
   // used to reject a reused/replayed payment transaction.
   memorialPaymentTxHash?:  string;
+  // Set once the relayer has auto-delivered the requester's own edition
+  // (deliverRequesterEditionOnChain, best-effort) — guards against retrying
+  // a delivery that already succeeded on a PUBLISHING retry. Absence doesn't
+  // mean delivery failed forever: the requester can always self-claim.
+  requesterEditionDelivered?: boolean;
 }
 
 interface DispatchRotation {

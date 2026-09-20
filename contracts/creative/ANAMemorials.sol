@@ -237,22 +237,30 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice The wallet that paid to request this memorial claims its
-     *         reserved slot. Free — the requester already paid up front via
-     *         tip() before the memorial was even created (see
-     *         request-memorial/route.ts), so the relayer is compensated for
-     *         creation cost regardless of whether this is ever called. This
-     *         is the one difference from the first version of this contract,
-     *         which charged priceWei again here — that left the relayer with
-     *         no guaranteed payment if a requester never followed up.
+     * @notice Delivers the requester's reserved edition. Free — the
+     *         requester already paid up front via tip() before the memorial
+     *         was even created (see request-memorial/route.ts), so the
+     *         relayer is compensated for creation cost regardless of whether
+     *         this is ever called. This is one of two differences from the
+     *         first version of this contract, which charged priceWei again
+     *         here — that left the relayer with no guaranteed payment if a
+     *         requester never followed up.
+     *
+     *         Always mints to the stored `requesterAddr`, never to
+     *         msg.sender — callable by the requester themselves OR an
+     *         authorized relayer, so the relayer can auto-deliver the
+     *         edition right after registerMemorial() instead of requiring
+     *         the requester to come back and claim it manually (the second
+     *         V2→V3 difference). Harmless either way: the recipient is fixed
+     *         by the series, not by who calls this.
      */
     function mintRequester(uint256 memorialId) external nonReentrant validMemorial(memorialId) returns (uint256 tokenId) {
         MemorialSeries storage s = series[memorialId];
-        if (msg.sender != s.requesterAddr) revert NotEligible();
+        if (msg.sender != s.requesterAddr && !authorized[msg.sender]) revert NotEligible();
         if (s.requesterMinted >= s.requesterSupply) revert SoldOut();
 
         s.requesterMinted++;
-        tokenId = _mintEdition(memorialId, msg.sender, "requester");
+        tokenId = _mintEdition(memorialId, s.requesterAddr, "requester");
     }
 
     /**

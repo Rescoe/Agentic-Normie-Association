@@ -23,7 +23,7 @@ import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqu
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
-import { registerMemorialOnChain, addReservedClaimsOnChain } from "@/server/relayer/memorialPublisher";
+import { registerMemorialOnChain, addReservedClaimsOnChain, deliverRequesterEditionOnChain } from "@/server/relayer/memorialPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
@@ -1203,6 +1203,21 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
     }
     await updateWork(work.id, { reservedClaimsAdded: true });
     console.log(`[work-lifecycle] reserved ${burnedTokenIds.length} free claim(s) on memorial #${onChainMemorialId}`);
+  }
+
+  // ── Step 4: auto-deliver the requester's own edition (best-effort) ──
+  // Non-blocking on purpose: the requester already paid via tip() at request
+  // time, this just saves them a manual claim later. A failure here must
+  // never hold up PUBLISHED — they can still self-claim from the mint/claim
+  // panel if this doesn't go through.
+  if ((work.memorialRequesterSupply ?? 0) > 0 && !work.requesterEditionDelivered) {
+    const deliverResult = await deliverRequesterEditionOnChain(onChainMemorialId, work.id);
+    if (deliverResult.success) {
+      await updateWork(work.id, { requesterEditionDelivered: true });
+      console.log(`[work-lifecycle] auto-delivered requester edition (tokenId=${deliverResult.tokenId}) for memorial #${onChainMemorialId}`);
+    } else {
+      console.warn(`[work-lifecycle] requester edition auto-delivery failed (non-fatal, requester can self-claim): ${deliverResult.error}`);
+    }
   }
 
   await advanceState(work.id, "PUBLISHED", `tx: ${work.txHash?.slice(0, 12)} · memorial #${onChainMemorialId}`);

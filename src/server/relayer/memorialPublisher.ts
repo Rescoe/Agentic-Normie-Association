@@ -3,8 +3,8 @@
  *
  * Relayer-signed calls into the shared ANAMemorials contract — replaces the old
  * per-memorial deployCollection()+initializeCollection() dance (workPublisher.ts)
- * for burn memorials specifically. Two relayer-paid steps only, both cheap
- * (storage writes, no contract deployment):
+ * for burn memorials specifically. Relayer-paid steps, all cheap (storage
+ * writes / a plain mint, no contract deployment):
  *
  *  1. registerMemorialOnChain() — creates the series (artwork, pricing, pools).
  *     Creator payout resolution happens ON-CHAIN, inside the contract, via
@@ -12,9 +12,17 @@
  *  2. addReservedClaimsOnChain() — reserves one free edition per honored burned
  *     Normie's last owner. Chunked by the caller (see CHUNK_SIZE) so a large
  *     batch period never risks a single oversized transaction.
+ *  3. deliverRequesterEditionOnChain() — auto-delivers the requester's own
+ *     reserved edition right after step 1, instead of requiring them to come
+ *     back and call mintRequester() themselves. They already paid via tip()
+ *     at request time — this just removes the extra manual step. Always
+ *     mints to the series' stored requesterAddr regardless of who calls it
+ *     (see ANAMemorials.sol's mintRequester()) — best-effort, non-blocking:
+ *     if it fails, the requester can still self-claim later, so a failure
+ *     here should never hold up the rest of the publishing pipeline.
  *
- * All actual minting (public/requester/free-claim) is paid for and gas-metered
- * by whoever calls it directly — never routed through the relayer.
+ * mintPublic()/claimFree() are paid for and gas-metered by whoever calls
+ * them directly — never routed through the relayer.
  */
 import { createPublicClient, createWalletClient, http, decodeEventLog } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -214,4 +222,70 @@ export async function addReservedClaimsOnChain(
   }
 
   return { success: true, txHashes };
+}
+
+export interface DeliverRequesterEditionResult {
+  success:  boolean;
+  txHash?:  string;
+  tokenId?: number;
+  error?:   string;
+}
+
+/**
+ * Auto-delivers the requester's reserved edition — the requester already
+ * paid via tip() at request time, so this is purely a UX convenience (no
+ * payment involved). Best-effort by design: callers should treat a failure
+ * here as non-fatal, since the requester can always call mintRequester()
+ * themselves later from the mint/claim panel.
+ */
+export async function deliverRequesterEditionOnChain(
+  memorialId: number, workIdForLog?: string,
+): Promise<DeliverRequesterEditionResult> {
+  const clients = getClients();
+  if ("error" in clients) return { success: false, error: clients.error };
+  const { account, walletClient, publicClient, addr } = clients;
+
+  try {
+    const hash = await walletClient.writeContract({
+      address:      addr,
+      abi:          ANA_MEMORIALS_ABI,
+      functionName: "mintRequester",
+      args:         [BigInt(memorialId)],
+      // A plain mint (increment a counter, one ERC-721 _safeMint) — no large
+      // string storage involved here, unlike registerMemorial(). Generous
+      // margin over what it should actually need.
+      gas: 500_000n,
+    });
+
+    await logTxSubmitted({
+      txHash: hash, type: "deliver-requester-edition", initiator: "relayer",
+      contractName: "ANAMemorials", functionName: "mintRequester",
+      fromAddress: account.address, targetAddress: addr, workId: workIdForLog,
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+    if (receipt.status !== "success") {
+      const err = `mintRequester (auto-delivery) reverted on-chain (gasUsed: ${receipt.gasUsed}) — tx: ${hash}`;
+      await logTxFailed(hash, err);
+      return { success: false, error: err, txHash: hash };
+    }
+
+    let tokenId: number | undefined;
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== addr.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({
+          abi: ANA_MEMORIALS_ABI, eventName: "EditionMinted",
+          data: log.data as `0x${string}`, topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+        });
+        tokenId = Number((decoded.args as { tokenId: bigint }).tokenId);
+        break;
+      } catch { /* not EditionMinted */ }
+    }
+
+    await logTxConfirmed(hash, receipt.blockNumber, { tokenId });
+    return { success: true, txHash: hash, tokenId };
+  } catch (e) {
+    return { success: false, error: `mintRequester (auto-delivery) failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }

@@ -187,6 +187,28 @@ describe("ANAMemorials", function () {
       });
       await expect(memorials.connect(requester).mintRequester(id)).to.not.be.reverted;
     });
+
+    it("an authorized relayer can auto-deliver the edition — it always goes to requesterAddr, never to the caller", async () => {
+      const { memorials, relayer, requester } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, {
+        priceWei: 0n, requesterSupply: 1, requesterAddr: requester.address,
+      });
+      const tx = await memorials.connect(relayer).mintRequester(id);
+      const receipt = await tx.wait();
+      const event = receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "EditionMinted");
+      expect(event!.args.to).to.equal(requester.address); // not relayer.address
+      expect(await memorials.ownerOf(event!.args.tokenId)).to.equal(requester.address);
+    });
+
+    it("a non-authorized, non-requester caller still can't trigger delivery", async () => {
+      const { memorials, relayer, requester, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, {
+        priceWei: 0n, requesterSupply: 1, requesterAddr: requester.address,
+      });
+      await expect(memorials.connect(stranger).mintRequester(id)).to.be.revertedWithCustomError(memorials, "NotEligible");
+    });
   });
 
   describe("claimFree — the reserved-claim guarantee", function () {

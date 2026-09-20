@@ -81,8 +81,10 @@ export default async function DocsCelebrationsPage() {
               <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1 mx-1">tip()</code>
               pour le prix du palier, avant même que le mémorial existe. Ça garantit que le relayer est rémunéré
               pour le coût de création, que le mémorial soit ensuite acheté par d&apos;autres ou non. Son édition
-              réservée est ensuite gratuite à réclamer (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code>)
-              une fois le mémorial publié — déjà payée en amont.
+              réservée lui est ensuite livrée automatiquement dans son wallet dès la publication du mémorial
+              (le relayer appelle <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code> pour
+              lui — gratuit, déjà payé en amont) — aucune action supplémentaire requise. Si ça échoue pour une
+              raison quelconque, il peut toujours la réclamer lui-même depuis la page Célébrations.
             </p>
           </div>
         </div>
@@ -176,7 +178,7 @@ export default async function DocsCelebrationsPage() {
               <div className="space-y-1">
                 {[
                   { fn: "claimFree(memorialId, burnedTokenId)",  returns: "gratuit — réservé au dernier propriétaire du Normie honoré" },
-                  { fn: "mintRequester(memorialId)",             returns: "gratuit — déjà payé via tip() à la demande ; réservé au demandeur" },
+                  { fn: "mintRequester(memorialId)",             returns: "gratuit — déjà payé via tip() à la demande ; livré automatiquement par le relayer, ou réclamable soi-même en secours" },
                   { fn: "setSeriesPrice(memorialId, newPriceWei) — owner", returns: "ajuste le prix public d'une série déjà enregistrée" },
                   { fn: "mintPublic(memorialId) payable",        returns: "ouvert à tous, tant que le pool public n'est pas épuisé/expiré" },
                   { fn: "tip() payable",                         returns: "pourboire direct au relayer, aucune édition mintée" },
