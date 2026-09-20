@@ -27,13 +27,13 @@ export default async function DocsCelebrationsPage() {
       n: 1,
       label: "Palier 1 — Juste mon édition",
       price: formatEther(BigInt(pricing.tier1.priceWei)),
-      desc: "Une seule édition, réservée au demandeur. Aucune ouverture au public.",
+      desc: "Une seule édition, réservée au demandeur — la quantité la plus faible possible, donc le prix par édition le plus élevé. Si le demandeur est lui-même l'ancien propriétaire du Normie brûlé, une seule édition existera au total (pas de claim gratuit séparé, il serait redondant). Sinon, l'ancien propriétaire garde son claim gratuit à part : 2 éditions au total.",
     },
     {
       n: 2,
       label: "Palier 2 — Mon édition + ouverture publique",
       price: formatEther(BigInt(pricing.tier2.priceWei)),
-      desc: `Une édition réservée au demandeur, plus ${pricing.tier2.publicSupply} éditions ouvertes au public au même prix unitaire — prix par édition plus bas, mais volume total potentiellement plus élevé.`,
+      desc: `Une édition réservée au demandeur, plus un nombre fixe d'éditions ouvertes au public (minimum 10, choisi par le demandeur — ${pricing.tier2.publicSupply} par défaut) au même prix unitaire.`,
     },
     {
       n: 3,
@@ -115,9 +115,17 @@ export default async function DocsCelebrationsPage() {
         <p className="text-sm text-[--fg-muted] leading-relaxed">
           Quel que soit le chemin (lot automatique ou demande payante) et quel que soit qui paie, le
           <strong> dernier propriétaire</strong> du Normie brûlé a toujours droit à une édition gratuite de son
-          mémorial. Cette édition n&apos;est jamais comptée dans les pools publics ou réservés ci-dessus — elle
-          ne peut donc jamais être épuisée par leurs ventes. Si un tiers paie pour le mémorial d&apos;un Normie
-          qui n&apos;est pas le sien, l&apos;ancien propriétaire garde quand même son propre claim gratuit, séparé.
+          mémorial — sauf s&apos;il est lui-même le demandeur payant (voir ci-dessous). Cette édition n&apos;est
+          jamais comptée dans les pools publics ou réservés ci-dessus — elle ne peut donc jamais être épuisée
+          par leurs ventes.
+        </p>
+        <p className="text-sm text-[--fg-muted] leading-relaxed">
+          <strong>Le demandeur EST l&apos;ancien propriétaire</strong> → aucun claim gratuit séparé n&apos;est
+          enregistré (ce serait redondant avec son édition déjà payée) — une seule édition existe pour cet
+          événement. <strong>Un tiers paie pour le mémorial d&apos;un Normie qui n&apos;est pas le sien</strong> →
+          l&apos;ancien propriétaire garde son propre claim gratuit, séparé — 2 éditions existent pour cet
+          événement. La page de demande affiche lequel des deux cas s&apos;applique avant que le paiement ne
+          soit déclenché.
         </p>
       </div>
 

@@ -8,8 +8,7 @@ import { buildPersona } from "@/lib/normiesPersona";
 import { checkMemorialRequestLimit, recordMemorialRequest, createSalon, addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
-import { getLastOwnerFromBurnTx } from "@/server/relayer/celebrationPublisher";
-import { getBurnedTokens } from "@/lib/normiesApi";
+import { findLastOwnerOfBurnedToken } from "@/server/relayer/celebrationPublisher";
 import { resolveTier, type MemorialTierId } from "@/lib/memorialPricing";
 
 const client = createPublicClient({
@@ -38,6 +37,7 @@ const ERC721_OWNER_ABI = [
 // Bounds on the requester-chosen parameters — generous enough for any real
 // use, tight enough to stop someone requesting an absurd (griefing) supply or
 // an unbounded open claim window.
+const MIN_TIER2_PUBLIC_SUPPLY     = 10;    // below this, "fixed edition" loses its distinct meaning from tier 1
 const MAX_TIER2_PUBLIC_SUPPLY     = 500;
 const MIN_TIER3_DURATION_SECONDS  = 3600;          // 1 hour
 const MAX_TIER3_DURATION_SECONDS  = 90 * 86_400;   // 90 days
@@ -79,19 +79,6 @@ async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?:
       return { burned: false, error: "Impossible de vérifier le statut on-chain — réessaie." };
     }
     return { burned: true };
-  }
-}
-
-/** Same "no point-lookup" scan already used by celebrationPublisher.ts's registerCelebrationForToken. */
-async function findLastOwner(tokenId: number, searchLimit = 500): Promise<string | null> {
-  try {
-    const recent = await getBurnedTokens(searchLimit, 0);
-    const match = recent.find(t => Number(t.tokenId) === tokenId);
-    if (!match) return null;
-    return await getLastOwnerFromBurnTx(match.txHash, match.tokenId);
-  } catch (e) {
-    console.warn(`[request-memorial] findLastOwner failed for #${tokenId}:`, e);
-    return null;
   }
 }
 
@@ -242,14 +229,25 @@ export async function POST(req: NextRequest) {
   const drawPixelsB64 = Buffer.from(pixels).toString("base64");
   const artworkText   = pixelsToBmpDataUri(pixels, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H);
 
-  const lastOwner  = await findLastOwner(tokenId!);
+  const lastOwner = await findLastOwnerOfBurnedToken(tokenId!);
+  const requesterIsLastOwner = !!lastOwner && lastOwner.toLowerCase() === requesterWallet.toLowerCase();
   const reservedClaimRecipients: Record<number, string> = {};
-  if (lastOwner) reservedClaimRecipients[tokenId!] = lastOwner;
+  // Only register a separate free claim when the requester is NOT the burned
+  // Normie's last owner. When they're the same wallet, their own paid
+  // (requester-pool) edition already covers their entitlement — registering
+  // a free claim on top of it would mint them a second, near-identical
+  // edition for the same event, which is what the porteur explicitly asked
+  // to avoid: "si le demandeur est l'ancien propriétaire, l'édition sera
+  // unique." When it's someone else, the last owner keeps their own
+  // separate, free, guaranteed claim as always.
+  if (lastOwner && !requesterIsLastOwner) reservedClaimRecipients[tokenId!] = lastOwner;
 
   // Requester-chosen quantity (tier 2) / duration (tier 3), clamped to sane
   // bounds — defaults to the tier's config value if not provided or invalid.
+  // Tier 2 has a floor of 10: a "fixed edition" option with fewer than that
+  // stops meaning anything distinct from tier 1.
   const publicSupply = tier === 2
-    ? Math.max(1, Math.min(MAX_TIER2_PUBLIC_SUPPLY, Math.floor(body.publicSupply ?? tierConfig.publicSupply)))
+    ? Math.max(MIN_TIER2_PUBLIC_SUPPLY, Math.min(MAX_TIER2_PUBLIC_SUPPLY, Math.floor(body.publicSupply ?? tierConfig.publicSupply)))
     : tierConfig.publicSupply;
   const claimDurationSeconds = tier === 3
     ? Math.max(MIN_TIER3_DURATION_SECONDS, Math.min(MAX_TIER3_DURATION_SECONDS, Math.floor(body.claimDurationSeconds ?? tierConfig.claimDurationSeconds ?? MIN_TIER3_DURATION_SECONDS)))
@@ -324,12 +322,12 @@ export async function POST(req: NextRequest) {
     proposerTokenId: proposer.tokenId,
     proposerName:    proposer.name,
     tier,
-    reservedFreeClaimForLastOwner: !!lastOwner,
-    // Flags the case where the requester IS the burned Normie's last owner —
-    // they're already separately entitled to a free claimFree() edition, so
-    // paying for the requester-pool tier too means two near-identical
-    // editions for one event. Not blocked, but worth surfacing in the UI
-    // before payment.
-    requesterAlreadyEntitledToFreeClaim: !!lastOwner && lastOwner.toLowerCase() === requesterWallet.toLowerCase(),
+    // requesterIsLastOwner=true  → exactly 1 edition will ever exist for this
+    //                              event (the requester's own paid edition —
+    //                              no separate reservedClaim was registered).
+    // requesterIsLastOwner=false → 2: the requester's paid edition, plus the
+    //                              last owner's separate free claim.
+    requesterIsLastOwner,
+    reservedFreeClaimForLastOwner: lastOwner != null && !requesterIsLastOwner,
   });
 }

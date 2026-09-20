@@ -15,7 +15,7 @@ const NEON_KEY = "memorial-pricing";
 
 export interface MemorialTier {
   priceWei:             string; // decimal string, parsed with BigInt()
-  publicSupply:         number; // 0 for tier 1 (no public opening)
+  publicSupply:         number; // 0 for tier 1 (no public opening); tier 2 has an enforced floor of 10 (see MIN_TIER2_PUBLIC_SUPPLY in request-memorial/route.ts) — a "fixed edition" option with fewer than that loses its distinct meaning from tier 1
   requesterSupply:      1;      // the payer's own reserved edition — always exactly 1
   openEnded:             boolean;
   claimDurationSeconds?: number; // only meaningful when openEnded
@@ -28,17 +28,16 @@ export interface MemorialPricingConfig {
   batchPriceWei: string; // per-edition price for the automatic weekly/monthly batch memorial
 }
 
-// Lowered per the porteur's explicit numbers (19/09/2026) — given in tier
-// 1→2→3 order (0.0003, 0.001, 0.0015 ETH). Applied literally as specified,
-// even though it reverses the original "more volume = cheaper per edition"
-// intent (tier 3, the most open/highest-volume tier, ends up priced highest
-// here) — trivial to reorder via PUT /api/admin/memorial-pricing if that
-// wasn't the intent, no redeploy needed since this is off-chain config.
+// Corrected 20/09/2026 (porteur caught a mistake in the previous ordering):
+// price scales INVERSELY with quantity — tier 1 (least quantity, a single
+// edition) is the MOST expensive, tier 3 (most quantity — open-ended public
+// claim) is the CHEAPEST, tier 2 sits in between. Same 3 numbers as before,
+// reassigned to the tiers they actually belong to.
 export const DEFAULT_MEMORIAL_PRICING: MemorialPricingConfig = {
-  tier1: { priceWei: "300000000000000",   publicSupply: 0,  requesterSupply: 1, openEnded: false },                             // 0.0003 ETH
-  tier2: { priceWei: "1000000000000000",  publicSupply: 10, requesterSupply: 1, openEnded: false },                             // 0.001 ETH, 10 public
-  tier3: { priceWei: "1500000000000000",  publicSupply: 0,  requesterSupply: 1, openEnded: true, claimDurationSeconds: 30 * 86_400 }, // 0.0015 ETH, 30 days
-  batchPriceWei: "100000000000000", // 0.0001 ETH — also lowered, not explicitly specified by the porteur
+  tier1: { priceWei: "1500000000000000",  publicSupply: 0,  requesterSupply: 1, openEnded: false },                             // 0.0015 ETH — least quantity (1), priciest
+  tier2: { priceWei: "1000000000000000",  publicSupply: 10, requesterSupply: 1, openEnded: false },                             // 0.001 ETH — fixed batch, minimum 10 (below that it's indistinguishable from tier 1)
+  tier3: { priceWei: "300000000000000",   publicSupply: 0,  requesterSupply: 1, openEnded: true, claimDurationSeconds: 30 * 86_400 }, // 0.0003 ETH — open-ended, most potential quantity, cheapest
+  batchPriceWei: "100000000000000", // 0.0001 ETH — automatic batch memorial, not part of this tier system
 };
 
 export async function getMemorialPricing(): Promise<MemorialPricingConfig> {

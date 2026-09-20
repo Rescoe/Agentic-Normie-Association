@@ -210,6 +210,10 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
   const [durationDays, setDurationDays] = useState(30);
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  const [preCheck, setPreCheck] = useState<{
+    burned: boolean; alreadyRequested: boolean; existingState?: string;
+    lastOwner: string | null; requesterIsLastOwner: boolean;
+  } | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/memorial-pricing").then(r => r.json()).then((cfg: MemorialPricingConfig) => {
@@ -224,6 +228,22 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
     if (prefillTokenId != null) setTokenId(String(prefillTokenId));
   }, [prefillTokenId]);
 
+  // Informational pre-check, shown BEFORE payment — burn status, whether a
+  // memorial already exists, and (crucially) whether this wallet is the
+  // burned Normie's last owner: if so, exactly 1 edition will ever exist for
+  // this event (their own paid edition covers it); otherwise 2 (their paid
+  // edition + the last owner's separate free claim). Debounced so typing a
+  // tokenId doesn't fire a request per keystroke.
+  useEffect(() => {
+    const id = parseInt(tokenId, 10);
+    if (!Number.isInteger(id) || id < 0) { setPreCheck(null); return; }
+    const t = setTimeout(() => {
+      const qs = new URLSearchParams({ tokenId: String(id), ...(address ? { requesterWallet: address } : {}) });
+      fetch(`/api/celebrations/verify-burned?${qs}`).then(r => r.json()).then(setPreCheck).catch(() => setPreCheck(null));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [tokenId, address]);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const id = parseInt(tokenId, 10);
@@ -232,7 +252,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
     setPayError(null);
     setPaying(true);
     try {
-      const check = await fetch(`/api/celebrations/verify-burned?tokenId=${id}`).then(r => r.json());
+      const check = await fetch(`/api/celebrations/verify-burned?tokenId=${id}&requesterWallet=${address}`).then(r => r.json());
       if (!check.burned) { setPayError("Ce Normie n'est pas brûlé."); return; }
       if (check.alreadyRequested) { setPayError(`Un mémorial existe déjà pour ce Normie (${check.existingState}).`); return; }
 
@@ -276,7 +296,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
         ) : (
           <button
             type="submit"
-            disabled={busy || !tokenId}
+            disabled={busy || !tokenId || (preCheck != null && (!preCheck.burned || preCheck.alreadyRequested))}
             className="font-mono text-[10px] border border-[--fg] px-2 py-1.5 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
           >
             {paying ? "Paiement…" : submitting ? "…" : "Payer & demander un mémorial"}
@@ -301,10 +321,10 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
       </div>
       {tier === 2 && (
         <label className="flex items-center gap-2 font-mono text-[10px] text-[--fg-muted]">
-          Éditions publiques ouvertes :
+          Éditions publiques ouvertes (minimum 10) :
           <input
-            type="number" min={1} max={500} value={quantity}
-            onChange={e => setQuantity(Math.max(1, Math.min(500, parseInt(e.target.value, 10) || 1)))}
+            type="number" min={10} max={500} value={quantity}
+            onChange={e => setQuantity(Math.max(10, Math.min(500, parseInt(e.target.value, 10) || 10)))}
             className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1 w-20 text-[--fg]"
           />
         </label>
@@ -318,6 +338,21 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
             className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1 w-20 text-[--fg]"
           />
         </label>
+      )}
+      {preCheck && preCheck.burned && !preCheck.alreadyRequested && (
+        <p className="font-mono text-[10px] text-amber-400">
+          {preCheck.lastOwner == null
+            ? "Impossible de retrouver l'ancien propriétaire de ce Normie — le claim gratuit ne pourra pas être configuré pour cet événement."
+            : preCheck.requesterIsLastOwner
+            ? "Tu es l'ancien propriétaire de ce Normie : une seule édition sera créée, la tienne — pas de claim gratuit séparé."
+            : "Tu n'es pas l'ancien propriétaire de ce Normie : 2 éditions seront créées — la tienne (payée) et une gratuite réservée à l'ancien propriétaire."}
+        </p>
+      )}
+      {preCheck && !preCheck.burned && (
+        <p className="font-mono text-[10px] text-red-400">Ce Normie n&apos;est pas brûlé.</p>
+      )}
+      {preCheck?.alreadyRequested && (
+        <p className="font-mono text-[10px] text-red-400">Un mémorial existe déjà pour ce Normie ({preCheck.existingState}).</p>
       )}
       {tierConfig && (
         <p className="font-mono text-[10px] text-[--fg-muted]">

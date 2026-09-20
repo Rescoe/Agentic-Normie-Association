@@ -208,6 +208,25 @@ export async function getLastOwnerFromBurnTx(txHash: string, tokenId: string): P
 }
 
 /**
+ * Finds the last owner of a specific burned tokenId — the normies.art API has
+ * no point lookup, only a paginated newest-first burn history, so this scans
+ * it for a match. Shared by request-memorial.ts (the "requested" path) and
+ * verify-burned.ts (its pre-payment pre-check) so both resolve the ex-owner
+ * identically instead of drifting.
+ */
+export async function findLastOwnerOfBurnedToken(tokenId: number, searchLimit = 500): Promise<string | null> {
+  try {
+    const recent = await getBurnedTokens(searchLimit, 0);
+    const match = recent.find(t => Number(t.tokenId) === tokenId);
+    if (!match) return null;
+    return await getLastOwnerFromBurnTx(match.txHash, match.tokenId);
+  } catch (e) {
+    console.warn(`[celebrationPublisher] findLastOwnerOfBurnedToken failed for #${tokenId}:`, e);
+    return null;
+  }
+}
+
+/**
  * Registers a celebration for ONE already-known-burned tokenId — used by the
  * manual/single-token path (request-memorial.ts), which unlike check-burns.ts
  * never called registerCelebrationOnChain at all: CelebrationRegistry was
