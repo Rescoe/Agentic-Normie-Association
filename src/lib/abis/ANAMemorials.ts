@@ -398,6 +398,37 @@ export const ANAMemorialsAbi = [
     "inputs": [
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "payer",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "creatorProposerTokenId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "creatorAddr",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "RequestPaid",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "uint256",
         "name": "memorialId",
         "type": "uint256"
@@ -961,6 +992,19 @@ export const ANAMemorialsAbi = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "creatorProposerTokenId",
+        "type": "uint256"
+      }
+    ],
+    "name": "payForRequest",
+    "outputs": [],
+    "stateMutability": "payable",
     "type": "function"
   },
   {

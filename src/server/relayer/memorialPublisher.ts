@@ -14,12 +14,13 @@
  *     batch period never risks a single oversized transaction.
  *  3. deliverRequesterEditionOnChain() — auto-delivers the requester's own
  *     reserved edition right after step 1, instead of requiring them to come
- *     back and call mintRequester() themselves. They already paid via tip()
- *     at request time — this just removes the extra manual step. Always
- *     mints to the series' stored requesterAddr regardless of who calls it
- *     (see ANAMemorials.sol's mintRequester()) — best-effort, non-blocking:
- *     if it fails, the requester can still self-claim later, so a failure
- *     here should never hold up the rest of the publishing pipeline.
+ *     back and call mintRequester() themselves. They already paid via
+ *     payForRequest() at request time — this just removes the extra manual
+ *     step. Always mints to the series' stored requesterAddr regardless of
+ *     who calls it (see ANAMemorials.sol's mintRequester()) — best-effort,
+ *     non-blocking: if it fails, the requester can still self-claim later,
+ *     so a failure here should never hold up the rest of the publishing
+ *     pipeline.
  *
  * mintPublic()/claimFree() are paid for and gas-metered by whoever calls
  * them directly — never routed through the relayer.
@@ -233,8 +234,8 @@ export interface DeliverRequesterEditionResult {
 
 /**
  * Auto-delivers the requester's reserved edition — the requester already
- * paid via tip() at request time, so this is purely a UX convenience (no
- * payment involved). Best-effort by design: callers should treat a failure
+ * paid via payForRequest() at request time, so this is purely a UX
+ * convenience (no payment involved). Best-effort by design: callers should treat a failure
  * here as non-fatal, since the requester can always call mintRequester()
  * themselves later from the mint/claim panel.
  */

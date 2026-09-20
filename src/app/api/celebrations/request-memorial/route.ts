@@ -1,8 +1,8 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, formatEther, isAddress } from "viem";
+import { createPublicClient, http, formatEther, isAddress, decodeEventLog } from "viem";
 import { base, mainnet } from "viem/chains";
-import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listWorks, createWork } from "@/lib/workStore";
 import { buildPersona } from "@/lib/normiesPersona";
 import { checkMemorialRequestLimit, recordMemorialRequest, createSalon, addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
@@ -42,17 +42,6 @@ const MAX_TIER2_PUBLIC_SUPPLY     = 500;
 const MIN_TIER3_DURATION_SECONDS  = 3600;          // 1 hour
 const MAX_TIER3_DURATION_SECONDS  = 90 * 86_400;   // 90 days
 
-async function getMemberIds(): Promise<number[]> {
-  try {
-    const raw = await client.readContract({
-      address: CONTRACT_ADDRESSES.AssociationCore as `0x${string}`,
-      abi:     ASSOCIATION_CORE_ABI,
-      functionName: "getMemberTokenIds",
-    });
-    return (raw as bigint[]).map(Number);
-  } catch { return []; }
-}
-
 /**
  * Verifies tokenId is actually burned on-chain before letting anyone spend a
  * member's drawing effort on it. Fails closed: if we can't reach the chain
@@ -82,37 +71,60 @@ async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?:
   }
 }
 
+type RequestPaidArgs = {
+  payer: `0x${string}`;
+  creatorProposerTokenId: bigint;
+  creatorAddr: `0x${string}`;
+  amount: bigint;
+};
+
 /**
  * Verifies the requester actually paid for this tier BEFORE the memorial is
- * created — a plain ETH transfer to ANAMemorials only succeeds by calling one
- * of its payable functions (the contract has no bare receive()/fallback()),
- * so a confirmed transaction with the right value/sender/recipient is real
- * proof of payment. Using tip() specifically (not mintRequester/mintPublic)
- * means the relayer is compensated for creation cost up front, regardless of
- * whether the memorial ever gets voted through or the requester follows up —
- * this is the whole point: the old design let anyone trigger relayer-paid
- * creation for free, with payment only a hope for later.
+ * created — by decoding the RequestPaid event emitted by
+ * ANAMemorials.payForRequest(creatorProposerTokenId), rather than just
+ * checking a plain transfer's to/from/value. payForRequest() splits the
+ * payment 50/50 with the resolved creator immediately on-chain (unlike the
+ * old tip(), which sent everything to the vault with no way to know a
+ * creator) — so the event's own args are the only reliable proof of both
+ * "this was really a payment for a request" AND "which proposer it was
+ * priced for," which request-memorial then reuses unchanged rather than
+ * picking a different one after the fact.
  */
 async function verifyRequestPayment(
-  txHash: string, expectedFrom: string, minValueWei: bigint,
+  txHash: string, expectedPayer: string, expectedProposerTokenId: number, minValueWei: bigint,
 ): Promise<{ ok: boolean; error?: string }> {
   const memorialsAddr = CONTRACT_ADDRESSES.ANAMemorials;
   if (!memorialsAddr) return { ok: false, error: "ANA_MEMORIALS_ADDRESS non configuré" };
 
   try {
-    const [tx, receipt] = await Promise.all([
-      client.getTransaction({ hash: txHash as `0x${string}` }),
-      client.getTransactionReceipt({ hash: txHash as `0x${string}` }),
-    ]);
+    const receipt = await client.getTransactionReceipt({ hash: txHash as `0x${string}` });
     if (receipt.status !== "success") return { ok: false, error: "La transaction de paiement a échoué on-chain" };
-    if (!tx.to || tx.to.toLowerCase() !== memorialsAddr.toLowerCase()) {
+    if (!receipt.to || receipt.to.toLowerCase() !== memorialsAddr.toLowerCase()) {
       return { ok: false, error: "Le paiement n'a pas été envoyé au contrat ANAMemorials" };
     }
-    if (tx.from.toLowerCase() !== expectedFrom.toLowerCase()) {
+
+    let matched: RequestPaidArgs | null = null;
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== memorialsAddr.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({
+          abi: ANA_MEMORIALS_ABI, data: log.data, topics: log.topics, eventName: "RequestPaid",
+        });
+        matched = decoded.args as unknown as RequestPaidArgs;
+        break;
+      } catch { /* not a RequestPaid log — keep scanning the receipt's other logs */ }
+    }
+    if (!matched) {
+      return { ok: false, error: "Aucun événement RequestPaid trouvé — appelle ANAMemorials.payForRequest() avant de demander le mémorial" };
+    }
+    if (matched.payer.toLowerCase() !== expectedPayer.toLowerCase()) {
       return { ok: false, error: "Le paiement ne vient pas de requesterWallet" };
     }
-    if (tx.value < minValueWei) {
-      return { ok: false, error: `Paiement insuffisant (${formatEther(tx.value)} ETH < ${formatEther(minValueWei)} ETH)` };
+    if (Number(matched.creatorProposerTokenId) !== expectedProposerTokenId) {
+      return { ok: false, error: "Le paiement ne correspond pas au proposeur attendu" };
+    }
+    if (matched.amount < minValueWei) {
+      return { ok: false, error: `Paiement insuffisant (${formatEther(matched.amount)} ETH < ${formatEther(minValueWei)} ETH)` };
     }
     return { ok: true };
   } catch (e) {
@@ -137,10 +149,14 @@ function getClientIp(req: NextRequest): string {
  * fact, same as every memorial.
  *
  * Payment happens HERE, before creation — the requester calls ANAMemorials'
- * tip() themselves (their own wallet, their own gas) for the chosen tier's
- * price, and this route verifies that transaction before doing anything.
- * That payment covers the requester's own reserved edition — mintRequester()
- * is free for them later (see ANAMemorials.sol), since they already paid.
+ * payForRequest(proposerTokenId) themselves (their own wallet, their own
+ * gas) for the chosen tier's price, and this route verifies that transaction
+ * (via the RequestPaid event) before doing anything. The proposer is picked
+ * by verify-burned's pre-check BEFORE payment (payForRequest needs it up
+ * front to split 50/50 with the right creator immediately) and reused here
+ * unchanged — this route never re-picks one. That payment covers the
+ * requester's own reserved edition — mintRequester() is free for them later
+ * (see ANAMemorials.sol), since they already paid.
  *
  * The burned Normie's own last owner ALWAYS gets a separate, free, reserved
  * claim regardless of who requests or pays — resolved here the same way the
@@ -158,7 +174,7 @@ export async function POST(req: NextRequest) {
   }
 
   let body: {
-    tokenId?: number; tier?: number; requesterWallet?: string;
+    tokenId?: number; tier?: number; requesterWallet?: string; proposerTokenId?: number;
     publicSupply?: number; claimDurationSeconds?: number; paymentTxHash?: string;
   };
   try { body = await req.json(); }
@@ -179,8 +195,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "requesterWallet (adresse valide) requis" }, { status: 400 });
   }
 
+  const proposerTokenId = body.proposerTokenId;
+  if (!Number.isInteger(proposerTokenId) || proposerTokenId! < 0) {
+    return NextResponse.json({ error: "proposerTokenId (integer) requis — utilise celui renvoyé par verify-burned" }, { status: 400 });
+  }
+
   if (!body.paymentTxHash || !/^0x[0-9a-fA-F]{64}$/.test(body.paymentTxHash)) {
-    return NextResponse.json({ error: "paymentTxHash requis — appelle ANAMemorials.tip() avant de demander le mémorial" }, { status: 400 });
+    return NextResponse.json({ error: "paymentTxHash requis — appelle ANAMemorials.payForRequest() avant de demander le mémorial" }, { status: 400 });
   }
 
   const alreadyUsed = (await listWorks()).some(w => w.memorialPaymentTxHash === body.paymentTxHash);
@@ -190,7 +211,7 @@ export async function POST(req: NextRequest) {
 
   const tierConfig = await resolveTier(tier as MemorialTierId);
 
-  const paymentCheck = await verifyRequestPayment(body.paymentTxHash, requesterWallet, BigInt(tierConfig.priceWei));
+  const paymentCheck = await verifyRequestPayment(body.paymentTxHash, requesterWallet, proposerTokenId!, BigInt(tierConfig.priceWei));
   if (!paymentCheck.ok) {
     return NextResponse.json({ error: paymentCheck.error ?? "Paiement invalide" }, { status: 402 });
   }
@@ -210,14 +231,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const memberIds = await getMemberIds();
-  if (memberIds.length === 0) {
-    return NextResponse.json({ error: "Aucun membre ANA disponible" }, { status: 503 });
-  }
-
-  const proposerId = memberIds[Math.floor(Math.random() * memberIds.length)];
+  // proposerTokenId was picked by verify-burned's pre-check, BEFORE the user
+  // paid — payForRequest() already split the payment 50/50 with this exact
+  // proposer on-chain (verified above), so it is reused unchanged here, not
+  // re-picked at random.
   let proposer;
-  try { proposer = await buildPersona(proposerId); }
+  try { proposer = await buildPersona(proposerTokenId!); }
   catch { return NextResponse.json({ error: "Impossible de construire le persona du proposeur" }, { status: 503 }); }
 
   // A real creative act by the proposer (own persona/history, informed by

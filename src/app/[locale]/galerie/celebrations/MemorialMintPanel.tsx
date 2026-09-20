@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useAccount, useWriteContract } from "wagmi";
 import { formatEther } from "viem";
+import { base } from "viem/chains";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { ANA_MEMORIALS_ABI } from "@/lib/contracts";
 import type { MemorialListItem } from "@/app/api/memorials/list/route";
@@ -65,18 +66,22 @@ export function MemorialMintPanel() {
         await writeContractAsync({
           address, abi: ANA_MEMORIALS_ABI, functionName: "claimFree",
           args: [BigInt(memorialId), BigInt(action.burnedTokenId)],
+          chainId: base.id,
         });
       } else if (action.fn === "mintRequester") {
-        // Free — the requester already paid via tip() at request time (see
-        // request-memorial/route.ts) — mintRequester() is non-payable now.
+        // Free — the requester already paid via payForRequest() at request
+        // time (see request-memorial/route.ts) — mintRequester() is
+        // non-payable now.
         await writeContractAsync({
           address, abi: ANA_MEMORIALS_ABI, functionName: "mintRequester",
           args: [BigInt(memorialId)],
+          chainId: base.id,
         });
       } else {
         await writeContractAsync({
           address, abi: ANA_MEMORIALS_ABI, functionName: "mintPublic",
           args: [BigInt(memorialId)], value: BigInt(action.priceWei),
+          chainId: base.id,
         });
       }
       load(); // refresh pool counts / claimed flags

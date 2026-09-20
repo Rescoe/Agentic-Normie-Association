@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useAccount, useWriteContract } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { formatEther } from "viem";
+import { base } from "viem/chains";
 import { CELEBRATION_REGISTRY_ABI, ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { MemorialMintPanel } from "./MemorialMintPanel";
 import type { MemorialPricingConfig } from "@/lib/memorialPricing";
@@ -154,17 +155,18 @@ const STATE_LABEL: Record<string, string> = {
  * the member vote that moderates it takes any time.
  *
  * Payment happens BEFORE this call (RequestMemorialForm pays via
- * ANAMemorials.tip() first) — paymentTxHash is proof, verified server-side.
+ * ANAMemorials.payForRequest(proposerTokenId) first) — paymentTxHash is
+ * proof, verified server-side against the RequestPaid event.
  */
 async function requestMemorial(
-  tokenId: number, tier: 1 | 2 | 3, requesterWallet: string, paymentTxHash: string,
+  tokenId: number, tier: 1 | 2 | 3, requesterWallet: string, paymentTxHash: string, proposerTokenId: number,
   publicSupply?: number, claimDurationSeconds?: number,
 ): Promise<MemorialResult> {
   try {
     const res = await fetch("/api/celebrations/request-memorial", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ tokenId, tier, requesterWallet, paymentTxHash, publicSupply, claimDurationSeconds }),
+      body:    JSON.stringify({ tokenId, tier, requesterWallet, paymentTxHash, proposerTokenId, publicSupply, claimDurationSeconds }),
     });
     const data = await res.json();
     if (res.ok) {
@@ -188,15 +190,19 @@ const TIER_LABEL: Record<1 | 2 | 3, string> = {
 /**
  * Tier selection, quantity/durée (paliers 2 et 3), wallet, et paiement pour
  * une demande de mémorial ciblée. Le paiement a lieu ICI, avant la demande :
- * le wallet connecté appelle ANAMemorials.tip() pour le prix du palier
- * choisi — ça garantit que le relayer est rémunéré pour le coût de création,
- * qu'un achat public suive ou non. Le hash de cette transaction est envoyé
- * à /api/celebrations/request-memorial, qui la vérifie avant de créer quoi
- * que ce soit. Une vérification légère (Normie bien brûlé, pas déjà demandé)
- * a lieu avant le paiement pour éviter de payer pour rien.
+ * le wallet connecté appelle ANAMemorials.payForRequest(proposerTokenId) pour
+ * le prix du palier choisi — ça garantit que le relayer est rémunéré pour le
+ * coût de création (et partagé 50/50 avec le proposeur immédiatement),
+ * qu'un achat public suive ou non. Le proposeur est choisi par le pre-check
+ * verify-burned AVANT le paiement (payForRequest a besoin de le connaître
+ * pour répartir tout de suite) et réutilisé tel quel côté serveur. Le hash de
+ * cette transaction est envoyé à /api/celebrations/request-memorial, qui la
+ * vérifie (événement RequestPaid) avant de créer quoi que ce soit. Une
+ * vérification légère (Normie bien brûlé, pas déjà demandé) a lieu avant le
+ * paiement pour éviter de payer pour rien.
  */
 function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
-  onSubmit: (tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string, publicSupply?: number, claimDurationSeconds?: number) => void;
+  onSubmit: (tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string, proposerTokenId: number, publicSupply?: number, claimDurationSeconds?: number) => void;
   submitting: boolean;
   prefillTokenId?: number | null;
 }) {
@@ -213,6 +219,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
   const [preCheck, setPreCheck] = useState<{
     burned: boolean; alreadyRequested: boolean; existingState?: string;
     lastOwner: string | null; requesterIsLastOwner: boolean;
+    proposerTokenId: number | null; proposerName: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -255,17 +262,20 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
       const check = await fetch(`/api/celebrations/verify-burned?tokenId=${id}&requesterWallet=${address}`).then(r => r.json());
       if (!check.burned) { setPayError("Ce Normie n'est pas brûlé."); return; }
       if (check.alreadyRequested) { setPayError(`Un mémorial existe déjà pour ce Normie (${check.existingState}).`); return; }
+      if (check.proposerTokenId == null) { setPayError("Impossible de sélectionner un proposeur ANA — réessaie."); return; }
 
       const tierConfig = { 1: pricing.tier1, 2: pricing.tier2, 3: pricing.tier3 }[tier];
       const txHash = await writeContractAsync({
         address:      memorialsAddr as `0x${string}`,
         abi:          ANA_MEMORIALS_ABI,
-        functionName: "tip",
+        functionName: "payForRequest",
+        args:         [BigInt(check.proposerTokenId)],
         value:        BigInt(tierConfig.priceWei),
+        chainId:      base.id,
       });
 
       onSubmit(
-        id, tier, address, txHash,
+        id, tier, address, txHash, check.proposerTokenId,
         tier === 2 ? quantity : undefined,
         tier === 3 ? durationDays * 86_400 : undefined,
       );
@@ -346,6 +356,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
             : preCheck.requesterIsLastOwner
             ? "Tu es l'ancien propriétaire de ce Normie : une seule édition sera créée, la tienne — pas de claim gratuit séparé."
             : "Tu n'es pas l'ancien propriétaire de ce Normie : 2 éditions seront créées — la tienne (payée) et une gratuite réservée à l'ancien propriétaire."}
+          {preCheck.proposerName && ` Proposeur : ${preCheck.proposerName} (#${preCheck.proposerTokenId}) — ton paiement lui revient pour moitié.`}
         </p>
       )}
       {preCheck && !preCheck.burned && (
@@ -382,11 +393,11 @@ export function CelebrationsClient() {
   }, []);
 
   async function handleRequestMemorial(
-    tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string,
+    tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string, proposerTokenId: number,
     publicSupply?: number, claimDurationSeconds?: number,
   ) {
     setRequestingTokenId(tokenId);
-    const result = await requestMemorial(tokenId, tier, wallet, paymentTxHash, publicSupply, claimDurationSeconds);
+    const result = await requestMemorial(tokenId, tier, wallet, paymentTxHash, proposerTokenId, publicSupply, claimDurationSeconds);
     setMemorialResult(result);
     setRequestingTokenId(null);
     if (result.ok) loadMemorials();

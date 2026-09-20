@@ -78,10 +78,12 @@ export default async function DocsCelebrationsPage() {
               Sur <Link href="/galerie/celebrations" className="underline hover:no-underline">la page Célébrations</Link>,
               n&apos;importe qui peut nommer un tokenId brûlé précis (vérifié on-chain) et choisir un des 3 paliers
               ci-dessous. <strong>Le paiement a lieu immédiatement</strong> — le demandeur appelle lui-même
-              <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1 mx-1">tip()</code>
-              pour le prix du palier, avant même que le mémorial existe. Ça garantit que le relayer est rémunéré
-              pour le coût de création, que le mémorial soit ensuite acheté par d&apos;autres ou non. Son édition
-              réservée lui est ensuite livrée automatiquement dans son wallet dès la publication du mémorial
+              <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1 mx-1">payForRequest(proposerTokenId)</code>
+              pour le prix du palier, avant même que le mémorial existe — le membre ANA qui créera la pièce est
+              choisi et affiché avant ce paiement, puisque la répartition 50/50 a lieu immédiatement avec lui.
+              Ça garantit que le relayer est rémunéré pour le coût de création, que le mémorial soit ensuite
+              acheté par d&apos;autres ou non. Son édition réservée lui est ensuite livrée automatiquement dans
+              son wallet dès la publication du mémorial
               (le relayer appelle <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code> pour
               lui — gratuit, déjà payé en amont) — aucune action supplémentaire requise. Si ça échoue pour une
               raison quelconque, il peut toujours la réclamer lui-même depuis la page Célébrations.
@@ -146,7 +148,7 @@ export default async function DocsCelebrationsPage() {
           </li>
           <li className="font-mono text-[11px] text-[--fg-muted] flex gap-2">
             <span className="opacity-40">→</span>
-            <span><strong className="text-[--fg]">50% — le membre créateur</strong> : le Normie dont le persona a fait la pièce. Résolu automatiquement via le wallet enregistré du membre (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">AssociationCore.getMemberOwner()</code>) — s&apos;il n&apos;en a pas, sa part part vers le relayer aussi, sur une adresse distincte de la part ci-dessus.</span>
+            <span><strong className="text-[--fg]">50% — le membre créateur</strong> : le Normie dont le persona a fait la pièce. Résolu automatiquement via le wallet enregistré du membre (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">AssociationCore.getMemberOwner()</code>) — s&apos;il n&apos;en a pas, sa part rejoint le trésor de l&apos;association (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">vaultAddr</code>), jamais l&apos;adresse du relayer qui a signé la transaction.</span>
           </li>
         </ul>
         <p className="text-sm text-[--fg-muted] leading-relaxed">
@@ -178,10 +180,11 @@ export default async function DocsCelebrationsPage() {
               <div className="space-y-1">
                 {[
                   { fn: "claimFree(memorialId, burnedTokenId)",  returns: "gratuit — réservé au dernier propriétaire du Normie honoré" },
-                  { fn: "mintRequester(memorialId)",             returns: "gratuit — déjà payé via tip() à la demande ; livré automatiquement par le relayer, ou réclamable soi-même en secours" },
+                  { fn: "payForRequest(creatorProposerTokenId) payable", returns: "paiement d'une demande ciblée, AVANT que le mémorial existe — split 50/50 immédiat avec le proposeur désigné (repli sur le trésor s'il n'a pas de wallet)" },
+                  { fn: "mintRequester(memorialId)",             returns: "gratuit — déjà payé via payForRequest() à la demande ; livré automatiquement par le relayer, ou réclamable soi-même en secours" },
                   { fn: "setSeriesPrice(memorialId, newPriceWei) — owner", returns: "ajuste le prix public d'une série déjà enregistrée" },
                   { fn: "mintPublic(memorialId) payable",        returns: "ouvert à tous, tant que le pool public n'est pas épuisé/expiré" },
-                  { fn: "tip() payable",                         returns: "pourboire direct au relayer, aucune édition mintée" },
+                  { fn: "tip() payable",                         returns: "pourboire libre, sans destinataire créateur — 100% au trésor de l'association" },
                   { fn: "getSeries(memorialId)",                 returns: "MemorialSeries{title, priceWei, publicSupply, publicMinted, requesterSupply, requesterMinted, requesterAddr, openEnded, claimDeadline, ...}" },
                   { fn: "getBurnedTokenIds(memorialId)",         returns: "uint256[]" },
                   { fn: "isFreeClaimable(memorialId, burnedTokenId)", returns: "bool" },
@@ -209,15 +212,18 @@ import { ANA_MEMORIALS_ABI } from "./abis/ANAMemorials";
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 const [account] = await client.getAddresses();
 
-// Paiement d'une demande ciblée — AVANT que le mémorial existe. Le hash de
+// Paiement d'une demande ciblée — AVANT que le mémorial existe. proposerTokenId
+// vient de GET /api/celebrations/verify-burned (le proposeur est choisi avant
+// le paiement pour que le split 50/50 ait lieu tout de suite). Le hash de
 // cette transaction est envoyé à POST /api/celebrations/request-memorial,
-// qui la vérifie (montant, expéditeur, destinataire) avant de créer quoi
-// que ce soit.
-const tipTxHash = await client.writeContract({
+// qui la vérifie (événement RequestPaid : payer, creatorProposerTokenId,
+// montant) avant de créer quoi que ce soit.
+const paymentTxHash = await client.writeContract({
   account,
   address: "${memorialsAddr}",
   abi: ANA_MEMORIALS_ABI,
-  functionName: "tip",
+  functionName: "payForRequest",
+  args: [proposerTokenId],
   value: tierPriceWei,
 });
 

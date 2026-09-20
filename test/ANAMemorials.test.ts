@@ -97,8 +97,8 @@ describe("ANAMemorials", function () {
       expect(series.creatorAddr).to.equal(creator.address);
     });
 
-    it("falls back to the caller (relayer) when the proposer has no registered wallet", async () => {
-      const { memorials, relayer, core } = await deployFixture();
+    it("falls back to the vault (never msg.sender/the relayer) when the proposer has no registered wallet", async () => {
+      const { memorials, relayer, vault, core } = await deployFixture();
       const UNREGISTERED_TOKEN_ID = 999;
       // deliberately not set in the mock core -> getMemberOwner returns address(0)
       const tx = await memorials.connect(relayer).registerMemorial(
@@ -110,7 +110,7 @@ describe("ANAMemorials", function () {
         .find(l => l?.name === "MemorialRegistered");
       const id = event!.args.memorialId as bigint;
       const series = await memorials.getSeries(id);
-      expect(series.creatorAddr).to.equal(relayer.address);
+      expect(series.creatorAddr).to.equal(vault.address);
       void core; // unused in this branch, kept for fixture symmetry
     });
   });
@@ -179,7 +179,7 @@ describe("ANAMemorials", function () {
       await expect(memorials.connect(requester).mintRequester(id)).to.not.be.reverted; // requester pool untouched
     });
 
-    it("is free even when the series has a nonzero priceWei — the requester already paid via tip() before creation", async () => {
+    it("is free even when the series has a nonzero priceWei — the requester already paid via payForRequest() before creation", async () => {
       const { memorials, relayer, requester } = await deployFixture();
       const price = ethers.parseEther("0.001");
       const id = await registerBasicMemorial(memorials, relayer, {
@@ -353,6 +353,45 @@ describe("ANAMemorials", function () {
       await memorials.connect(buyer1).tip({ value: amount });
       const after = await ethers.provider.getBalance(vault.address);
       expect(after - before).to.equal(amount);
+    });
+  });
+
+  describe("payForRequest — request-time payment, split immediately (unlike tip())", function () {
+    it("splits 50/50 between the vault and the resolved proposer, odd wei to the proposer", async () => {
+      const { memorials, vault, creator, buyer1 } = await deployFixture();
+      const amount = 1001n; // odd, exercises the remainder rule
+      const vaultBefore   = await ethers.provider.getBalance(vault.address);
+      const creatorBefore = await ethers.provider.getBalance(creator.address);
+
+      const tx = await memorials.connect(buyer1).payForRequest(PROPOSER_TOKEN_ID, { value: amount });
+      const receipt = await tx.wait();
+      const event = receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "RequestPaid");
+      expect(event!.args.payer).to.equal(buyer1.address);
+      expect(event!.args.creatorProposerTokenId).to.equal(BigInt(PROPOSER_TOKEN_ID));
+      expect(event!.args.creatorAddr).to.equal(creator.address);
+      expect(event!.args.amount).to.equal(amount);
+
+      const vaultAfter   = await ethers.provider.getBalance(vault.address);
+      const creatorAfter = await ethers.provider.getBalance(creator.address);
+      expect(vaultAfter - vaultBefore).to.equal(500n);   // amount/2, floor
+      expect(creatorAfter - creatorBefore).to.equal(501n); // remainder
+    });
+
+    it("sends the full amount to the vault (both halves) when the proposer has no registered wallet", async () => {
+      const { memorials, vault, buyer1 } = await deployFixture();
+      const UNREGISTERED_TOKEN_ID = 999;
+      const amount = ethers.parseEther("0.001");
+      const before = await ethers.provider.getBalance(vault.address);
+      await memorials.connect(buyer1).payForRequest(UNREGISTERED_TOKEN_ID, { value: amount });
+      const after = await ethers.provider.getBalance(vault.address);
+      expect(after - before).to.equal(amount);
+    });
+
+    it("is a no-op for a zero-value call", async () => {
+      const { memorials, buyer1 } = await deployFixture();
+      await expect(memorials.connect(buyer1).payForRequest(PROPOSER_TOKEN_ID, { value: 0 })).to.not.be.reverted;
     });
   });
 

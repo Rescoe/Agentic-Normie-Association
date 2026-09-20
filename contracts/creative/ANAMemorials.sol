@@ -92,6 +92,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     event EditionMinted(uint256 indexed memorialId, uint256 indexed tokenId, address indexed to, string pool, uint256 priceWei);
     event RevenueSplit(uint256 indexed memorialId, address vaultAddr, uint256 vaultAmt, address creatorAddr, uint256 creatorAmt);
     event Tipped(address indexed from, uint256 amount);
+    event RequestPaid(address indexed payer, uint256 indexed creatorProposerTokenId, address creatorAddr, uint256 amount);
     event Withdrawn(address indexed to, uint256 amount);
     event AuthorizationUpdated(address indexed addr, bool status);
     event VaultUpdated(address indexed addr);
@@ -170,7 +171,10 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         if (requesterSupply > 0 && requesterAddr == address(0)) revert ZeroAddress();
 
         address creatorAddr = core.getMemberOwner(creatorProposerTokenId);
-        if (creatorAddr == address(0)) creatorAddr = msg.sender; // relayer fallback, same spirit as ANAEditions' _getMemberOwner
+        // No registered wallet -> the creator's share has nowhere real to go,
+        // so it joins the vault's — never msg.sender, which is just whichever
+        // relayer key happened to sign this call, not a real payee.
+        if (creatorAddr == address(0)) creatorAddr = vaultAddr;
 
         memorialId = series.length;
         series.push(MemorialSeries({
@@ -278,11 +282,40 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         tokenId = _mintEdition(memorialId, msg.sender, "reserved");
     }
 
-    /// @notice Optional direct tip to the relayer's vault — no edition minted.
+    /// @notice Optional direct tip to the relayer's vault — no edition minted, no split.
     function tip() external payable {
         if (msg.value == 0) return;
         _sendOrEscrow(vaultAddr, msg.value);
         emit Tipped(msg.sender, msg.value);
+    }
+
+    /**
+     * @notice Pays for a targeted memorial request — BEFORE the memorial
+     *         itself exists. Splits 50/50 immediately between the vault and
+     *         the proposer picked to create the piece, resolved via
+     *         AssociationCore.getMemberOwner(creatorProposerTokenId) — same
+     *         resolution and same no-wallet fallback (to the vault) as
+     *         registerMemorial() uses later for public sales. The server
+     *         picks the proposer BEFORE prompting this payment specifically
+     *         so the split can happen now instead of waiting for the
+     *         memorial to be created (request-memorial/route.ts verifies the
+     *         emitted RequestPaid event before creating anything, then uses
+     *         this exact same proposer — never re-picked).
+     *
+     *         Distinct from tip(), which is a no-strings-attached donation:
+     *         a request payment always has a specific proposer to share
+     *         with, a tip never does.
+     */
+    function payForRequest(uint256 creatorProposerTokenId) external payable {
+        if (msg.value == 0) return;
+        address creatorAddr = core.getMemberOwner(creatorProposerTokenId);
+        if (creatorAddr == address(0)) creatorAddr = vaultAddr;
+
+        uint256 vaultAmt   = msg.value / 2;
+        uint256 creatorAmt = msg.value - vaultAmt; // odd wei to the creator, same convention as _settlePayment
+        _sendOrEscrow(vaultAddr, vaultAmt);
+        _sendOrEscrow(creatorAddr, creatorAmt);
+        emit RequestPaid(msg.sender, creatorProposerTokenId, creatorAddr, msg.value);
     }
 
     /// @notice Pulls any balance that couldn't be pushed automatically (see _sendOrEscrow).

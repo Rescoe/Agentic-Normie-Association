@@ -135,7 +135,8 @@ function getDeployedContracts(t: Awaited<ReturnType<typeof getTranslations>>) {
     desc:    "Collection ERC-721 unique et partagée pour tous les mémoriaux de burn — remplace le déploiement d'une ANAEditions par mémorial. Voir la documentation dédiée pour les paliers de paiement et le claim gratuit garanti.",
     reads: [
       { fn: "claimFree(memorialId, burnedTokenId)",  returns: "gratuit — dernier propriétaire du Normie honoré" },
-      { fn: "mintRequester(memorialId)",              returns: "gratuit (payé via tip() à la demande) — livré auto par le relayer, réclamable soi-même en secours" },
+      { fn: "payForRequest(creatorProposerTokenId) payable", returns: "paiement d'une demande ciblée avant création — split 50/50 immédiat avec le proposeur" },
+      { fn: "mintRequester(memorialId)",              returns: "gratuit (payé via payForRequest() à la demande) — livré auto par le relayer, réclamable soi-même en secours" },
       { fn: "mintPublic(memorialId) payable",         returns: "ouvert à tous" },
       { fn: "getSeries(memorialId)",                  returns: "MemorialSeries{...}" },
       { fn: "getSeriesCount()",                       returns: "uint256" },

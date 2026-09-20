@@ -1206,8 +1206,8 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
   }
 
   // ── Step 4: auto-deliver the requester's own edition (best-effort) ──
-  // Non-blocking on purpose: the requester already paid via tip() at request
-  // time, this just saves them a manual claim later. A failure here must
+  // Non-blocking on purpose: the requester already paid via payForRequest()
+  // at request time, this just saves them a manual claim later. A failure here must
   // never hold up PUBLISHED — they can still self-claim from the mint/claim
   // panel if this doesn't go through.
   if ((work.memorialRequesterSupply ?? 0) > 0 && !work.requesterEditionDelivered) {

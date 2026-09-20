@@ -164,7 +164,7 @@ export interface ANAWork {
   onChainMemorialId?:       number; // series index in the shared ANAMemorials contract
   reservedClaimsAdded?:     boolean; // guards against re-adding (wasted gas) on a PUBLISHING retry
   // Proof the requester paid for a "requested" memorial BEFORE it was created
-  // (ANAMemorials.tip(), verified in request-memorial/route.ts) — the relayer
+  // (ANAMemorials.payForRequest(), verified in request-memorial/route.ts) — the relayer
   // is compensated for creation cost regardless of whether the memorial is
   // ever voted through or the requester later claims their edition. Also
   // used to reject a reused/replayed payment transaction.
