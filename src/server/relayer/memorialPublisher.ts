@@ -105,12 +105,21 @@ export async function registerMemorialOnChain(
         params.openEnded,
         BigInt(params.claimDurationSeconds),
       ],
-      // Well within what a single storage-write-only call needs (no contract
-      // deployment happens here anymore) — see ANAMemorials.sol for why an
-      // explicit gas value is used at all: this repo's public RPC
-      // (mainnet.base.org) fails eth_estimateGas outright above a certain
-      // calldata/storage size, with no decodable revert reason.
-      gas: 2_000_000n,
+      // Was 2M — wrong: no contract gets deployed here anymore, but
+      // `artworkContent` (the full ~8.5KB base64 BMP) IS still stored
+      // entirely in this call's MemorialSeries struct, via a genuinely
+      // expensive cold SSTORE (~266 32-byte words × ~22,100 gas ≈ 5.9M gas
+      // for that field alone) — the exact same class of gas-budget mistake
+      // already made and fixed twice for the old per-memorial pipeline
+      // (publishWork, initializeCollection). Confirmed in production:
+      // registerMemorial reverted with gasUsed EXACTLY 2,000,000 (the limit
+      // itself), the unmistakable signature of running out, not a logic
+      // revert — this repo's public RPC (mainnet.base.org) fails
+      // eth_estimateGas outright above a certain calldata/storage size, with
+      // no decodable revert reason, hence the explicit value instead of
+      // relying on estimation. 10M gives real margin under the node's
+      // ~16.7M-gas transaction cap.
+      gas: 10_000_000n,
     });
 
     await logTxSubmitted({
