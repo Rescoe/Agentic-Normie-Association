@@ -45,6 +45,7 @@ export interface RegisterMemorialParams {
   artworkContent:         string; // data URI (BMP)
   workId:                 number; // WorkRegistry id, 0 if not linked
   creatorProposerTokenId: number;
+  creatorName:            string;
   priceWei:               bigint;
   publicSupply:           number;
   requesterSupply:        number;
@@ -107,6 +108,7 @@ export async function registerMemorialOnChain(
         params.artworkContent,
         BigInt(params.workId),
         BigInt(params.creatorProposerTokenId),
+        params.creatorName,
         params.priceWei,
         BigInt(params.publicSupply),
         BigInt(params.requesterSupply),

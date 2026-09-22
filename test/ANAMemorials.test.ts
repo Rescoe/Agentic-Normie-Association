@@ -53,6 +53,7 @@ async function registerBasicMemorial(
     "data:image/bmp;base64,QQ==",
     0,
     PROPOSER_TOKEN_ID,
+    "Zephyr",
     opts.priceWei ?? 0n,
     opts.publicSupply ?? 0,
     opts.requesterSupply ?? 0,
@@ -75,7 +76,7 @@ describe("ANAMemorials", function () {
       const { memorials, stranger } = await deployFixture();
       await expect(
         memorials.connect(stranger).registerMemorial(
-          "t", "data:image/bmp;base64,QQ==", 0, PROPOSER_TOKEN_ID, 0, 0, 0, ethers.ZeroAddress, false, 0,
+          "t", "data:image/bmp;base64,QQ==", 0, PROPOSER_TOKEN_ID, "Zephyr", 0, 0, 0, ethers.ZeroAddress, false, 0,
         ),
       ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
     });
@@ -97,12 +98,12 @@ describe("ANAMemorials", function () {
       expect(series.creatorAddr).to.equal(creator.address);
     });
 
-    it("falls back to the vault (never msg.sender/the relayer) when the proposer has no registered wallet", async () => {
+    it("marks the vault fallback when the proposer has no registered wallet", async () => {
       const { memorials, relayer, vault, core } = await deployFixture();
       const UNREGISTERED_TOKEN_ID = 999;
       // deliberately not set in the mock core -> getMemberOwner returns address(0)
       const tx = await memorials.connect(relayer).registerMemorial(
-        "t", "data:image/bmp;base64,QQ==", 0, UNREGISTERED_TOKEN_ID, 0, 0, 0, ethers.ZeroAddress, false, 0,
+        "t", "data:image/bmp;base64,QQ==", 0, UNREGISTERED_TOKEN_ID, "Unbound agent", 0, 0, 0, ethers.ZeroAddress, false, 0,
       );
       const receipt = await tx.wait();
       const event = receipt!.logs
@@ -110,7 +111,8 @@ describe("ANAMemorials", function () {
         .find(l => l?.name === "MemorialRegistered");
       const id = event!.args.memorialId as bigint;
       const series = await memorials.getSeries(id);
-      expect(series.creatorAddr).to.equal(vault.address);
+      expect(series.creatorAddr).to.equal(ethers.ZeroAddress);
+      expect(series.creatorUsesVault).to.equal(true);
       void core; // unused in this branch, kept for fixture symmetry
     });
   });
@@ -145,19 +147,21 @@ describe("ANAMemorials", function () {
       expect(balBefore - balAfter - gasCost).to.equal(price); // only the real price left the wallet
     });
 
-    it("splits payment 50/50 between vault and creator, odd wei to the creator", async () => {
+    it("splits payment 50/50 between relayer payout and creator, odd wei to the creator", async () => {
       const { memorials, relayer, creator, vault, buyer1 } = await deployFixture();
       const price = 1001n; // odd, in wei — exercises the remainder rule
       const id = await registerBasicMemorial(memorials, relayer, { priceWei: price, publicSupply: 10 });
 
-      const vaultBefore   = await ethers.provider.getBalance(vault.address);
+      const relayerBefore = await ethers.provider.getBalance(relayer.address);
       const creatorBefore = await ethers.provider.getBalance(creator.address);
+      const vaultBefore = await ethers.provider.getBalance(vault.address);
       await memorials.connect(buyer1).mintPublic(id, { value: price });
-      const vaultAfter   = await ethers.provider.getBalance(vault.address);
+      const relayerAfter = await ethers.provider.getBalance(relayer.address);
       const creatorAfter = await ethers.provider.getBalance(creator.address);
 
-      expect(vaultAfter - vaultBefore).to.equal(500n);   // price/2, floor
+      expect(relayerAfter - relayerBefore).to.equal(500n);   // price/2, floor
       expect(creatorAfter - creatorBefore).to.equal(501n); // remainder
+      expect(await ethers.provider.getBalance(vault.address)).to.equal(vaultBefore);
     });
   });
 
@@ -337,6 +341,13 @@ describe("ANAMemorials", function () {
       const metadata = decodeTokenUri(await memorials.tokenURI(0));
       expect(metadata.name).to.equal("Eulogy for 2 absences");
       expect((metadata.image as string).startsWith("data:image/svg+xml;base64,")).to.equal(true);
+      const attrs = metadata.attributes as Array<{ trait_type: string; value: string | number }>;
+      expect(attrs).to.deep.include({ trait_type: "Artist", value: "Zephyr (Normie #42)" });
+      expect(attrs).to.deep.include({ trait_type: "Artist Agent ID", value: 42 });
+      expect(attrs).to.deep.include({ trait_type: "Agent Standard", value: "ERC-8004" });
+      const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
+      expect(svg).to.include('href="data:image/bmp;base64,QQ=="');
+      expect(svg).to.include("Eulogy for 2 absences");
     });
 
     it("reverts for a token that was never minted", async () => {
@@ -357,10 +368,10 @@ describe("ANAMemorials", function () {
   });
 
   describe("payForRequest — request-time payment, split immediately (unlike tip())", function () {
-    it("splits 50/50 between the vault and the resolved proposer, odd wei to the proposer", async () => {
-      const { memorials, vault, creator, buyer1 } = await deployFixture();
+    it("splits 50/50 between the relayer payout and the resolved proposer, odd wei to the proposer", async () => {
+      const { memorials, relayer, creator, buyer1 } = await deployFixture();
       const amount = 1001n; // odd, exercises the remainder rule
-      const vaultBefore   = await ethers.provider.getBalance(vault.address);
+      const relayerBefore = await ethers.provider.getBalance(relayer.address);
       const creatorBefore = await ethers.provider.getBalance(creator.address);
 
       const tx = await memorials.connect(buyer1).payForRequest(PROPOSER_TOKEN_ID, { value: amount });
@@ -370,23 +381,31 @@ describe("ANAMemorials", function () {
         .find(l => l?.name === "RequestPaid");
       expect(event!.args.payer).to.equal(buyer1.address);
       expect(event!.args.creatorProposerTokenId).to.equal(BigInt(PROPOSER_TOKEN_ID));
-      expect(event!.args.creatorAddr).to.equal(creator.address);
+      expect(event!.args.relayerPayoutAddr).to.equal(relayer.address);
+      expect(event!.args.creatorPayoutAddr).to.equal(creator.address);
       expect(event!.args.amount).to.equal(amount);
+      expect(event!.args.usedVaultFallback).to.equal(false);
 
-      const vaultAfter   = await ethers.provider.getBalance(vault.address);
+      const relayerAfter = await ethers.provider.getBalance(relayer.address);
       const creatorAfter = await ethers.provider.getBalance(creator.address);
-      expect(vaultAfter - vaultBefore).to.equal(500n);   // amount/2, floor
+      expect(relayerAfter - relayerBefore).to.equal(500n);   // amount/2, floor
       expect(creatorAfter - creatorBefore).to.equal(501n); // remainder
     });
 
-    it("sends the full amount to the vault (both halves) when the proposer has no registered wallet", async () => {
-      const { memorials, vault, buyer1 } = await deployFixture();
+    it("still pays the relayer half and sends only the creator half to the vault when the proposer has no wallet", async () => {
+      const { memorials, relayer, vault, buyer1 } = await deployFixture();
       const UNREGISTERED_TOKEN_ID = 999;
-      const amount = ethers.parseEther("0.001");
-      const before = await ethers.provider.getBalance(vault.address);
-      await memorials.connect(buyer1).payForRequest(UNREGISTERED_TOKEN_ID, { value: amount });
-      const after = await ethers.provider.getBalance(vault.address);
-      expect(after - before).to.equal(amount);
+      const amount = 1001n;
+      const relayerBefore = await ethers.provider.getBalance(relayer.address);
+      const vaultBefore = await ethers.provider.getBalance(vault.address);
+      const tx = await memorials.connect(buyer1).payForRequest(UNREGISTERED_TOKEN_ID, { value: amount });
+      const receipt = await tx.wait();
+      const event = receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "RequestPaid");
+      expect((await ethers.provider.getBalance(relayer.address)) - relayerBefore).to.equal(500n);
+      expect((await ethers.provider.getBalance(vault.address)) - vaultBefore).to.equal(501n);
+      expect(event!.args.usedVaultFallback).to.equal(true);
     });
 
     it("is a no-op for a zero-value call", async () => {

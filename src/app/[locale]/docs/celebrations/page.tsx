@@ -144,11 +144,11 @@ export default async function DocsCelebrationsPage() {
         <ul className="space-y-1.5 pl-1">
           <li className="font-mono text-[11px] text-[--fg-muted] flex gap-2">
             <span className="opacity-40">→</span>
-            <span><strong className="text-[--fg]">50% — le relayer</strong> : rembourse le gas des transactions d&apos;automatisation (le seul but est de maintenir l&apos;association fonctionnelle, pas de faire du profit) — voir <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">vaultAddr</code> sur le contrat.</span>
+            <span><strong className="text-[--fg]">50% — le relayer</strong> : rembourse le gas des transactions d&apos;automatisation (le seul but est de maintenir l&apos;association fonctionnelle, pas de faire du profit) — versé systématiquement à <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">relayerPayoutAddr</code>.</span>
           </li>
           <li className="font-mono text-[11px] text-[--fg-muted] flex gap-2">
             <span className="opacity-40">→</span>
-            <span><strong className="text-[--fg]">50% — le membre créateur</strong> : le Normie dont le persona a fait la pièce. Résolu automatiquement via le wallet enregistré du membre (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">AssociationCore.getMemberOwner()</code>) — s&apos;il n&apos;en a pas, sa part rejoint le trésor de l&apos;association (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">vaultAddr</code>), jamais l&apos;adresse du relayer qui a signé la transaction.</span>
+            <span><strong className="text-[--fg]">50% — le membre créateur</strong> : le Normie dont le persona a fait la pièce. Résolu automatiquement via le wallet enregistré du membre (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">AssociationCore.getMemberOwner()</code>) — s&apos;il n&apos;en a pas, cette moitié seulement rejoint le trésor de l&apos;association (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">vaultAddr</code>).</span>
           </li>
         </ul>
         <p className="text-sm text-[--fg-muted] leading-relaxed">

@@ -8,12 +8,12 @@ import * as path from "path";
  *
  * Required env vars:
  *  - RELAYER_ADDRESS       — pre-authorized to registerMemorial()/addReservedClaims()
- *                            (same relayer wallet used everywhere else in the pipeline)
+ *                            and the payout destination that always receives 50%
  *  - ASSOCIATION_CORE_ADDRESS or NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS
  *                          — AssociationCore, source of truth for creator payout resolution
- *  - VAULT_ADDRESS         — where the relayer's 50% share of every paid mint goes.
- *                            Defaults to RELAYER_ADDRESS itself if unset (the whole point
- *                            of this contract is keeping the relayer solvent).
+ *  - VAULT_ADDRESS         — receives the creator's 50% only when that creator has
+ *                            no registered wallet. This must remain distinct in meaning
+ *                            from RELAYER_ADDRESS, which always receives the relayer 50%.
  *
  * Run:
  *  npx hardhat run scripts/deploy-ana-memorials.ts --network base
@@ -41,15 +41,15 @@ async function main() {
   const coreAddress     = process.env.ASSOCIATION_CORE_ADDRESS
     ?? process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS
     ?? existing.AssociationCore;
-  const vaultAddress    = process.env.VAULT_ADDRESS ?? relayerAddress;
+  const vaultAddress    = process.env.VAULT_ADDRESS;
 
   if (!relayerAddress) throw new Error("RELAYER_ADDRESS env var is required");
   if (!coreAddress)    throw new Error("ASSOCIATION_CORE_ADDRESS (or NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS, or deployments/<chainId>.json) is required");
-  if (!vaultAddress)   throw new Error("VAULT_ADDRESS env var is required (or set RELAYER_ADDRESS, used as the default)");
+  if (!vaultAddress)   throw new Error("VAULT_ADDRESS env var is required (creator no-wallet fallback)");
 
-  console.log(`\nRelayer  : ${relayerAddress} (authorized to register memorials / add reserved claims)`);
+  console.log(`\nRelayer  : ${relayerAddress} (authorized + receives 50% of every paid request/mint)`);
   console.log(`Core     : ${coreAddress} (creator payout resolution)`);
-  console.log(`Vault    : ${vaultAddress} (receives the relayer's 50% share of every paid mint)\n`);
+  console.log(`Vault    : ${vaultAddress} (receives the creator 50% only when the creator has no wallet)\n`);
 
   console.log("[1/1] Deploying ANAMemorials...");
   const MemorialsF = await ethers.getContractFactory("ANAMemorials");

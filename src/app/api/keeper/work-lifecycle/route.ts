@@ -1163,6 +1163,7 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
       artworkContent:         work.artworkText,
       workId:                 onChainWorkId,
       creatorProposerTokenId: work.proposedBy,
+      creatorName:            work.proposedByName,
       priceWei:               editionPriceWei,
       publicSupply:           work.memorialPublicSupply ?? 0,
       requesterSupply:        work.memorialRequesterSupply ?? 0,

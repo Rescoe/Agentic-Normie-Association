@@ -365,10 +365,28 @@ export const ANAMemorialsAbi = [
         "type": "uint256"
       },
       {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "creatorProposerTokenId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "creatorName",
+        "type": "string"
+      },
+      {
         "indexed": false,
         "internalType": "address",
         "name": "creatorAddr",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "creatorUsesVault",
+        "type": "bool"
       }
     ],
     "name": "MemorialRegistered",
@@ -399,6 +417,19 @@ export const ANAMemorialsAbi = [
       {
         "indexed": true,
         "internalType": "address",
+        "name": "addr",
+        "type": "address"
+      }
+    ],
+    "name": "RelayerPayoutUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
         "name": "payer",
         "type": "address"
       },
@@ -411,7 +442,13 @@ export const ANAMemorialsAbi = [
       {
         "indexed": false,
         "internalType": "address",
-        "name": "creatorAddr",
+        "name": "relayerPayoutAddr",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "creatorPayoutAddr",
         "type": "address"
       },
       {
@@ -419,6 +456,12 @@ export const ANAMemorialsAbi = [
         "internalType": "uint256",
         "name": "amount",
         "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "usedVaultFallback",
+        "type": "bool"
       }
     ],
     "name": "RequestPaid",
@@ -461,19 +504,19 @@ export const ANAMemorialsAbi = [
       {
         "indexed": false,
         "internalType": "address",
-        "name": "vaultAddr",
+        "name": "relayerPayoutAddr",
         "type": "address"
       },
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "vaultAmt",
+        "name": "relayerAmt",
         "type": "uint256"
       },
       {
         "indexed": false,
         "internalType": "address",
-        "name": "creatorAddr",
+        "name": "creatorPayoutAddr",
         "type": "address"
       },
       {
@@ -481,6 +524,12 @@ export const ANAMemorialsAbi = [
         "internalType": "uint256",
         "name": "creatorAmt",
         "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "usedVaultFallback",
+        "type": "bool"
       }
     ],
     "name": "RevenueSplit",
@@ -782,14 +831,29 @@ export const ANAMemorialsAbi = [
             "type": "string"
           },
           {
+            "internalType": "string",
+            "name": "creatorName",
+            "type": "string"
+          },
+          {
             "internalType": "uint256",
             "name": "workId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "creatorProposerTokenId",
             "type": "uint256"
           },
           {
             "internalType": "address",
             "name": "creatorAddr",
             "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "creatorUsesVault",
+            "type": "bool"
           },
           {
             "internalType": "uint256",
@@ -1049,6 +1113,11 @@ export const ANAMemorialsAbi = [
         "type": "uint256"
       },
       {
+        "internalType": "string",
+        "name": "creatorName",
+        "type": "string"
+      },
+      {
         "internalType": "uint256",
         "name": "priceWei",
         "type": "uint256"
@@ -1088,6 +1157,19 @@ export const ANAMemorialsAbi = [
       }
     ],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "relayerPayoutAddr",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -1217,14 +1299,29 @@ export const ANAMemorialsAbi = [
         "type": "string"
       },
       {
+        "internalType": "string",
+        "name": "creatorName",
+        "type": "string"
+      },
+      {
         "internalType": "uint256",
         "name": "workId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "creatorProposerTokenId",
         "type": "uint256"
       },
       {
         "internalType": "address",
         "name": "creatorAddr",
         "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "creatorUsesVault",
+        "type": "bool"
       },
       {
         "internalType": "uint256",
@@ -1331,6 +1428,19 @@ export const ANAMemorialsAbi = [
       }
     ],
     "name": "setAuthorized",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "addr",
+        "type": "address"
+      }
+    ],
+    "name": "setRelayerPayoutAddr",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

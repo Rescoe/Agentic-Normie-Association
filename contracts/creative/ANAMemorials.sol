@@ -32,12 +32,12 @@ import "../interfaces/IAssociationCore.sol";
  * That shift is the other half of the cost reduction, alongside dropping the
  * per-memorial contract deployment.
  *
- * Revenue on every paid mint splits 50/50 between the relayer's vault (gas
- * reimbursement + safety margin — the association's own words: "maintenir le
- * relayer, pas faire du profit") and the memorial's creator (the ANA member whose
- * persona made the piece), resolved via AssociationCore.getMemberOwner() — the
- * same lookup ANAEditions already uses for author/curator/rapporteur shares,
- * reused here rather than inventing a separate "Normie wallet" concept.
+ * Revenue on every paid mint splits 50/50 between two distinct destinations:
+ * the relayer payout address (gas reimbursement + safety margin) and the
+ * memorial's creator. The creator is resolved via AssociationCore.getMemberOwner();
+ * only when that lookup returns address(0) does the creator half go to the
+ * association vault. Keeping the relayer payout and vault separate is essential:
+ * one is always paid, while the other is only the no-wallet fallback.
  *
  * Scope: burn memorials/celebrations only. ANACollectionFactory, ANAEditions and
  * CelebrationRegistry are untouched and keep working exactly as before for every
@@ -51,8 +51,11 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     struct MemorialSeries {
         string  title;
         string  artworkContent;   // data URI (BMP) — same shape as ANAEditions.artworkContent
+        string  creatorName;      // ERC-8004 agent display name, fixed at registration
         uint256 workId;           // WorkRegistry id honoring this memorial; 0 = not linked
-        address creatorAddr;      // resolved once at registration, never re-resolved
+        uint256 creatorProposerTokenId;
+        address creatorAddr;      // creator wallet resolved once; zero means use vaultAddr
+        bool    creatorUsesVault;
         uint256 priceWei;         // per-edition price, shared by the public and requester pools
         uint256 publicSupply;     // 0 for tier 1 (no public opening)
         uint256 publicMinted;
@@ -68,7 +71,8 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     // ─── State ────────────────────────────────────────────────────────────────
 
     IAssociationCore public immutable core;
-    address public vaultAddr; // relayer's gas-reimbursement + safety-margin destination
+    address public relayerPayoutAddr; // always receives exactly 50% of paid requests/mints
+    address public vaultAddr;         // creator-half fallback only when the agent has no wallet
 
     MemorialSeries[] public series; // memorialId = index into this array
 
@@ -87,14 +91,37 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
-    event MemorialRegistered(uint256 indexed memorialId, string title, uint256 indexed workId, address creatorAddr);
+    event MemorialRegistered(
+        uint256 indexed memorialId,
+        string title,
+        uint256 indexed workId,
+        uint256 indexed creatorProposerTokenId,
+        string creatorName,
+        address creatorAddr,
+        bool creatorUsesVault
+    );
     event ReservedClaimAdded(uint256 indexed memorialId, uint256 indexed burnedTokenId, address indexed recipient);
     event EditionMinted(uint256 indexed memorialId, uint256 indexed tokenId, address indexed to, string pool, uint256 priceWei);
-    event RevenueSplit(uint256 indexed memorialId, address vaultAddr, uint256 vaultAmt, address creatorAddr, uint256 creatorAmt);
+    event RevenueSplit(
+        uint256 indexed memorialId,
+        address relayerPayoutAddr,
+        uint256 relayerAmt,
+        address creatorPayoutAddr,
+        uint256 creatorAmt,
+        bool usedVaultFallback
+    );
     event Tipped(address indexed from, uint256 amount);
-    event RequestPaid(address indexed payer, uint256 indexed creatorProposerTokenId, address creatorAddr, uint256 amount);
+    event RequestPaid(
+        address indexed payer,
+        uint256 indexed creatorProposerTokenId,
+        address relayerPayoutAddr,
+        address creatorPayoutAddr,
+        uint256 amount,
+        bool usedVaultFallback
+    );
     event Withdrawn(address indexed to, uint256 amount);
     event AuthorizationUpdated(address indexed addr, bool status);
+    event RelayerPayoutUpdated(address indexed addr);
     event VaultUpdated(address indexed addr);
     event SeriesPriceUpdated(uint256 indexed memorialId, uint256 newPriceWei);
 
@@ -136,6 +163,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     ) ERC721("ANA Memorials", "ANAMEM") Ownable(initialOwner) {
         if (relayerAddr == address(0) || coreAddr == address(0) || vaultAddr_ == address(0)) revert ZeroAddress();
         core      = IAssociationCore(coreAddr);
+        relayerPayoutAddr = relayerAddr;
         vaultAddr = vaultAddr_;
         authorized[relayerAddr] = true;
         emit AuthorizationUpdated(relayerAddr, true);
@@ -149,17 +177,16 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
      *         moderation), so this single call replaces what used to be a contract
      *         deployment (ANACollectionFactory.createCollection) plus a separate
      *         initialize() call.
-     * @param creatorProposerTokenId The ANA member (Normie) whose persona made the
-     *        piece — resolved to a payout address via AssociationCore.getMemberOwner(),
-     *        falling back to the relayer if that resolves to the zero address (no
-     *        registered wallet), mirroring ANAEditions' existing author-resolution
-     *        pattern exactly.
+     * @param creatorProposerTokenId The ANA member (Normie) whose ERC-8004 persona
+     *        made the piece.
+     * @param creatorName Display name stored in the NFT metadata as the artist.
      */
     function registerMemorial(
         string  calldata title,
         string  calldata artworkContent,
         uint256 workId,
         uint256 creatorProposerTokenId,
+        string  calldata creatorName,
         uint256 priceWei,
         uint256 publicSupply,
         uint256 requesterSupply,
@@ -171,17 +198,17 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         if (requesterSupply > 0 && requesterAddr == address(0)) revert ZeroAddress();
 
         address creatorAddr = core.getMemberOwner(creatorProposerTokenId);
-        // No registered wallet -> the creator's share has nowhere real to go,
-        // so it joins the vault's — never msg.sender, which is just whichever
-        // relayer key happened to sign this call, not a real payee.
-        if (creatorAddr == address(0)) creatorAddr = vaultAddr;
+        bool creatorUsesVault = creatorAddr == address(0);
 
         memorialId = series.length;
         series.push(MemorialSeries({
             title:            title,
             artworkContent:   artworkContent,
+            creatorName:      creatorName,
             workId:           workId,
+            creatorProposerTokenId: creatorProposerTokenId,
             creatorAddr:      creatorAddr,
+            creatorUsesVault: creatorUsesVault,
             priceWei:         priceWei,
             publicSupply:     openEnded ? 0 : publicSupply,
             publicMinted:     0,
@@ -194,7 +221,15 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             initialized:      true
         }));
 
-        emit MemorialRegistered(memorialId, title, workId, creatorAddr);
+        emit MemorialRegistered(
+            memorialId,
+            title,
+            workId,
+            creatorProposerTokenId,
+            creatorName,
+            creatorAddr,
+            creatorUsesVault
+        );
     }
 
     /**
@@ -242,7 +277,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
 
     /**
      * @notice Delivers the requester's reserved edition. Free — the
-     *         requester already paid up front via tip() before the memorial
+     *         requester already paid up front via payForRequest() before the memorial
      *         was even created (see request-memorial/route.ts), so the
      *         relayer is compensated for creation cost regardless of whether
      *         this is ever called. This is one of two differences from the
@@ -282,8 +317,8 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         tokenId = _mintEdition(memorialId, msg.sender, "reserved");
     }
 
-    /// @notice Optional direct tip to the relayer's vault — no edition minted, no split.
-    function tip() external payable {
+    /// @notice Optional donation to the association vault — no edition minted, no split.
+    function tip() external payable nonReentrant {
         if (msg.value == 0) return;
         _sendOrEscrow(vaultAddr, msg.value);
         emit Tipped(msg.sender, msg.value);
@@ -291,10 +326,10 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
 
     /**
      * @notice Pays for a targeted memorial request — BEFORE the memorial
-     *         itself exists. Splits 50/50 immediately between the vault and
-     *         the proposer picked to create the piece, resolved via
+     *         itself exists. Splits 50/50 immediately between the relayer
+     *         payout address and the proposer picked to create the piece, resolved via
      *         AssociationCore.getMemberOwner(creatorProposerTokenId) — same
-     *         resolution and same no-wallet fallback (to the vault) as
+     *         resolution and same no-wallet fallback (creator half to the vault) as
      *         registerMemorial() uses later for public sales. The server
      *         picks the proposer BEFORE prompting this payment specifically
      *         so the split can happen now instead of waiting for the
@@ -306,16 +341,24 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
      *         a request payment always has a specific proposer to share
      *         with, a tip never does.
      */
-    function payForRequest(uint256 creatorProposerTokenId) external payable {
+    function payForRequest(uint256 creatorProposerTokenId) external payable nonReentrant {
         if (msg.value == 0) return;
-        address creatorAddr = core.getMemberOwner(creatorProposerTokenId);
-        if (creatorAddr == address(0)) creatorAddr = vaultAddr;
+        address creatorPayoutAddr = core.getMemberOwner(creatorProposerTokenId);
+        bool usedVaultFallback = creatorPayoutAddr == address(0);
+        if (usedVaultFallback) creatorPayoutAddr = vaultAddr;
 
-        uint256 vaultAmt   = msg.value / 2;
-        uint256 creatorAmt = msg.value - vaultAmt; // odd wei to the creator, same convention as _settlePayment
-        _sendOrEscrow(vaultAddr, vaultAmt);
-        _sendOrEscrow(creatorAddr, creatorAmt);
-        emit RequestPaid(msg.sender, creatorProposerTokenId, creatorAddr, msg.value);
+        uint256 relayerAmt = msg.value / 2;
+        uint256 creatorAmt = msg.value - relayerAmt; // odd wei to the creator, same convention as _settlePayment
+        _sendOrEscrow(relayerPayoutAddr, relayerAmt);
+        _sendOrEscrow(creatorPayoutAddr, creatorAmt);
+        emit RequestPaid(
+            msg.sender,
+            creatorProposerTokenId,
+            relayerPayoutAddr,
+            creatorPayoutAddr,
+            msg.value,
+            usedVaultFallback
+        );
     }
 
     /// @notice Pulls any balance that couldn't be pushed automatically (see _sendOrEscrow).
@@ -341,16 +384,20 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             bytes(s.artworkContent)[3] == 'a' &&
             bytes(s.artworkContent)[4] == ':';
 
+        string memory artist = _artistLabel(s.creatorName, s.creatorProposerTokenId);
         bytes memory attrs = abi.encodePacked(
             '[{"trait_type":"Memorial","value":', seriesOfToken[tokenId].toString(), '},',
-            '{"trait_type":"Work ID","value":', s.workId.toString(), '}]'
+            '{"trait_type":"Work ID","value":', s.workId.toString(), '},',
+            '{"trait_type":"Artist","value":"', _escapeJson(artist), '"},',
+            '{"trait_type":"Artist Agent ID","value":', s.creatorProposerTokenId.toString(), '},',
+            '{"trait_type":"Agent Standard","value":"ERC-8004"}]'
         );
 
-        string memory image = _buildImageDataUri(s.title);
+        string memory image = _buildImageDataUri(s.title, artist, s.artworkContent, isDataUri);
 
         bytes memory json = abi.encodePacked(
             '{"name":"', _escapeJson(s.title), '",',
-            '"description":"ANA burn memorial",',
+            '"description":"ANA burn memorial created by ', _escapeJson(artist), ' (ERC-8004 agent).",',
             '"image":"', image, '",',
             isDataUri ? string(abi.encodePacked('"animation_url":"', s.artworkContent, '",')) : "",
             '"external_url":"https://agentic-normie-association.vercel.app/works",',
@@ -383,6 +430,12 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     function setAuthorized(address addr, bool status) external onlyOwner {
         authorized[addr] = status;
         emit AuthorizationUpdated(addr, status);
+    }
+
+    function setRelayerPayoutAddr(address addr) external onlyOwner {
+        if (addr == address(0)) revert ZeroAddress();
+        relayerPayoutAddr = addr;
+        emit RelayerPayoutUpdated(addr);
     }
 
     function setVaultAddr(address addr) external onlyOwner {
@@ -422,12 +475,20 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     function _settlePayment(uint256 memorialId, uint256 priceWei) internal {
         uint256 excess = msg.value - priceWei;
         if (priceWei > 0) {
-            address creatorAddr = series[memorialId].creatorAddr;
-            uint256 vaultAmt    = priceWei / 2;
-            uint256 creatorAmt  = priceWei - vaultAmt; // odd wei goes to the creator
-            _sendOrEscrow(vaultAddr,   vaultAmt);
-            _sendOrEscrow(creatorAddr, creatorAmt);
-            emit RevenueSplit(memorialId, vaultAddr, vaultAmt, creatorAddr, creatorAmt);
+            MemorialSeries storage s = series[memorialId];
+            address creatorPayoutAddr = s.creatorUsesVault ? vaultAddr : s.creatorAddr;
+            uint256 relayerAmt = priceWei / 2;
+            uint256 creatorAmt = priceWei - relayerAmt; // odd wei goes to the creator
+            _sendOrEscrow(relayerPayoutAddr, relayerAmt);
+            _sendOrEscrow(creatorPayoutAddr, creatorAmt);
+            emit RevenueSplit(
+                memorialId,
+                relayerPayoutAddr,
+                relayerAmt,
+                creatorPayoutAddr,
+                creatorAmt,
+                s.creatorUsesVault
+            );
         }
         if (excess > 0) {
             (bool ok, ) = payable(msg.sender).call{value: excess}("");
@@ -450,14 +511,33 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         if (!ok) pendingWithdrawals[to] += amount;
     }
 
-    function _buildImageDataUri(string memory title) internal pure returns (string memory) {
+    function _artistLabel(string memory creatorName, uint256 creatorProposerTokenId) internal pure returns (string memory) {
+        if (bytes(creatorName).length == 0) {
+            return string(abi.encodePacked("Normie #", creatorProposerTokenId.toString()));
+        }
+        return string(abi.encodePacked(creatorName, " (Normie #", creatorProposerTokenId.toString(), ")"));
+    }
+
+    function _buildImageDataUri(
+        string memory title,
+        string memory artist,
+        string memory artworkContent,
+        bool hasArtworkDataUri
+    ) internal pure returns (string memory) {
         bytes memory svg = abi.encodePacked(
             '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">',
             '<rect width="800" height="800" fill="#0A0A0A"/>',
-            '<rect x="24" y="24" width="752" height="752" fill="none" stroke="#262626" stroke-width="2"/>',
-            '<text x="400" y="380" font-family="monospace" font-size="30" fill="#E2E8F0" text-anchor="middle">', _escapeXml(title), '</text>',
-            '<text x="400" y="426" font-family="monospace" font-size="16" fill="#94A3B8" text-anchor="middle">ANA Memorial</text>',
-            '<text x="400" y="760" font-family="monospace" font-size="12" fill="#52525B" text-anchor="middle">agentic-normie-association.vercel.app</text>',
+            hasArtworkDataUri
+                ? string(abi.encodePacked(
+                    '<image x="0" y="0" width="800" height="800" preserveAspectRatio="xMidYMid meet" href="',
+                    _escapeXml(artworkContent),
+                    '"/>'
+                ))
+                : '',
+            '<rect x="0" y="610" width="800" height="190" fill="#000" fill-opacity="0.82"/>',
+            '<text x="400" y="670" font-family="monospace" font-size="28" font-weight="700" fill="#FFF" text-anchor="middle">', _escapeXml(title), '</text>',
+            '<text x="400" y="715" font-family="monospace" font-size="17" fill="#E2E8F0" text-anchor="middle">by ', _escapeXml(artist), '</text>',
+            '<text x="400" y="754" font-family="monospace" font-size="14" fill="#94A3B8" text-anchor="middle">ANA Memorial - ERC-8004</text>',
             '</svg>'
         );
         return string(abi.encodePacked("data:image/svg+xml;base64,", Base64.encode(svg)));

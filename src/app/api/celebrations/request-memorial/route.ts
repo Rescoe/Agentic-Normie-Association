@@ -74,8 +74,10 @@ async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?:
 type RequestPaidArgs = {
   payer: `0x${string}`;
   creatorProposerTokenId: bigint;
-  creatorAddr: `0x${string}`;
+  relayerPayoutAddr: `0x${string}`;
+  creatorPayoutAddr: `0x${string}`;
   amount: bigint;
+  usedVaultFallback: boolean;
 };
 
 /**
