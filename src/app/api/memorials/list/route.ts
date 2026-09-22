@@ -23,6 +23,7 @@ const client = createPublicClient({
 
 export interface MemorialListItem {
   memorialId:       number;
+  workAnaId?:       string; // ANAWork id — links to the dedicated /galerie/celebrations/[id] page
   title:            string;
   cartelText?:      string;
   artworkText?:     string; // BMP data URI, from the matching ANAWork
@@ -79,6 +80,7 @@ export async function GET() {
 
         return {
           memorialId,
+          workAnaId:        work?.id,
           title:            series.title,
           cartelText:       work?.cartelText,
           artworkText:      work?.artworkText,

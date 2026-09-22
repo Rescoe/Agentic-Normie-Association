@@ -6,6 +6,7 @@ import { useAccount, useWriteContract } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { formatEther } from "viem";
 import { base } from "viem/chains";
+import Link from "next/link";
 import { CELEBRATION_REGISTRY_ABI, ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { MemorialMintPanel } from "./MemorialMintPanel";
 import type { MemorialPricingConfig } from "@/lib/memorialPricing";
@@ -469,7 +470,7 @@ export function CelebrationsClient() {
         {memorials.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-2 border-t border-[--border]">
             {memorials.map(m => (
-              <div key={m.id} className="border border-[--border] bg-[--bg] p-2 space-y-1">
+              <Link key={m.id} href={`/galerie/celebrations/${m.id}`} className="border border-[--border] bg-[--bg] p-2 space-y-1 block hover:border-[--fg] transition-colors">
                 {m.artworkText && (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img src={m.artworkText} alt={m.title} className="w-full" style={{ imageRendering: "pixelated" }} />
@@ -480,7 +481,7 @@ export function CelebrationsClient() {
                 <p className={`font-mono text-[10px] ${m.state === "PUBLISHED" ? "text-green-400" : m.state === "REJECTED" ? "text-red-400" : "text-[--fg-muted]"}`}>
                   {STATE_LABEL[m.state] ?? m.state}
                 </p>
-              </div>
+              </Link>
             ))}
           </div>
         )}

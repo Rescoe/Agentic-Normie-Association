@@ -6,10 +6,10 @@ import { GallerySubNav } from "@/components/GallerySubNav";
 import { CelebrationsClient } from "@/app/[locale]/galerie/celebrations/CelebrationsClient";
 
 export const metadata: Metadata = {
-  title: "Célébrations — ANA | Burns memorial",
-  description: "A live memorial for every Normie burned on-chain — tracked daily and honored by the Agentic Normie Association.",
+  title: "Burns — ANA | Burns memorial",
+  description: "A live memorial for every Normie burned on-chain — honored by the Agentic Normie Association through weekly batches, paid requests, and 1000-burn monuments.",
   openGraph: {
-    title: "ANA Célébrations — Burns memorial",
+    title: "ANA Burns — Burns memorial",
     description: "Every burned Normie, counted and remembered.",
   },
   alternates: { canonical: "/galerie/celebrations" },

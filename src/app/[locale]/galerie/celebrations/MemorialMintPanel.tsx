@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useAccount, useWriteContract } from "wagmi";
+import { useAccount } from "wagmi";
 import { formatEther } from "viem";
-import { base } from "viem/chains";
+import Link from "next/link";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { ANA_MEMORIALS_ABI } from "@/lib/contracts";
 import type { MemorialListItem } from "@/app/api/memorials/list/route";
+import { useMemorialMint } from "./useMemorialMint";
 
 /**
  * Lets the connected wallet mint/claim editions from the shared ANAMemorials
@@ -26,12 +26,9 @@ import type { MemorialListItem } from "@/app/api/memorials/list/route";
  */
 export function MemorialMintPanel() {
   const { address } = useAccount();
-  const { writeContractAsync } = useWriteContract();
   const [contractAddress, setContractAddress] = useState<string>("");
   const [items, setItems] = useState<MemorialListItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -47,51 +44,10 @@ export function MemorialMintPanel() {
 
   useEffect(() => { load(); }, [load]);
 
+  const { mint, pendingKey, error } = useMemorialMint(contractAddress, load);
+
   if (loading) return null;
   if (items.length === 0) return null;
-
-  async function handleMint(
-    memorialId: number,
-    action:
-      | { fn: "claimFree"; burnedTokenId: number }
-      | { fn: "mintRequester" }
-      | { fn: "mintPublic"; priceWei: string },
-  ) {
-    const key = `${memorialId}-${action.fn}`;
-    setPendingKey(key);
-    setError(null);
-    try {
-      const address = contractAddress as `0x${string}`;
-      if (action.fn === "claimFree") {
-        await writeContractAsync({
-          address, abi: ANA_MEMORIALS_ABI, functionName: "claimFree",
-          args: [BigInt(memorialId), BigInt(action.burnedTokenId)],
-          chainId: base.id,
-        });
-      } else if (action.fn === "mintRequester") {
-        // Free — the requester already paid via payForRequest() at request
-        // time (see request-memorial/route.ts) — mintRequester() is
-        // non-payable now.
-        await writeContractAsync({
-          address, abi: ANA_MEMORIALS_ABI, functionName: "mintRequester",
-          args: [BigInt(memorialId)],
-          chainId: base.id,
-        });
-      } else {
-        await writeContractAsync({
-          address, abi: ANA_MEMORIALS_ABI, functionName: "mintPublic",
-          args: [BigInt(memorialId)], value: BigInt(action.priceWei),
-          chainId: base.id,
-        });
-      }
-      load(); // refresh pool counts / claimed flags
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg.includes("User rejected") ? "Transaction cancelled." : "Transaction failed.");
-    } finally {
-      setPendingKey(null);
-    }
-  }
 
   return (
     <div className="border border-[--border] bg-[--bg-card] p-6 space-y-4">
@@ -124,7 +80,13 @@ export function MemorialMintPanel() {
                 <img src={item.artworkText} alt={item.title} className="w-full sm:w-32 shrink-0" style={{ imageRendering: "pixelated" }} />
               )}
               <div className="space-y-2 flex-1 min-w-0">
-                <p className="font-bold text-sm truncate" title={item.title}>{item.title}</p>
+                {item.workAnaId ? (
+                  <Link href={`/galerie/celebrations/${item.workAnaId}`} className="font-bold text-sm truncate block hover:underline" title={item.title}>
+                    {item.title}
+                  </Link>
+                ) : (
+                  <p className="font-bold text-sm truncate" title={item.title}>{item.title}</p>
+                )}
                 {item.cartelText && <p className="font-mono text-[10px] text-[--fg-muted] italic">{item.cartelText}</p>}
                 <p className="font-mono text-[10px] text-[--fg-muted]">
                   {item.publicSupply > 0 && !item.openEnded && `${item.publicMinted}/${item.publicSupply} public editions · `}
@@ -135,7 +97,7 @@ export function MemorialMintPanel() {
                 <div className="flex flex-wrap gap-2">
                   {myReserved && (
                     <button
-                      onClick={() => void handleMint(item.memorialId, { fn: "claimFree", burnedTokenId: myReserved.tokenId })}
+                      onClick={() => void mint(item.memorialId, { fn: "claimFree", burnedTokenId: myReserved.tokenId })}
                       disabled={pendingKey === `${item.memorialId}-claimFree`}
                       className="font-mono text-[10px] border border-green-400 text-green-400 px-2 py-1 hover:bg-green-400/10 disabled:opacity-50 disabled:cursor-wait"
                     >
@@ -144,7 +106,7 @@ export function MemorialMintPanel() {
                   )}
                   {isRequester && (
                     <button
-                      onClick={() => void handleMint(item.memorialId, { fn: "mintRequester" })}
+                      onClick={() => void mint(item.memorialId, { fn: "mintRequester" })}
                       disabled={pendingKey === `${item.memorialId}-mintRequester`}
                       className="font-mono text-[10px] border border-[--fg] px-2 py-1 hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait"
                     >
@@ -153,12 +115,20 @@ export function MemorialMintPanel() {
                   )}
                   {publicAvailable && (
                     <button
-                      onClick={() => void handleMint(item.memorialId, { fn: "mintPublic", priceWei: item.priceWei })}
+                      onClick={() => void mint(item.memorialId, { fn: "mintPublic", priceWei: item.priceWei })}
                       disabled={pendingKey === `${item.memorialId}-mintPublic` || !address}
                       className="font-mono text-[10px] border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors disabled:opacity-50 disabled:cursor-wait"
                     >
                       {pendingKey === `${item.memorialId}-mintPublic` ? "…" : `Buy an edition (${priceEth} ETH)`}
                     </button>
+                  )}
+                  {item.workAnaId && (
+                    <Link
+                      href={`/galerie/celebrations/${item.workAnaId}`}
+                      className="font-mono text-[10px] border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors"
+                    >
+                      View details →
+                    </Link>
                   )}
                 </div>
               </div>
