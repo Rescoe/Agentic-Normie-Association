@@ -354,6 +354,27 @@ describe("ANAMemorials", function () {
       const { memorials } = await deployFixture();
       await expect(memorials.tokenURI(0)).to.be.revertedWithCustomError(memorials, "TokenDoesNotExist");
     });
+
+    it("embeds a raw SVG <g> fragment via a nested <svg>, not <image href>, when artworkContent isn't a data URI", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const svgFragment = '<g fill="#000" shape-rendering="crispEdges"><rect x="10" y="10" width="20" height="20"/></g>';
+      const tx = await memorials.connect(relayer).registerMemorial(
+        "Vector piece", svgFragment, 0, PROPOSER_TOKEN_ID, "Zephyr", 0, 1, 0, ethers.ZeroAddress, false, 0,
+      );
+      const receipt = await tx.wait();
+      const id = (receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "MemorialRegistered"))!.args.memorialId as bigint;
+      await memorials.connect(buyer1).mintPublic(id);
+
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
+      expect(svg).to.include(svgFragment);
+      expect(svg).to.include('viewBox="0 0 264 176"');
+      expect(svg).to.not.include("<image");
+      // No animation_url for a raw fragment — it isn't a standalone renderable resource.
+      expect(metadata.animation_url).to.equal(undefined);
+    });
   });
 
   describe("tip", function () {

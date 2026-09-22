@@ -29,7 +29,7 @@ import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
-import { pixelsToBmpDataUri } from "@/lib/pixelImage";
+import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
 
 const MODEL        = "openai/gpt-oss-120b";
 // Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
@@ -1158,9 +1158,19 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
   let onChainMemorialId = work.onChainMemorialId;
   if (onChainMemorialId == null) {
     const editionPriceWei = work.editionPrice ? parseEther(work.editionPrice) : 0n;
+    // Re-derive from the raw pixels (drawPixels/drawCanvasW/drawCanvasH, set
+    // at creation time) rather than reusing work.artworkText's BMP directly —
+    // encodeArtworkContent() picks whichever of BMP or the RLE/SVG fragment
+    // is smaller for THIS composition, never worse than the BMP-only cost,
+    // often several times cheaper (see pixelImage.ts). Falls back to the
+    // already-computed BMP if drawPixels is somehow missing (older/stuck
+    // works predating this field) rather than failing PUBLISHING outright.
+    const artworkContent = (work.drawPixels && work.drawCanvasW && work.drawCanvasH)
+      ? encodeArtworkContent(new Uint8Array(Buffer.from(work.drawPixels, "base64")), work.drawCanvasW, work.drawCanvasH)
+      : work.artworkText;
     const registerResult = await registerMemorialOnChain({
       title:                  work.title,
-      artworkContent:         work.artworkText,
+      artworkContent,
       workId:                 onChainWorkId,
       creatorProposerTokenId: work.proposedBy,
       creatorName:            work.proposedByName,

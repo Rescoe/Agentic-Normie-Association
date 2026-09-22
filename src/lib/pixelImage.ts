@@ -68,3 +68,86 @@ export function pixelsToBmpDataUri(pixels: Uint8Array, width: number, height: nu
 
   return `data:image/bmp;base64,${buf.toString("base64")}`;
 }
+
+/**
+ * Losslessly encodes a 1-bit pixel buffer (same 0=black/255=white
+ * convention as pixelsToBmpDataUri) as a compact SVG markup fragment — one
+ * <rect> per maximal axis-aligned run of black pixels, with horizontal runs
+ * merged vertically across rows that repeat the exact same [x, width]
+ * unchanged. Produces the identical visual result as the BMP encoder at any
+ * scale (shape-rendering="crispEdges" keeps the hard pixel-art edges, no
+ * anti-aliasing/smoothing), but pays only for what's actually drawn instead
+ * of for every pixel of blank canvas — a plain-filled shape on an otherwise
+ * empty canvas collapses to a single <rect>, matching one SSTORE-cheap
+ * string instead of ~6.4KB of raw 1bpp bitmap regardless of composition.
+ *
+ * Returns a raw markup fragment (a <g> of <rect>s), not a data URI or a
+ * standalone <svg> — meant to be spliced directly inside a nested <svg
+ * viewBox="0 0 width height"> by the caller (ANAMemorials.sol's
+ * tokenURI()), not wrapped in an <image href="..."> the way the BMP data
+ * URI is. Only ever called with pixels this codebase generated itself
+ * (memorialArt.ts's rasterize() output) — never with untrusted input, same
+ * trust boundary as the title/cartel text passed alongside it.
+ */
+export function pixelsToRunLengthSvg(pixels: Uint8Array, width: number, height: number): string {
+  type OpenRect = { x: number; w: number; yStart: number };
+  type Run = { x: number; w: number };
+
+  let active: OpenRect[] = [];
+  const rects: string[] = [];
+
+  const closeRect = (r: OpenRect, yEnd: number) => {
+    rects.push(`<rect x="${r.x}" y="${r.yStart}" width="${r.w}" height="${yEnd - r.yStart}"/>`);
+  };
+
+  for (let y = 0; y < height; y++) {
+    const runs: Run[] = [];
+    let x = 0;
+    while (x < width) {
+      if ((pixels[y * width + x] ?? 255) < 128) {
+        const start = x;
+        while (x < width && (pixels[y * width + x] ?? 255) < 128) x++;
+        runs.push({ x: start, w: x - start });
+      } else {
+        x++;
+      }
+    }
+
+    const usedRun = new Set<number>();
+    const stillActive: OpenRect[] = [];
+    for (const r of active) {
+      const idx = runs.findIndex((run, i) => !usedRun.has(i) && run.x === r.x && run.w === r.w);
+      if (idx >= 0) { usedRun.add(idx); stillActive.push(r); } // unchanged run — keep extending
+      else          { closeRect(r, y); }                       // this run ended before this row
+    }
+    runs.forEach((run, i) => {
+      if (!usedRun.has(i)) stillActive.push({ x: run.x, w: run.w, yStart: y });
+    });
+    active = stillActive;
+  }
+  for (const r of active) closeRect(r, height);
+
+  return `<g fill="#000" shape-rendering="crispEdges">${rects.join("")}</g>`;
+}
+
+/**
+ * Picks whichever of the two lossless encodings is smaller for this specific
+ * composition, and returns it alongside which one was picked (ANAMemorials.sol's
+ * tokenURI() tells them apart by whether the string starts with "data:" —
+ * BMP data URI vs raw SVG <g> fragment — see that contract's _buildImageDataUri()).
+ *
+ * The RLE/SVG encoder wins for the common case this generator is tuned for
+ * ("a few deliberate, well-placed forms" per memorialArt.ts's own prompt) —
+ * often 2-4x smaller. But it has a real pathological case: dense, high-entropy
+ * regions (heavy use of the "dots" primitive over a large area) can produce
+ * far MORE bytes than the fixed-cost BMP, since noise doesn't collapse into
+ * runs. Rather than restrict what the LLM is allowed to compose, this just
+ * measures both and keeps the cheaper one — on-chain storage cost is then
+ * bounded by "never worse than today's BMP", with no cap on composition
+ * richness.
+ */
+export function encodeArtworkContent(pixels: Uint8Array, width: number, height: number): string {
+  const svg = pixelsToRunLengthSvg(pixels, width, height);
+  const bmp = pixelsToBmpDataUri(pixels, width, height);
+  return svg.length < bmp.length ? svg : bmp;
+}

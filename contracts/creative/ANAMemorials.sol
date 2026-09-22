@@ -50,7 +50,14 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
 
     struct MemorialSeries {
         string  title;
-        string  artworkContent;   // data URI (BMP) — same shape as ANAEditions.artworkContent
+        // Either a "data:image/bmp;base64,..." data URI (embedded via <image
+        // href>) or a raw SVG <g> fragment of <rect>s (spliced directly into
+        // a nested <svg>) — tokenURI() tells them apart by the "data:" prefix.
+        // Whichever encoding pixelImage.ts's encodeArtworkContent() picked as
+        // smaller for this composition; both are lossless, pixel-identical
+        // renderings of the same artwork. Relayer-only input (onlyAuthorized),
+        // same trust level as title/pricing — never sanitized as if untrusted.
+        string  artworkContent;
         string  creatorName;      // ERC-8004 agent display name, fixed at registration
         uint256 workId;           // WorkRegistry id honoring this memorial; 0 = not linked
         uint256 creatorProposerTokenId;
@@ -522,18 +529,29 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         string memory title,
         string memory artist,
         string memory artworkContent,
-        bool hasArtworkDataUri
+        bool isDataUri
     ) internal pure returns (string memory) {
+        // A data URI (BMP) embeds via <image href>. A raw SVG <g> fragment
+        // (pixelImage.ts's pixelsToRunLengthSvg()) is spliced directly into a
+        // nested <svg> instead — its own viewBox maps the native 264x176
+        // pixel grid onto the 800x800 canvas, no base64/data-URI wrapping
+        // needed since it's already markup, not an opaque binary resource.
+        bytes memory artwork = isDataUri
+            ? abi.encodePacked(
+                '<image x="0" y="0" width="800" height="800" preserveAspectRatio="xMidYMid meet" href="',
+                _escapeXml(artworkContent),
+                '"/>'
+            )
+            : abi.encodePacked(
+                '<svg x="0" y="0" width="800" height="800" viewBox="0 0 264 176" preserveAspectRatio="xMidYMid meet">',
+                artworkContent,
+                '</svg>'
+            );
+
         bytes memory svg = abi.encodePacked(
             '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">',
             '<rect width="800" height="800" fill="#0A0A0A"/>',
-            hasArtworkDataUri
-                ? string(abi.encodePacked(
-                    '<image x="0" y="0" width="800" height="800" preserveAspectRatio="xMidYMid meet" href="',
-                    _escapeXml(artworkContent),
-                    '"/>'
-                ))
-                : '',
+            artwork,
             '<rect x="0" y="610" width="800" height="190" fill="#000" fill-opacity="0.82"/>',
             '<text x="400" y="670" font-family="monospace" font-size="28" font-weight="700" fill="#FFF" text-anchor="middle">', _escapeXml(title), '</text>',
             '<text x="400" y="715" font-family="monospace" font-size="17" fill="#E2E8F0" text-anchor="middle">by ', _escapeXml(artist), '</text>',
