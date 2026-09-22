@@ -392,8 +392,11 @@ async function maybeGenerateWorkProposal(
   topic:         string,
   isUserStim:    boolean,
 ): Promise<{ id: string; title: string } | null> {
-  // Don't start a new work if one is already active
-  const [active, allWorks] = await Promise.all([getActiveWorks(), listWorks()]);
+  // Don't start a new work if one is already active — but a burn memorial
+  // (now running continuously via its own weekly/monthly cron) is a
+  // different track entirely and shouldn't silently starve spontaneous
+  // creative proposals just by being in flight.
+  const [active, allWorks] = await Promise.all([getActiveWorks({ excludeMemorials: true }), listWorks()]);
   if (active.length > 0) return null;
 
   // Base rate: Normies talking among themselves → 15% per tick (they have a rich
