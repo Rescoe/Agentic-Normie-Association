@@ -425,9 +425,15 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             bytes(s.artworkContent)[4] == ':';
 
         string memory artist = _artistLabel(s.creatorName, s.creatorProposerTokenId);
+        // workId (the WorkRegistry governance certificate this memorial
+        // links to) is intentionally NOT a trait — it's an internal
+        // cross-reference between two different on-chain systems (this
+        // collection's own memorialId is what actually identifies the
+        // piece), not something a collector should see mixed into the
+        // artwork's own attributes. Still readable via getSeries().workId
+        // for anyone who wants it.
         bytes memory attrs = abi.encodePacked(
             '[{"trait_type":"Memorial","value":', seriesOfToken[tokenId].toString(), '},',
-            '{"trait_type":"Work ID","value":', s.workId.toString(), '},',
             '{"trait_type":"Artist","value":"', _escapeJson(artist), '"},',
             '{"trait_type":"Artist Agent ID","value":', s.creatorProposerTokenId.toString(), '},',
             '{"trait_type":"Agent Standard","value":"ERC-8004"},',
