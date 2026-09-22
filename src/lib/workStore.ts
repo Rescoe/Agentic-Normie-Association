@@ -150,8 +150,16 @@ export interface ANAWork {
   // deployCollection/publish/initialize rails (workPublisher.ts) — the two
   // coexist indefinitely, discriminated by this field's presence.
   burnedTokenIds?:          number[]; // plural — a batch honors several; burnedTokenId (singular) kept for display
-  memorialKind?:            "batch" | "requested";
+  memorialKind?:            "batch" | "requested" | "milestone";
   memorialTier?:            1 | 2 | 3; // "requested" only
+  // "milestone" only — a collective monument for every burn ANA has honored
+  // up to a 1000-burn threshold (see milestone-memorial/route.ts). burnedTokenIds
+  // on a milestone work is only a small representative sample (personas/flavor
+  // for the LLM prompt) — memorialTotalBurnedAtMilestone is the true count the
+  // piece actually honors, and memorialMilestoneNumber which threshold this is
+  // (1 = first 1000 burns, 2 = first 2000, ...), used to gate re-triggering.
+  memorialMilestoneNumber?:          number;
+  memorialTotalBurnedAtMilestone?:   number;
   memorialPublicSupply?:    number;
   memorialRequesterSupply?: number;
   memorialRequesterAddr?:   string;

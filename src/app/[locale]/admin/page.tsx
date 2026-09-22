@@ -1904,6 +1904,52 @@ function BurnCheckSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeader
   );
 }
 
+// ─── MilestoneMemorialSection ──────────────────────────────────────────────
+
+function MilestoneMemorialSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
+  const [running, setRunning] = useState(false);
+  const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const run = async () => {
+    setRunning(true); setResult(null); setError(null);
+    try {
+      const r = await fetch("/api/keeper/milestone-memorial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) setError((d.error as string) ?? `HTTP ${r.status}`);
+      else setResult(d);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setRunning(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={run}
+        disabled={running}
+        className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
+      >
+        {running ? "Création…" : "🗿 Créer le prochain monument (palier 1000)"}
+      </button>
+      {error && <p className="font-mono text-xs text-red-600">{error}</p>}
+      {result && (
+        <div className="border border-[--border] bg-[--bg-card] px-4 py-3 space-y-1">
+          <p className="font-mono text-xs font-bold">
+            Palier {String(result.milestoneNumber)} — {String(result.totalBurnedHonored)} Normies honorés
+          </p>
+          <p className="font-mono text-xs text-[--fg-muted]">
+            Œuvre {String(result.workId)} — vote en cours. Total burns actuel : {String(result.totalBurnedNow)}. Prochain palier disponible à {String(result.nextMilestoneAvailableAt)}.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DevNeedsSection — human-intervention needs flagged by Normies ────────────
 
 interface DevNeedRow {
@@ -2551,6 +2597,19 @@ export default function AdminPage() {
               </p>
             </div>
             <BurnCheckSection getAdminHeaders={getAdminHeaders} />
+          </section>
+
+          {/* ── Monument commémoratif (palier de 1000 burns) ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Monument commémoratif</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Crée un mémorial collectif pour le prochain palier de 1000 burns atteint (un monument par palier, jamais réutilisé).
+                Composition volontairement maximale — sert à tester le rendu le plus complexe possible sur plusieurs écrans physiques à la fois.
+                Ne réserve aucun claim gratuit individuel (contrairement au lot hebdomadaire) — juste un petit pool public fixe pour tester le mint.
+              </p>
+            </div>
+            <MilestoneMemorialSection getAdminHeaders={getAdminHeaders} />
           </section>
 
           {/* ── Salon exchange keeper ── */}

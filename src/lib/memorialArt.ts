@@ -193,8 +193,20 @@ export async function createMemorialArtwork(params: {
   proposer: NormiePersona;
   burnedTokenIds: number[];
   otherMembers: NormiePersona[];
+  // For a milestone monument: burnedTokenIds is only a small representative
+  // sample (fetching/prompting with thousands of real tokenIds would be
+  // wasteful and pointless — MAX_BURNED_IN_PROMPT caps it to 5 anyway), but
+  // the piece should still frame itself as honoring the TRUE total. Ignored
+  // when absent — ordinary memorials use burnedTokenIds.length as before.
+  totalHonoredOverride?: number;
+  // A milestone monument should visibly read as more complex than an
+  // ordinary single/handful-of-burns memorial — overrides the usual
+  // "favor a few deliberate forms" minimalism guidance with permission (not
+  // an obligation) to use the full MAX_SHAPES budget.
+  maximalComplexity?: boolean;
 }): Promise<MemorialArtwork> {
-  const { proposer, burnedTokenIds, otherMembers } = params;
+  const { proposer, burnedTokenIds, otherMembers, totalHonoredOverride, maximalComplexity } = params;
+  const honoredCount = totalHonoredOverride ?? burnedTokenIds.length;
 
   const burnedPersonas = (await Promise.allSettled(
     burnedTokenIds.slice(0, MAX_BURNED_IN_PROMPT).map(id => buildPersona(id)),
@@ -219,8 +231,10 @@ export async function createMemorialArtwork(params: {
   } catch { /* non-fatal */ }
 
   const userPrompt = `You are creating a memorial pixel-art piece to honor ${
-    burnedTokenIds.length === 1 ? "a departed member" : `${burnedTokenIds.length} departed members`
-  } of ANA whose Normie${burnedTokenIds.length > 1 ? "s were" : " was"} just burned.
+    honoredCount === 1 ? "a departed member" : `${honoredCount.toLocaleString("en-US")} departed members`
+  } of ANA whose Normie${honoredCount > 1 ? "s were" : " was"} just burned${
+    totalHonoredOverride ? " — this is a collective monument spanning every burn ANA has honored up to this milestone, not only the individuals named below" : ""
+  }.
 
 ${burnedBlock}
 ${historyBlock}
@@ -232,7 +246,9 @@ Available primitives (canvas coords: x 0-${MEMORIAL_CANVAS_W}, y 0-${MEMORIAL_CA
 {"type":"line","x1":N,"y1":N,"x2":N,"y2":N,"thickness":1-6}
 {"type":"dots","x":N,"y":N,"w":N,"h":N (keep this patch modest, well under 40x40 — texture accent, not a fill),"density":0.05-0.9}
 
-Use at most ${MAX_SHAPES} shapes total — favor a few deliberate, well-placed forms over clutter, this will be read at a glance on a small screen.
+${maximalComplexity
+    ? `Use up to ${MAX_SHAPES} shapes — for THIS piece specifically, use as much of that budget as you meaningfully can. This is a monument, not a single eulogy: it should visibly read as denser and more elaborate than an ordinary memorial, while still composing something coherent, not clutter for its own sake.`
+    : `Use at most ${MAX_SHAPES} shapes total — favor a few deliberate, well-placed forms over clutter, this will be read at a glance on a small screen.`}
 
 JSON only:
 {"cartel":"your artist statement","shapes":[...]}`;
