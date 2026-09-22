@@ -435,7 +435,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             '{"trait_type":"Normies Honored","value":', s.honoredBurnCount.toString(), '}]'
         );
 
-        string memory image = _buildImageDataUri(s.title, artist, s.artworkContent, isDataUri);
+        string memory image = _buildImageDataUri(s.artworkContent, isDataUri);
 
         bytes memory json = abi.encodePacked(
             '{"name":"', _escapeJson(s.title), '",',
@@ -561,18 +561,27 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         return string(abi.encodePacked(creatorName, " (Normie #", creatorProposerTokenId.toString(), ")"));
     }
 
+    /**
+     * @notice Renders ONLY the artwork — no title/artist text burned into the
+     *         image itself (those stay metadata-only: tokenURI()'s own
+     *         "name"/"description"/"attributes" fields). A marketplace showing
+     *         this image is showing the actual piece, not a captioned card.
+     *
+     *         Both paths need an explicit white background: a BMP data URI's
+     *         own aspect ratio (528:352) doesn't match the outer 800x800
+     *         canvas, so preserveAspectRatio="xMidYMid meet" letterboxes it —
+     *         without a rect behind it, those margins show whatever's behind
+     *         them. A raw SVG <g> fragment (pixelsToRunLengthSvg()) is worse
+     *         without one: it only ever contains <rect>s for BLACK pixels — a
+     *         "white" pixel isn't drawn at all, it's transparent, so the
+     *         entire background (not just the letterbox margins) would show
+     *         through as whatever's behind it. Both cases are fixed the same
+     *         way: paint white first, then the artwork on top.
+     */
     function _buildImageDataUri(
-        string memory title,
-        string memory artist,
         string memory artworkContent,
         bool isDataUri
     ) internal pure returns (string memory) {
-        // A data URI (BMP) embeds via <image href>. A raw SVG <g> fragment
-        // (pixelImage.ts's pixelsToRunLengthSvg()) is spliced directly into a
-        // nested <svg> instead — its own viewBox maps the native
-        // ARTWORK_CANVAS_W x ARTWORK_CANVAS_H pixel grid onto the 800x800
-        // canvas, no base64/data-URI wrapping needed since it's already
-        // markup, not an opaque binary resource.
         bytes memory artwork = isDataUri
             ? abi.encodePacked(
                 '<image x="0" y="0" width="800" height="800" preserveAspectRatio="xMidYMid meet" href="',
@@ -583,18 +592,15 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
                 '<svg x="0" y="0" width="800" height="800" viewBox="0 0 ',
                 ARTWORK_CANVAS_W.toString(), ' ', ARTWORK_CANVAS_H.toString(),
                 '" preserveAspectRatio="xMidYMid meet">',
+                '<rect width="', ARTWORK_CANVAS_W.toString(), '" height="', ARTWORK_CANVAS_H.toString(), '" fill="#ffffff"/>',
                 artworkContent,
                 '</svg>'
             );
 
         bytes memory svg = abi.encodePacked(
             '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">',
-            '<rect width="800" height="800" fill="#0A0A0A"/>',
+            '<rect width="800" height="800" fill="#ffffff"/>',
             artwork,
-            '<rect x="0" y="610" width="800" height="190" fill="#000" fill-opacity="0.82"/>',
-            '<text x="400" y="670" font-family="monospace" font-size="28" font-weight="700" fill="#FFF" text-anchor="middle">', _escapeXml(title), '</text>',
-            '<text x="400" y="715" font-family="monospace" font-size="17" fill="#E2E8F0" text-anchor="middle">by ', _escapeXml(artist), '</text>',
-            '<text x="400" y="754" font-family="monospace" font-size="14" fill="#94A3B8" text-anchor="middle">ANA Memorial - ERC-8004</text>',
             '</svg>'
         );
         return string(abi.encodePacked("data:image/svg+xml;base64,", Base64.encode(svg)));

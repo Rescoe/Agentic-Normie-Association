@@ -374,7 +374,15 @@ describe("ANAMemorials", function () {
       expect(attrs).to.deep.include({ trait_type: "Normies Honored", value: 2 });
       const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
       expect(svg).to.include('href="data:image/bmp;base64,QQ=="');
-      expect(svg).to.include("Eulogy for 2 absences");
+      // Title/artist are metadata-only (name/description/attributes above) —
+      // never burned into the image itself, and no title/artist text should
+      // appear inside the rendered SVG at all.
+      expect(svg).to.not.include("Eulogy for 2 absences");
+      expect(svg).to.not.include("Zephyr");
+      // A BMP letterboxed into the 800x800 canvas needs an explicit white
+      // background behind it, or the unfilled margins show through as
+      // whatever's behind them instead of white.
+      expect(svg).to.include('<rect width="800" height="800" fill="#ffffff"/>');
     });
 
     it("reverts for a token that was never minted", async () => {
@@ -418,6 +426,10 @@ describe("ANAMemorials", function () {
       expect(svg).to.include(svgFragment);
       expect(svg).to.include('viewBox="0 0 528 352"'); // must match memorialArt.ts's MEMORIAL_CANVAS_W/H
       expect(svg).to.not.include("<image");
+      // A raw <g> fragment only ever draws BLACK pixels — without an explicit
+      // white rect behind it, "white" areas are transparent, not white (they'd
+      // show through as the outer canvas's own background instead).
+      expect(svg).to.include('<rect width="528" height="352" fill="#ffffff"/>');
       // No animation_url for a raw fragment — it isn't a standalone renderable resource.
       expect(metadata.animation_url).to.equal(undefined);
     });
