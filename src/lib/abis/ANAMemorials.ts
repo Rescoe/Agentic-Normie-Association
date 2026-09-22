@@ -836,6 +836,16 @@ export const ANAMemorialsAbi = [
             "type": "string"
           },
           {
+            "internalType": "string",
+            "name": "kind",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "honoredBurnCount",
+            "type": "uint256"
+          },
+          {
             "internalType": "uint256",
             "name": "workId",
             "type": "uint256"
@@ -1093,59 +1103,76 @@ export const ANAMemorialsAbi = [
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "title",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "artworkContent",
-        "type": "string"
-      },
-      {
-        "internalType": "uint256",
-        "name": "workId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "creatorProposerTokenId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "creatorName",
-        "type": "string"
-      },
-      {
-        "internalType": "uint256",
-        "name": "priceWei",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "publicSupply",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "requesterSupply",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "requesterAddr",
-        "type": "address"
-      },
-      {
-        "internalType": "bool",
-        "name": "openEnded",
-        "type": "bool"
-      },
-      {
-        "internalType": "uint256",
-        "name": "claimDurationSeconds",
-        "type": "uint256"
+        "components": [
+          {
+            "internalType": "string",
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "artworkContent",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "creatorName",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "kind",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "honoredBurnCount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "workId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "creatorProposerTokenId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "priceWei",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "publicSupply",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "requesterSupply",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "requesterAddr",
+            "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "openEnded",
+            "type": "bool"
+          },
+          {
+            "internalType": "uint256",
+            "name": "claimDurationSeconds",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct ANAMemorials.RegisterMemorialParams",
+        "name": "p",
+        "type": "tuple"
       }
     ],
     "name": "registerMemorial",
@@ -1302,6 +1329,16 @@ export const ANAMemorialsAbi = [
         "internalType": "string",
         "name": "creatorName",
         "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "kind",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "honoredBurnCount",
+        "type": "uint256"
       },
       {
         "internalType": "uint256",

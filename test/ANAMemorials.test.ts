@@ -18,6 +18,31 @@ const PROPOSER_TOKEN_ID = 42;
 const BURN_TOKEN_A = 100;
 const BURN_TOKEN_B = 101;
 
+/** Full default registerMemorial() params, overridable per test — avoids repeating all 13 struct fields everywhere. */
+function registerParams(overrides: Partial<{
+  title: string; artworkContent: string; workId: number; creatorProposerTokenId: number;
+  creatorName: string; kind: string; honoredBurnCount: number;
+  priceWei: bigint; publicSupply: number; requesterSupply: number;
+  requesterAddr: string; openEnded: boolean; claimDurationSeconds: number;
+}> = {}) {
+  return {
+    title: "t",
+    artworkContent: "data:image/bmp;base64,QQ==",
+    creatorName: "Zephyr",
+    kind: "batch",
+    honoredBurnCount: 1,
+    workId: 0,
+    creatorProposerTokenId: PROPOSER_TOKEN_ID,
+    priceWei: 0n,
+    publicSupply: 0,
+    requesterSupply: 0,
+    requesterAddr: ethers.ZeroAddress,
+    openEnded: false,
+    claimDurationSeconds: 0,
+    ...overrides,
+  };
+}
+
 async function deployFixture() {
   const [owner, relayer, creator, vault, buyer1, buyer2, requester, lastOwnerA, lastOwnerB, stranger] =
     await ethers.getSigners();
@@ -48,19 +73,21 @@ async function registerBasicMemorial(
     requesterAddr: string; openEnded: boolean; claimDurationSeconds: number;
   }> = {},
 ): Promise<bigint> {
-  const tx = await memorials.connect(relayer).registerMemorial(
-    "Eulogy for 2 absences",
-    "data:image/bmp;base64,QQ==",
-    0,
-    PROPOSER_TOKEN_ID,
-    "Zephyr",
-    opts.priceWei ?? 0n,
-    opts.publicSupply ?? 0,
-    opts.requesterSupply ?? 0,
-    opts.requesterAddr ?? ethers.ZeroAddress,
-    opts.openEnded ?? false,
-    opts.claimDurationSeconds ?? 0,
-  );
+  const tx = await memorials.connect(relayer).registerMemorial({
+    title:            "Eulogy for 2 absences",
+    artworkContent:   "data:image/bmp;base64,QQ==",
+    creatorName:      "Zephyr",
+    kind:             "batch",
+    honoredBurnCount: 2,
+    workId:           0,
+    creatorProposerTokenId: PROPOSER_TOKEN_ID,
+    priceWei:         opts.priceWei ?? 0n,
+    publicSupply:     opts.publicSupply ?? 0,
+    requesterSupply:  opts.requesterSupply ?? 0,
+    requesterAddr:    opts.requesterAddr ?? ethers.ZeroAddress,
+    openEnded:        opts.openEnded ?? false,
+    claimDurationSeconds: opts.claimDurationSeconds ?? 0,
+  });
   const receipt = await tx.wait();
   const event = receipt!.logs
     .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
@@ -75,9 +102,7 @@ describe("ANAMemorials", function () {
     it("registerMemorial reverts for a non-authorized caller", async () => {
       const { memorials, stranger } = await deployFixture();
       await expect(
-        memorials.connect(stranger).registerMemorial(
-          "t", "data:image/bmp;base64,QQ==", 0, PROPOSER_TOKEN_ID, "Zephyr", 0, 0, 0, ethers.ZeroAddress, false, 0,
-        ),
+        memorials.connect(stranger).registerMemorial(registerParams()),
       ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
     });
 
@@ -103,7 +128,7 @@ describe("ANAMemorials", function () {
       const UNREGISTERED_TOKEN_ID = 999;
       // deliberately not set in the mock core -> getMemberOwner returns address(0)
       const tx = await memorials.connect(relayer).registerMemorial(
-        "t", "data:image/bmp;base64,QQ==", 0, UNREGISTERED_TOKEN_ID, "Unbound agent", 0, 0, 0, ethers.ZeroAddress, false, 0,
+        registerParams({ creatorProposerTokenId: UNREGISTERED_TOKEN_ID, creatorName: "Unbound agent" }),
       );
       const receipt = await tx.wait();
       const event = receipt!.logs
@@ -345,6 +370,8 @@ describe("ANAMemorials", function () {
       expect(attrs).to.deep.include({ trait_type: "Artist", value: "Zephyr (Normie #42)" });
       expect(attrs).to.deep.include({ trait_type: "Artist Agent ID", value: 42 });
       expect(attrs).to.deep.include({ trait_type: "Agent Standard", value: "ERC-8004" });
+      expect(attrs).to.deep.include({ trait_type: "Kind", value: "batch" });
+      expect(attrs).to.deep.include({ trait_type: "Normies Honored", value: 2 });
       const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
       expect(svg).to.include('href="data:image/bmp;base64,QQ=="');
       expect(svg).to.include("Eulogy for 2 absences");
@@ -355,11 +382,30 @@ describe("ANAMemorials", function () {
       await expect(memorials.tokenURI(0)).to.be.revertedWithCustomError(memorials, "TokenDoesNotExist");
     });
 
+    it("honoredBurnCount is independent of addReservedClaims — a milestone monument can honor thousands with zero individual reserved claims", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const tx = await memorials.connect(relayer).registerMemorial(
+        registerParams({ title: "Monument — 2000 Normies", kind: "milestone", honoredBurnCount: 2000, publicSupply: 1 }),
+      );
+      const receipt = await tx.wait();
+      const milestoneId = (receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "MemorialRegistered"))!.args.memorialId as bigint;
+      await memorials.connect(buyer1).mintPublic(milestoneId);
+
+      expect((await memorials.getBurnedTokenIds(milestoneId)).length).to.equal(0); // no individual reserved claims
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      const attrs = metadata.attributes as Array<{ trait_type: string; value: string | number }>;
+      expect(attrs).to.deep.include({ trait_type: "Kind", value: "milestone" });
+      expect(attrs).to.deep.include({ trait_type: "Normies Honored", value: 2000 });
+      expect(metadata.description).to.include("honoring 2000 burned Normie(s)");
+    });
+
     it("embeds a raw SVG <g> fragment via a nested <svg>, not <image href>, when artworkContent isn't a data URI", async () => {
       const { memorials, relayer, buyer1 } = await deployFixture();
       const svgFragment = '<g fill="#000" shape-rendering="crispEdges"><rect x="10" y="10" width="20" height="20"/></g>';
       const tx = await memorials.connect(relayer).registerMemorial(
-        "Vector piece", svgFragment, 0, PROPOSER_TOKEN_ID, "Zephyr", 0, 1, 0, ethers.ZeroAddress, false, 0,
+        registerParams({ title: "Vector piece", artworkContent: svgFragment, publicSupply: 1 }),
       );
       const receipt = await tx.wait();
       const id = (receipt!.logs

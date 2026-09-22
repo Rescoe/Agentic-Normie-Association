@@ -67,6 +67,15 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         // same trust level as title/pricing — never sanitized as if untrusted.
         string  artworkContent;
         string  creatorName;      // ERC-8004 agent display name, fixed at registration
+        // Free-form classification ("batch" | "requested" | "milestone", set
+        // by the relayer at registration) and the TRUE count of Normies this
+        // piece honors. honoredBurnCount is intentionally separate from
+        // burnedTokenIdsOf[]/reservedRecipient — a "milestone" monument
+        // deliberately registers zero individual reserved claims (would mean
+        // thousands of addReservedClaims entries for one piece) but still
+        // honors a real, large count that belongs in this piece's metadata.
+        string  kind;
+        uint256 honoredBurnCount;
         uint256 workId;           // WorkRegistry id honoring this memorial; 0 = not linked
         uint256 creatorProposerTokenId;
         address creatorAddr;      // creator wallet resolved once; zero means use vaultAddr
@@ -81,6 +90,24 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         uint256 claimDeadline;    // unix timestamp; only meaningful when openEnded
         uint256 mintedInSeries;   // display counter across all three pools ("edition N")
         bool    initialized;
+    }
+
+    /// @notice registerMemorial()'s params, as a struct — avoids a long flat
+    ///         parameter list (stack-depth risk) now that it's grown past 10.
+    struct RegisterMemorialParams {
+        string  title;
+        string  artworkContent;
+        string  creatorName;
+        string  kind;
+        uint256 honoredBurnCount;
+        uint256 workId;
+        uint256 creatorProposerTokenId;
+        uint256 priceWei;
+        uint256 publicSupply;
+        uint256 requesterSupply;
+        address requesterAddr;
+        bool    openEnded;
+        uint256 claimDurationSeconds;
     }
 
     // ─── State ────────────────────────────────────────────────────────────────
@@ -191,57 +218,55 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
      *         at this point (created off-chain by an LLM persona, voted through ANA's
      *         moderation), so this single call replaces what used to be a contract
      *         deployment (ANACollectionFactory.createCollection) plus a separate
-     *         initialize() call.
-     * @param creatorProposerTokenId The ANA member (Normie) whose ERC-8004 persona
-     *        made the piece.
-     * @param creatorName Display name stored in the NFT metadata as the artist.
+     *         initialize() call. Takes a struct (RegisterMemorialParams) rather
+     *         than a flat parameter list, which had grown past 10 individual
+     *         params. p.creatorProposerTokenId is the ANA member (Normie) whose
+     *         ERC-8004 persona made the piece; p.creatorName is its display name,
+     *         stored in the NFT metadata as the artist; p.kind is a free-form
+     *         classification ("batch" | "requested" | "milestone") surfaced as a
+     *         tokenURI() trait, same trust level as title (not validated);
+     *         p.honoredBurnCount is the true count of Normies this piece honors,
+     *         independent of how many (if any) get an individual reserved free
+     *         claim via addReservedClaims() — see MemorialSeries.honoredBurnCount.
      */
     function registerMemorial(
-        string  calldata title,
-        string  calldata artworkContent,
-        uint256 workId,
-        uint256 creatorProposerTokenId,
-        string  calldata creatorName,
-        uint256 priceWei,
-        uint256 publicSupply,
-        uint256 requesterSupply,
-        address requesterAddr,
-        bool    openEnded,
-        uint256 claimDurationSeconds
+        RegisterMemorialParams calldata p
     ) external onlyAuthorized returns (uint256 memorialId) {
-        require(bytes(artworkContent).length > 0, "Empty artwork");
-        if (requesterSupply > 0 && requesterAddr == address(0)) revert ZeroAddress();
+        require(bytes(p.artworkContent).length > 0, "Empty artwork");
+        if (p.requesterSupply > 0 && p.requesterAddr == address(0)) revert ZeroAddress();
 
-        address creatorAddr = core.getMemberOwner(creatorProposerTokenId);
+        address creatorAddr = core.getMemberOwner(p.creatorProposerTokenId);
         bool creatorUsesVault = creatorAddr == address(0);
 
         memorialId = series.length;
         series.push(MemorialSeries({
-            title:            title,
-            artworkContent:   artworkContent,
-            creatorName:      creatorName,
-            workId:           workId,
-            creatorProposerTokenId: creatorProposerTokenId,
+            title:            p.title,
+            artworkContent:   p.artworkContent,
+            creatorName:      p.creatorName,
+            kind:             p.kind,
+            honoredBurnCount: p.honoredBurnCount,
+            workId:           p.workId,
+            creatorProposerTokenId: p.creatorProposerTokenId,
             creatorAddr:      creatorAddr,
             creatorUsesVault: creatorUsesVault,
-            priceWei:         priceWei,
-            publicSupply:     openEnded ? 0 : publicSupply,
+            priceWei:         p.priceWei,
+            publicSupply:     p.openEnded ? 0 : p.publicSupply,
             publicMinted:     0,
-            requesterSupply:  requesterSupply,
+            requesterSupply:  p.requesterSupply,
             requesterMinted:  0,
-            requesterAddr:    requesterAddr,
-            openEnded:        openEnded,
-            claimDeadline:    openEnded ? block.timestamp + claimDurationSeconds : 0,
+            requesterAddr:    p.requesterAddr,
+            openEnded:        p.openEnded,
+            claimDeadline:    p.openEnded ? block.timestamp + p.claimDurationSeconds : 0,
             mintedInSeries:   0,
             initialized:      true
         }));
 
         emit MemorialRegistered(
             memorialId,
-            title,
-            workId,
-            creatorProposerTokenId,
-            creatorName,
+            p.title,
+            p.workId,
+            p.creatorProposerTokenId,
+            p.creatorName,
             creatorAddr,
             creatorUsesVault
         );
@@ -405,14 +430,17 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             '{"trait_type":"Work ID","value":', s.workId.toString(), '},',
             '{"trait_type":"Artist","value":"', _escapeJson(artist), '"},',
             '{"trait_type":"Artist Agent ID","value":', s.creatorProposerTokenId.toString(), '},',
-            '{"trait_type":"Agent Standard","value":"ERC-8004"}]'
+            '{"trait_type":"Agent Standard","value":"ERC-8004"},',
+            '{"trait_type":"Kind","value":"', _escapeJson(s.kind), '"},',
+            '{"trait_type":"Normies Honored","value":', s.honoredBurnCount.toString(), '}]'
         );
 
         string memory image = _buildImageDataUri(s.title, artist, s.artworkContent, isDataUri);
 
         bytes memory json = abi.encodePacked(
             '{"name":"', _escapeJson(s.title), '",',
-            '"description":"ANA burn memorial created by ', _escapeJson(artist), ' (ERC-8004 agent).",',
+            '"description":"ANA burn memorial created by ', _escapeJson(artist),
+            ' (ERC-8004 agent), honoring ', s.honoredBurnCount.toString(), ' burned Normie(s).",',
             '"image":"', image, '",',
             isDataUri ? string(abi.encodePacked('"animation_url":"', s.artworkContent, '",')) : "",
             '"external_url":"https://agentic-normie-association.vercel.app/works",',

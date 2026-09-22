@@ -1174,6 +1174,11 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
       workId:                 onChainWorkId,
       creatorProposerTokenId: work.proposedBy,
       creatorName:            work.proposedByName,
+      kind:                   work.memorialKind ?? "batch",
+      // Milestone monuments honor a true count far larger than their (deliberately
+      // empty) reservedClaimRecipients — everything else's honoredBurnCount is
+      // just how many burnedTokenIds this piece actually lists.
+      honoredBurnCount:       work.memorialTotalBurnedAtMilestone ?? work.burnedTokenIds?.length ?? 1,
       priceWei:               editionPriceWei,
       publicSupply:           work.memorialPublicSupply ?? 0,
       requesterSupply:        work.memorialRequesterSupply ?? 0,

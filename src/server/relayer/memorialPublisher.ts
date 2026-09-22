@@ -42,10 +42,16 @@ export const RESERVED_CLAIMS_CHUNK_SIZE = 100;
 
 export interface RegisterMemorialParams {
   title:                  string;
-  artworkContent:         string; // data URI (BMP)
+  artworkContent:         string; // BMP data URI, or a raw RLE/SVG <g> fragment (pixelImage.ts)
   workId:                 number; // WorkRegistry id, 0 if not linked
   creatorProposerTokenId: number;
   creatorName:            string;
+  // Free-form classification surfaced as a tokenURI() trait, and the true
+  // count of Normies this piece honors — independent of the reserved-claims
+  // list (a "milestone" monument deliberately has zero of those but still
+  // honors thousands). See ANAMemorials.sol's MemorialSeries.honoredBurnCount.
+  kind:                   string;
+  honoredBurnCount:       number;
   priceWei:               bigint;
   publicSupply:           number;
   requesterSupply:        number;
@@ -103,19 +109,21 @@ export async function registerMemorialOnChain(
       address:      addr,
       abi:          ANA_MEMORIALS_ABI,
       functionName: "registerMemorial",
-      args: [
-        params.title,
-        params.artworkContent,
-        BigInt(params.workId),
-        BigInt(params.creatorProposerTokenId),
-        params.creatorName,
-        params.priceWei,
-        BigInt(params.publicSupply),
-        BigInt(params.requesterSupply),
-        (params.requesterAddr ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
-        params.openEnded,
-        BigInt(params.claimDurationSeconds),
-      ],
+      args: [{
+        title:                  params.title,
+        artworkContent:         params.artworkContent,
+        creatorName:            params.creatorName,
+        kind:                   params.kind,
+        honoredBurnCount:       BigInt(params.honoredBurnCount),
+        workId:                 BigInt(params.workId),
+        creatorProposerTokenId: BigInt(params.creatorProposerTokenId),
+        priceWei:               params.priceWei,
+        publicSupply:           BigInt(params.publicSupply),
+        requesterSupply:        BigInt(params.requesterSupply),
+        requesterAddr:          (params.requesterAddr ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
+        openEnded:              params.openEnded,
+        claimDurationSeconds:   BigInt(params.claimDurationSeconds),
+      }],
       // Was 2M — wrong: no contract gets deployed here anymore, but
       // `artworkContent` IS still stored entirely in this call's
       // MemorialSeries struct via a genuinely expensive cold SSTORE. Fixed to
