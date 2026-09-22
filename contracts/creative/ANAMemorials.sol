@@ -90,6 +90,16 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         uint256 claimDeadline;    // unix timestamp; only meaningful when openEnded
         uint256 mintedInSeries;   // display counter across all three pools ("edition N")
         bool    initialized;
+        // Staged-reveal progressive restoration, SERIES-wide (every edition of
+        // this memorial shares one evolving image — not one reveal state per
+        // NFT). 0/0 means this memorial has no reveal stages registered (the
+        // default for every memorial today, including all existing ones).
+        // revealStage indexes into revealStages[memorialId]; artworkContent
+        // above is kept in sync with revealStages[memorialId][revealStage] by
+        // advanceReveal() — tokenURI() needs no reveal-specific logic at all
+        // because of that.
+        uint256 revealStage;
+        uint256 revealStageCount;
     }
 
     /// @notice registerMemorial()'s params, as a struct — avoids a long flat
@@ -129,6 +139,18 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     mapping(address => uint256) public pendingWithdrawals; // escrow fallback, see _sendOrEscrow
     mapping(address => bool)    public authorized; // relayer(s) allowed to register/add claims
 
+    // memorialId => ordered precomputed artworkContent strings, stage 0 first.
+    // Populated once by registerRevealStages(), never resized after — a
+    // memorial's number of stages is fixed at the moment the relayer computes
+    // them off-chain from the burned Normie's own image.
+    mapping(uint256 => string[]) public revealStages;
+    // Separate from `authorized` on purpose: this is the ONLY permission a
+    // future PX-gating contract needs to be granted (via setRevealAuthorized)
+    // to let holders spend PX to advance a reveal — it must never imply the
+    // ability to register memorials or reserved claims. The main relayer can
+    // always advance too (see onlyRevealAuthorized), no separate grant needed.
+    mapping(address => bool)    public revealAuthorized;
+
     uint256 private _nextTokenId;
 
     // ─── Events ──────────────────────────────────────────────────────────────
@@ -166,6 +188,9 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     event RelayerPayoutUpdated(address indexed addr);
     event VaultUpdated(address indexed addr);
     event SeriesPriceUpdated(uint256 indexed memorialId, uint256 newPriceWei);
+    event RevealAuthorizationUpdated(address indexed addr, bool status);
+    event RevealStagesRegistered(uint256 indexed memorialId, uint256 stageCount);
+    event RevealAdvanced(uint256 indexed memorialId, uint256 newStage, uint256 stageCount);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -182,11 +207,21 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     error InsufficientPayment(uint256 required, uint256 sent);
     error NothingToWithdraw();
     error TokenDoesNotExist(uint256 tokenId);
+    error InvalidRevealStages();
+    error NoRevealStages();
+    error RevealAlreadyComplete();
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
 
     modifier onlyAuthorized() {
         if (!authorized[msg.sender]) revert NotAuthorized();
+        _;
+    }
+
+    /// @dev The main relayer can always advance a reveal too — no separate
+    ///      grant needed on top of its existing `authorized` status.
+    modifier onlyRevealAuthorized() {
+        if (!revealAuthorized[msg.sender] && !authorized[msg.sender]) revert NotAuthorized();
         _;
     }
 
@@ -258,7 +293,9 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             openEnded:        p.openEnded,
             claimDeadline:    p.openEnded ? block.timestamp + p.claimDurationSeconds : 0,
             mintedInSeries:   0,
-            initialized:      true
+            initialized:      true,
+            revealStage:      0,
+            revealStageCount: 0
         }));
 
         emit MemorialRegistered(
@@ -296,6 +333,57 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             burnedTokenIdsOf[memorialId].push(tokenId);
             emit ReservedClaimAdded(memorialId, tokenId, recipient);
         }
+    }
+
+    /**
+     * @notice Registers the precomputed reveal stages for a memorial — stage 0
+     *         should be identical to (or a reasonable starting point matching)
+     *         artworkContent as already registered, and each subsequent stage
+     *         is a full, standalone artworkContent string closer to a rendering
+     *         derived from the honored Normie's own pre-burn image. All stages
+     *         are computed off-chain, once, at registration time — this
+     *         contract never fetches or renders anything itself, it only
+     *         stores and swaps between already-finished strings. Relayer-only
+     *         and callable once per memorial in practice (re-registering
+     *         replaces the stage list and resets progress to 0, which is
+     *         intentionally allowed for correcting a bad off-chain batch
+     *         before any advanceReveal() has been paid for/triggered).
+     */
+    function registerRevealStages(
+        uint256 memorialId,
+        string[] calldata stages
+    ) external onlyAuthorized validMemorial(memorialId) {
+        if (stages.length == 0) revert InvalidRevealStages();
+        delete revealStages[memorialId];
+        for (uint256 i = 0; i < stages.length; i++) {
+            revealStages[memorialId].push(stages[i]);
+        }
+        series[memorialId].revealStage = 0;
+        series[memorialId].revealStageCount = stages.length;
+        emit RevealStagesRegistered(memorialId, stages.length);
+    }
+
+    /**
+     * @notice Advances a memorial to its next precomputed reveal stage —
+     *         swaps artworkContent wholesale, so tokenURI() needs no
+     *         reveal-specific rendering logic. Gated by onlyRevealAuthorized,
+     *         not onlyAuthorized: today only the main relayer can call this
+     *         (manually, e.g. during testing), but the intent is for a
+     *         separate, minimally-privileged contract to be granted
+     *         revealAuthorized status later and call this once it has
+     *         verified whatever external condition (a PX balance, today
+     *         hosted entirely outside this contract) should unlock the next
+     *         stage. This contract deliberately has no opinion on what that
+     *         condition is.
+     */
+    function advanceReveal(uint256 memorialId) external onlyRevealAuthorized validMemorial(memorialId) returns (uint256 newStage) {
+        MemorialSeries storage s = series[memorialId];
+        if (s.revealStageCount == 0) revert NoRevealStages();
+        if (s.revealStage + 1 >= s.revealStageCount) revert RevealAlreadyComplete();
+        newStage = s.revealStage + 1;
+        s.revealStage = newStage;
+        s.artworkContent = revealStages[memorialId][newStage];
+        emit RevealAdvanced(memorialId, newStage, s.revealStageCount);
     }
 
     // ─── Minting (public, caller pays their own gas) ──────────────────────────
@@ -474,6 +562,10 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         return reservedRecipient[memorialId][burnedTokenId] != address(0) && !reservedClaimed[memorialId][burnedTokenId];
     }
 
+    function getRevealStages(uint256 memorialId) external view returns (string[] memory) {
+        return revealStages[memorialId];
+    }
+
     // ─── Admin ────────────────────────────────────────────────────────────────
 
     function setAuthorized(address addr, bool status) external onlyOwner {
@@ -491,6 +583,19 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         if (addr == address(0)) revert ZeroAddress();
         vaultAddr = addr;
         emit VaultUpdated(addr);
+    }
+
+    /**
+     * @notice Grants/revokes reveal-only privilege — deliberately separate
+     *         from setAuthorized(). This is the single entry point meant for
+     *         a future PX-gating contract: it lets that contract call
+     *         advanceReveal() on a holder's behalf once it verifies whatever
+     *         off-chain/cross-chain condition applies, without ever being
+     *         able to register memorials or reserved claims.
+     */
+    function setRevealAuthorized(address addr, bool status) external onlyOwner {
+        revealAuthorized[addr] = status;
+        emit RevealAuthorizationUpdated(addr, status);
     }
 
     /**

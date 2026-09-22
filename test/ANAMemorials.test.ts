@@ -510,6 +510,112 @@ describe("ANAMemorials", function () {
     });
   });
 
+  describe("staged reveal — progressive restoration", function () {
+    const STAGES = ["data:image/bmp;base64,AA==", "data:image/bmp;base64,BB==", "data:image/bmp;base64,CC=="];
+
+    it("registerRevealStages reverts for a non-authorized caller", async () => {
+      const { memorials, relayer, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(stranger).registerRevealStages(id, STAGES),
+      ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
+    });
+
+    it("registerRevealStages reverts with an empty stage list", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(relayer).registerRevealStages(id, []),
+      ).to.be.revertedWithCustomError(memorials, "InvalidRevealStages");
+    });
+
+    it("stores the stages and leaves the series artworkContent untouched until advanceReveal", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerRevealStages(id, STAGES);
+      expect(await memorials.getRevealStages(id)).to.deep.equal(STAGES);
+      const series = await memorials.getSeries(id);
+      expect(series.revealStage).to.equal(0n);
+      expect(series.revealStageCount).to.equal(3n);
+      expect(series.artworkContent).to.equal("data:image/bmp;base64,QQ=="); // still the original, registerMemorial's own content
+    });
+
+    it("advanceReveal reverts for a memorial with no registered stages", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(relayer).advanceReveal(id),
+      ).to.be.revertedWithCustomError(memorials, "NoRevealStages");
+    });
+
+    it("advanceReveal swaps artworkContent to the next stage and is reflected live in tokenURI", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, { priceWei: 0n, publicSupply: 1 });
+      await memorials.connect(relayer).registerRevealStages(id, STAGES);
+      await memorials.connect(buyer1).mintPublic(id);
+
+      await expect(memorials.connect(relayer).advanceReveal(id))
+        .to.emit(memorials, "RevealAdvanced").withArgs(id, 1n, 3n);
+
+      const series = await memorials.getSeries(id);
+      expect(series.revealStage).to.equal(1n);
+      expect(series.artworkContent).to.equal(STAGES[1]);
+
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
+      expect(svg).to.include(`href="${STAGES[1]}"`); // every existing edition shares the series-wide reveal state
+    });
+
+    it("advanceReveal reverts once the last stage has been reached", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerRevealStages(id, STAGES);
+      await memorials.connect(relayer).advanceReveal(id); // -> stage 1
+      await memorials.connect(relayer).advanceReveal(id); // -> stage 2 (last, index 2 of 3)
+      await expect(
+        memorials.connect(relayer).advanceReveal(id),
+      ).to.be.revertedWithCustomError(memorials, "RevealAlreadyComplete");
+    });
+
+    it("advanceReveal reverts for a caller with neither relayer nor reveal-only authorization", async () => {
+      const { memorials, relayer, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerRevealStages(id, STAGES);
+      await expect(
+        memorials.connect(stranger).advanceReveal(id),
+      ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
+    });
+
+    it("setRevealAuthorized grants a reveal-only address the ability to advance, without relayer rights", async () => {
+      const { memorials, owner, stranger } = await deployFixture();
+      // stranger stands in for a future PX-gating contract: granted reveal-only.
+      await memorials.connect(owner).setRevealAuthorized(stranger.address, true);
+      await expect(memorials.connect(stranger).registerMemorial(registerParams()))
+        .to.be.revertedWithCustomError(memorials, "NotAuthorized"); // no relayer rights leaked in
+    });
+
+    it("setRevealAuthorized: only the owner can call it", async () => {
+      const { memorials, stranger, buyer1 } = await deployFixture();
+      await expect(memorials.connect(stranger).setRevealAuthorized(buyer1.address, true))
+        .to.be.revertedWithCustomError(memorials, "OwnableUnauthorizedAccount");
+    });
+
+    it("re-registering stages replaces the list and resets progress to 0", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerRevealStages(id, STAGES);
+      await memorials.connect(relayer).advanceReveal(id);
+      expect((await memorials.getSeries(id)).revealStage).to.equal(1n);
+
+      const NEW_STAGES = ["data:image/bmp;base64,ZZ=="];
+      await memorials.connect(relayer).registerRevealStages(id, NEW_STAGES);
+      const series = await memorials.getSeries(id);
+      expect(series.revealStage).to.equal(0n);
+      expect(series.revealStageCount).to.equal(1n);
+      expect(await memorials.getRevealStages(id)).to.deep.equal(NEW_STAGES);
+    });
+  });
+
   describe("admin", function () {
     it("only the owner can change authorized relayers or the vault address", async () => {
       const { memorials, stranger, buyer1 } = await deployFixture();
