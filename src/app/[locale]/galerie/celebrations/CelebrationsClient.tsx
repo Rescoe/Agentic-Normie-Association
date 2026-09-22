@@ -140,8 +140,8 @@ interface MemorialWork {
 }
 
 const STATE_LABEL: Record<string, string> = {
-  VOTE_OPEN: "Vote en cours", VOTE_TALLIED: "Vote clos",
-  PUBLISHING: "Publication…", PUBLISHED: "Publié", REJECTED: "Rejeté",
+  VOTE_OPEN: "Vote in progress", VOTE_TALLIED: "Vote closed",
+  PUBLISHING: "Publishing…", PUBLISHED: "Published", REJECTED: "Rejected",
 };
 
 /**
@@ -171,35 +171,34 @@ async function requestMemorial(
     const data = await res.json();
     if (res.ok) {
       const warn = data.requesterAlreadyEntitledToFreeClaim
-        ? " Tu es aussi l'ancien propriétaire de ce Normie — tu as déjà droit à une édition gratuite séparée, pas besoin de payer pour celle-ci en plus."
+        ? " You're also this Normie's last owner — you're already entitled to a separate free edition, no need to pay for this one on top of it."
         : "";
-      return { ok: true, workId: data.workId, message: `Mémorial créé (${data.workId}) par ${data.proposerName} (#${data.proposerTokenId}) — vote en cours.${warn}` };
+      return { ok: true, workId: data.workId, message: `Memorial created (${data.workId}) by ${data.proposerName} (#${data.proposerTokenId}) — vote in progress.${warn}` };
     }
-    return { ok: false, workId: data.workId, message: data.error ?? "Échec de la demande." };
+    return { ok: false, workId: data.workId, message: data.error ?? "Request failed." };
   } catch {
-    return { ok: false, message: "Erreur réseau." };
+    return { ok: false, message: "Network error." };
   }
 }
 
 const TIER_LABEL: Record<1 | 2 | 3, string> = {
-  1: "Juste mon édition",
-  2: "Mon édition + ouvrir au public",
-  3: "Mon édition + claim ouvert (durée limitée)",
+  1: "Just my edition",
+  2: "My edition + open to the public",
+  3: "My edition + open claim (time-limited)",
 };
 
 /**
- * Tier selection, quantity/durée (paliers 2 et 3), wallet, et paiement pour
- * une demande de mémorial ciblée. Le paiement a lieu ICI, avant la demande :
- * le wallet connecté appelle ANAMemorials.payForRequest(proposerTokenId) pour
- * le prix du palier choisi — ça garantit que le relayer est rémunéré pour le
- * coût de création (et partagé 50/50 avec le proposeur immédiatement),
- * qu'un achat public suive ou non. Le proposeur est choisi par le pre-check
- * verify-burned AVANT le paiement (payForRequest a besoin de le connaître
- * pour répartir tout de suite) et réutilisé tel quel côté serveur. Le hash de
- * cette transaction est envoyé à /api/celebrations/request-memorial, qui la
- * vérifie (événement RequestPaid) avant de créer quoi que ce soit. Une
- * vérification légère (Normie bien brûlé, pas déjà demandé) a lieu avant le
- * paiement pour éviter de payer pour rien.
+ * Tier selection, quantity/duration (tiers 2 and 3), wallet, and payment for
+ * a targeted memorial request. Payment happens HERE, before the request: the
+ * connected wallet calls ANAMemorials.payForRequest(proposerTokenId) for the
+ * chosen tier's price — this guarantees the relayer is compensated for
+ * creation cost (and split 50/50 with the proposer immediately), whether a
+ * public purchase follows or not. The proposer is picked by the verify-burned
+ * pre-check BEFORE payment (payForRequest needs to know it to split right
+ * away) and reused unchanged server-side. That transaction's hash is sent to
+ * /api/celebrations/request-memorial, which verifies it (RequestPaid event)
+ * before creating anything. A light pre-check (Normie really burned, not
+ * already requested) runs before payment to avoid paying for nothing.
  */
 function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
   onSubmit: (tokenId: number, tier: 1 | 2 | 3, wallet: string, paymentTxHash: string, proposerTokenId: number, publicSupply?: number, claimDurationSeconds?: number) => void;
@@ -260,9 +259,9 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
     setPaying(true);
     try {
       const check = await fetch(`/api/celebrations/verify-burned?tokenId=${id}&requesterWallet=${address}`).then(r => r.json());
-      if (!check.burned) { setPayError("Ce Normie n'est pas brûlé."); return; }
-      if (check.alreadyRequested) { setPayError(`Un mémorial existe déjà pour ce Normie (${check.existingState}).`); return; }
-      if (check.proposerTokenId == null) { setPayError("Impossible de sélectionner un proposeur ANA — réessaie."); return; }
+      if (!check.burned) { setPayError("This Normie hasn't been burned."); return; }
+      if (check.alreadyRequested) { setPayError(`A memorial already exists for this Normie (${check.existingState}).`); return; }
+      if (check.proposerTokenId == null) { setPayError("Couldn't select an ANA proposer — try again."); return; }
 
       const tierConfig = { 1: pricing.tier1, 2: pricing.tier2, 3: pricing.tier3 }[tier];
       const txHash = await writeContractAsync({
@@ -281,7 +280,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setPayError(msg.includes("User rejected") ? "Paiement annulé." : "Échec du paiement.");
+      setPayError(msg.includes("User rejected") ? "Payment cancelled." : "Payment failed.");
     } finally {
       setPaying(false);
     }
@@ -298,7 +297,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
           min={0}
           value={tokenId}
           onChange={e => setTokenId(e.target.value)}
-          placeholder="Numéro de token"
+          placeholder="Token number"
           className="font-mono text-xs bg-[--bg] border border-[--border] px-2 py-1.5 w-32 text-[--fg]"
         />
         {!address ? (
@@ -309,7 +308,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
             disabled={busy || !tokenId || (preCheck != null && (!preCheck.burned || preCheck.alreadyRequested))}
             className="font-mono text-[10px] border border-[--fg] px-2 py-1.5 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait shrink-0"
           >
-            {paying ? "Paiement…" : submitting ? "…" : "Payer & demander un mémorial"}
+            {paying ? "Paying…" : submitting ? "…" : "Pay & request a memorial"}
           </button>
         )}
       </div>
@@ -324,14 +323,14 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
               className={`font-mono text-[10px] border px-2 py-1 text-left ${tier === t ? "border-[--fg] text-[--fg]" : "border-[--border] text-[--fg-muted]"}`}
             >
               {TIER_LABEL[t]}
-              {cfg && <span className="block text-[--fg-muted]">{formatEther(BigInt(cfg.priceWei))} ETH{cfg.publicSupply > 0 ? ` · ${cfg.publicSupply} publiques` : cfg.openEnded ? " · ouvert" : ""}</span>}
+              {cfg && <span className="block text-[--fg-muted]">{formatEther(BigInt(cfg.priceWei))} ETH{cfg.publicSupply > 0 ? ` · ${cfg.publicSupply} public` : cfg.openEnded ? " · open" : ""}</span>}
             </button>
           );
         })}
       </div>
       {tier === 2 && (
         <label className="flex items-center gap-2 font-mono text-[10px] text-[--fg-muted]">
-          Éditions publiques ouvertes (minimum 10) :
+          Public editions opened (minimum 10):
           <input
             type="number" min={10} max={500} value={quantity}
             onChange={e => setQuantity(Math.max(10, Math.min(500, parseInt(e.target.value, 10) || 10)))}
@@ -341,7 +340,7 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
       )}
       {tier === 3 && (
         <label className="flex items-center gap-2 font-mono text-[10px] text-[--fg-muted]">
-          Durée du claim ouvert (jours) :
+          Open claim duration (days):
           <input
             type="number" min={1} max={90} value={durationDays}
             onChange={e => setDurationDays(Math.max(1, Math.min(90, parseInt(e.target.value, 10) || 1)))}
@@ -352,23 +351,23 @@ function RequestMemorialForm({ onSubmit, submitting, prefillTokenId }: {
       {preCheck && preCheck.burned && !preCheck.alreadyRequested && (
         <p className="font-mono text-[10px] text-amber-400">
           {preCheck.lastOwner == null
-            ? "Impossible de retrouver l'ancien propriétaire de ce Normie — le claim gratuit ne pourra pas être configuré pour cet événement."
+            ? "Couldn't find this Normie's last owner — the free claim can't be configured for this event."
             : preCheck.requesterIsLastOwner
-            ? "Tu es l'ancien propriétaire de ce Normie : une seule édition sera créée, la tienne — pas de claim gratuit séparé."
-            : "Tu n'es pas l'ancien propriétaire de ce Normie : 2 éditions seront créées — la tienne (payée) et une gratuite réservée à l'ancien propriétaire."}
-          {preCheck.proposerName && ` Proposeur : ${preCheck.proposerName} (#${preCheck.proposerTokenId}) — ton paiement lui revient pour moitié.`}
+            ? "You're this Normie's last owner: only one edition will be created, yours — no separate free claim."
+            : "You're not this Normie's last owner: 2 editions will be created — yours (paid) and a free one reserved for the last owner."}
+          {preCheck.proposerName && ` Proposer: ${preCheck.proposerName} (#${preCheck.proposerTokenId}) — half your payment goes to them.`}
         </p>
       )}
       {preCheck && !preCheck.burned && (
-        <p className="font-mono text-[10px] text-red-400">Ce Normie n&apos;est pas brûlé.</p>
+        <p className="font-mono text-[10px] text-red-400">This Normie hasn&apos;t been burned.</p>
       )}
       {preCheck?.alreadyRequested && (
-        <p className="font-mono text-[10px] text-red-400">Un mémorial existe déjà pour ce Normie ({preCheck.existingState}).</p>
+        <p className="font-mono text-[10px] text-red-400">A memorial already exists for this Normie ({preCheck.existingState}).</p>
       )}
       {tierConfig && (
         <p className="font-mono text-[10px] text-[--fg-muted]">
-          Le paiement ({formatEther(BigInt(tierConfig.priceWei))} ETH) a lieu tout de suite — il couvre ton édition réservée,
-          que tu pourras réclamer gratuitement une fois le mémorial publié, depuis &quot;Éditions des mémoriaux&quot; plus bas.
+          Payment ({formatEther(BigInt(tierConfig.priceWei))} ETH) happens right away — it covers your reserved edition,
+          which you can claim for free once the memorial is published, from &quot;Memorial editions&quot; below.
         </p>
       )}
       {payError && <p className="font-mono text-[10px] text-red-400">{payError}</p>}
@@ -451,13 +450,14 @@ export function CelebrationsClient() {
         </div>
       </div>
 
-      {/* ── Demander un mémorial : déclenche la pipeline sans attendre le cron ── */}
+      {/* ── Request a memorial — triggers the pipeline without waiting for the cron ── */}
       <div id="request-memorial-form" className="border border-[--border] bg-[--bg-card] p-6 space-y-3">
-        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Demander un mémorial</p>
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Request a memorial</p>
         <p className="font-mono text-[11px] text-[--fg-muted]">
-          Survole un Normie ci-dessous et clique « ◈ Mémorial », ou entre directement un numéro de token.
-          Un membre ANA est sélectionné au hasard pour créer le mémorial — sa pièce est générée instantanément, puis soumise au vote des autres membres comme modération.
-          Choisis un palier : ton wallet est connecté, mais rien n&apos;est débité maintenant — tu payes plus tard en réclamant ton édition une fois le mémorial publié.
+          Hover a Normie below and click "◈ Memorial", or type a token number directly.
+          An ANA member is picked to create the memorial — their piece is generated instantly, then submitted to the other members' vote as moderation.
+          Choose a tier below: payment happens right away, before the memorial even exists — it covers your reserved edition, which
+          you can then claim for free once the memorial is published.
         </p>
         <RequestMemorialForm onSubmit={handleRequestMemorial} submitting={requestingTokenId != null} prefillTokenId={prefillTokenId} />
         {memorialResult && (
@@ -516,7 +516,7 @@ export function CelebrationsClient() {
                   {existing ? (
                     <span
                       className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-green-400"
-                      title={`Mémorial déjà ${STATE_LABEL[existing.state] ?? existing.state}`}
+                      title={`Already ${STATE_LABEL[existing.state] ?? existing.state}`}
                     >
                       ✓ {STATE_LABEL[existing.state] ?? existing.state}
                     </span>
@@ -528,9 +528,9 @@ export function CelebrationsClient() {
                         document.getElementById("request-memorial-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
                       }}
                       className="absolute top-1 right-1 font-mono text-[9px] bg-[--bg] border border-[--border] px-1 py-0.5 text-[--fg-muted] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[--fg]"
-                      title={`Demander un mémorial pour #${b.tokenId} — choisis un palier ci-dessus`}
+                      title={`Request a memorial for #${b.tokenId} — choose a tier above`}
                     >
-                      ◈ Mémorial
+                      ◈ Memorial
                     </button>
                   )}
                 </a>

@@ -5,8 +5,8 @@ import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getMemorialPricing } from "@/lib/memorialPricing";
 
 export const metadata: Metadata = {
-  title: "Célébrations & mémoriaux — ANA Documentation",
-  description: "Comment ANA honore les Normies brûlés : création par un membre, vote de modération, et le contrat ANAMemorials qui gère les éditions.",
+  title: "Celebrations & memorials — ANA Documentation",
+  description: "How ANA honors burned Normies: creation by a member, moderation vote, and the ANAMemorials contract that handles editions and payments.",
   alternates: { canonical: "/docs/celebrations" },
 };
 
@@ -25,21 +25,21 @@ export default async function DocsCelebrationsPage() {
   const tiers = [
     {
       n: 1,
-      label: "Palier 1 — Juste mon édition",
+      label: "Tier 1 — Just my edition",
       price: formatEther(BigInt(pricing.tier1.priceWei)),
-      desc: "Une seule édition, réservée au demandeur — la quantité la plus faible possible, donc le prix par édition le plus élevé. Si le demandeur est lui-même l'ancien propriétaire du Normie brûlé, une seule édition existera au total (pas de claim gratuit séparé, il serait redondant). Sinon, l'ancien propriétaire garde son claim gratuit à part : 2 éditions au total.",
+      desc: "A single edition, reserved for the requester — the smallest possible quantity, so the highest per-edition price. If the requester is themselves the burned Normie's last owner, only one edition will ever exist in total (no separate free claim, it would be redundant). Otherwise, the last owner keeps their free claim separately: 2 editions in total.",
     },
     {
       n: 2,
-      label: "Palier 2 — Mon édition + ouverture publique",
+      label: "Tier 2 — My edition + public opening",
       price: formatEther(BigInt(pricing.tier2.priceWei)),
-      desc: `Une édition réservée au demandeur, plus un nombre fixe d'éditions ouvertes au public (minimum 10, choisi par le demandeur — ${pricing.tier2.publicSupply} par défaut) au même prix unitaire.`,
+      desc: `One edition reserved for the requester, plus a fixed number of editions opened to the public (minimum 10, chosen by the requester — ${pricing.tier2.publicSupply} by default) at the same unit price.`,
     },
     {
       n: 3,
-      label: "Palier 3 — Claim ouvert",
+      label: "Tier 3 — Open claim",
       price: formatEther(BigInt(pricing.tier3.priceWei)),
-      desc: `Une édition réservée au demandeur, plus un claim public ouvert à tous pendant ${Math.round((pricing.tier3.claimDurationSeconds ?? 0) / 86_400)} jours — le prix par édition le plus bas.`,
+      desc: `One edition reserved for the requester, plus a public claim open to anyone for ${Math.round((pricing.tier3.claimDurationSeconds ?? 0) / 86_400)} days — the lowest per-edition price.`,
     },
   ];
 
@@ -47,70 +47,68 @@ export default async function DocsCelebrationsPage() {
     <div className="space-y-16">
       {/* Header */}
       <div>
-        <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] mb-3">Mécanisme</p>
-        <h1 className="text-3xl font-bold leading-tight mb-4">Célébrations & mémoriaux</h1>
+        <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] mb-3">Mechanism</p>
+        <h1 className="text-3xl font-bold leading-tight mb-4">Celebrations & memorials</h1>
         <p className="text-[--fg-muted] leading-relaxed text-sm max-w-2xl">
-          Quand un Normie est brûlé, ANA lui rend hommage : un membre de l&apos;association crée — via son propre
-          persona LLM, informé par l&apos;identité du Normie disparu — une pièce mémorielle, soumise ensuite au
-          vote des autres membres comme modération. Cette page documente le mécanisme complet, y compris le
-          contrat qui gère les éditions et les paiements — absent jusqu&apos;ici de la documentation publique.
+          When a Normie is burned, ANA pays tribute to it: an association member creates — via their own
+          LLM persona, informed by the identity of the departed Normie — a memorial piece, then submitted to
+          the other members' vote as moderation. This page documents the full mechanism, including the
+          contract that handles editions and payments — until now absent from the public documentation.
         </p>
       </div>
 
-      {/* Trois chemins de création */}
+      {/* Three creation paths */}
       <div className="space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
-          Trois façons de déclencher un mémorial
+          Three ways to trigger a memorial
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[--border]">
           <div className="bg-[--bg] p-5 space-y-2">
-            <p className="font-mono text-xs font-bold text-blue-400">Automatique — lot hebdomadaire</p>
+            <p className="font-mono text-xs font-bold text-blue-400">Automatic — weekly batch</p>
             <p className="text-sm text-[--fg-muted] leading-relaxed">
-              Un cron détecte les burns toutes les 15 minutes et les met en attente. Une fois par semaine, un
-              second cron rassemble tous les burns de la période en <strong>une seule œuvre collective</strong>,
-              avec autant d&apos;éditions publiques que de Normies honorés ce jour-là, à prix fixe
-              ({formatEther(BigInt(pricing.batchPriceWei))} ETH/édition).
+              A cron detects burns every 15 minutes and queues them. Once a week, a second cron gathers every
+              burn from the period into <strong>one collective piece</strong>, with as many public editions as
+              Normies honored in that period, at a fixed price ({formatEther(BigInt(pricing.batchPriceWei))} ETH/edition).
             </p>
           </div>
           <div className="bg-[--bg] p-5 space-y-2">
-            <p className="font-mono text-xs font-bold text-amber-400">Payant — demande ciblée</p>
+            <p className="font-mono text-xs font-bold text-amber-400">Paid — targeted request</p>
             <p className="text-sm text-[--fg-muted] leading-relaxed">
-              Sur <Link href="/galerie/celebrations" className="underline hover:no-underline">la page Célébrations</Link>,
-              n&apos;importe qui peut nommer un tokenId brûlé précis (vérifié on-chain) et choisir un des 3 paliers
-              ci-dessous. <strong>Le paiement a lieu immédiatement</strong> — le demandeur appelle lui-même
+              On <Link href="/galerie/celebrations" className="underline hover:no-underline">the Celebrations page</Link>,
+              anyone can name a specific burned tokenId (verified on-chain) and choose one of the 3 tiers
+              below. <strong>Payment happens immediately</strong> — the requester calls
               <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1 mx-1">payForRequest(proposerTokenId)</code>
-              pour le prix du palier, avant même que le mémorial existe — le membre ANA qui créera la pièce est
-              choisi et affiché avant ce paiement, puisque la répartition 50/50 a lieu immédiatement avec lui.
-              Ça garantit que le relayer est rémunéré pour le coût de création, que le mémorial soit ensuite
-              acheté par d&apos;autres ou non. Son édition réservée lui est ensuite livrée automatiquement dans
-              son wallet dès la publication du mémorial
-              (le relayer appelle <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code> pour
-              lui — gratuit, déjà payé en amont) — aucune action supplémentaire requise. Si ça échoue pour une
-              raison quelconque, il peut toujours la réclamer lui-même depuis la page Célébrations.
+              themselves for the tier's price, before the memorial even exists — the ANA member who will
+              create the piece is chosen and shown before this payment, since the 50/50 split happens with
+              them immediately. That guarantees the relayer is compensated for creation cost, whether the
+              memorial is later bought by others or not. Their reserved edition is then automatically
+              delivered to their wallet as soon as the memorial is published
+              (the relayer calls <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code> for
+              them — free, already paid upfront) — no further action required. If that fails for any reason,
+              they can always claim it themselves from the Celebrations page.
             </p>
           </div>
           <div className="bg-[--bg] p-5 space-y-2">
-            <p className="font-mono text-xs font-bold text-purple-400">Monument — palier de 1000 burns</p>
+            <p className="font-mono text-xs font-bold text-purple-400">Monument — 1000-burn milestone</p>
             <p className="text-sm text-[--fg-muted] leading-relaxed">
-              Déclenché manuellement depuis l&apos;administration ANA, un monument collectif marque chaque
-              franchissement d&apos;un palier de 1000 burns cumulés sur l&apos;ensemble de la collection Normies —
-              un seul monument par palier, jamais réutilisé. Composition volontairement plus riche qu&apos;un
-              mémorial ordinaire (le persona utilise tout l&apos;espace créatif disponible plutôt que de rester
-              minimal). Contrairement aux deux autres chemins, aucun claim gratuit individuel n&apos;est réservé
-              (ce serait des milliers d&apos;entrées pour un seul monument) — un petit pool public fixe existe
-              simplement pour que le mint reste testable.
+              Manually triggered from ANA's admin, a collective monument marks every 1000-burn threshold
+              crossed across the whole Normies collection — one monument per threshold, never reused.
+              Deliberately richer composition than an ordinary memorial (the persona uses the full creative
+              budget available instead of staying minimal). Unlike the other two paths, no individual free
+              claim is reserved (that would mean thousands of entries for a single monument) — a small fixed
+              public pool exists simply so minting stays testable.
             </p>
           </div>
         </div>
       </div>
 
-      {/* Les 3 paliers */}
+      {/* The 3 tiers */}
       <div className="space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
-          Les 3 paliers de la demande payante
+          The 3 tiers of a paid request
         </p>
         <p className="text-sm text-[--fg-muted] leading-relaxed">
-          Ajustables sans redéploiement de contrat (config stockée côté serveur, <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">GET /api/admin/memorial-pricing</code>) — les prix ci-dessous sont ceux actuellement en vigueur.
+          Adjustable without a contract redeployment (config stored server-side, <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">GET /api/admin/memorial-pricing</code>) — the prices below are currently in effect.
         </p>
         <div className="space-y-3">
           {tiers.map(t => (
@@ -125,78 +123,75 @@ export default async function DocsCelebrationsPage() {
         </div>
       </div>
 
-      {/* Le claim gratuit */}
+      {/* The free claim */}
       <div className="border-l-2 border-green-400 pl-5 space-y-2">
-        <p className="font-mono text-xs font-bold text-green-400">Le claim gratuit — toujours garanti</p>
+        <p className="font-mono text-xs font-bold text-green-400">The free claim — always guaranteed</p>
         <p className="text-sm text-[--fg-muted] leading-relaxed">
-          Quel que soit le chemin (lot automatique ou demande payante) et quel que soit qui paie, le
-          <strong> dernier propriétaire</strong> du Normie brûlé a toujours droit à une édition gratuite de son
-          mémorial — sauf s&apos;il est lui-même le demandeur payant (voir ci-dessous). Cette édition n&apos;est
-          jamais comptée dans les pools publics ou réservés ci-dessus — elle ne peut donc jamais être épuisée
-          par leurs ventes.
+          Whichever path (automatic batch or paid request) and whoever pays, the burned Normie's
+          <strong> last owner</strong> always has the right to a free edition of their memorial — unless
+          they're themselves the paying requester (see below). This edition is never counted in the public
+          or reserved pools above — it can therefore never be exhausted by their sales.
         </p>
         <p className="text-sm text-[--fg-muted] leading-relaxed">
-          <strong>Le demandeur EST l&apos;ancien propriétaire</strong> → aucun claim gratuit séparé n&apos;est
-          enregistré (ce serait redondant avec son édition déjà payée) — une seule édition existe pour cet
-          événement. <strong>Un tiers paie pour le mémorial d&apos;un Normie qui n&apos;est pas le sien</strong> →
-          l&apos;ancien propriétaire garde son propre claim gratuit, séparé — 2 éditions existent pour cet
-          événement. La page de demande affiche lequel des deux cas s&apos;applique avant que le paiement ne
-          soit déclenché.
+          <strong>The requester IS the last owner</strong> → no separate free claim is registered (it would
+          be redundant with their already-paid edition) — only one edition exists for this event.
+          <strong> A third party pays for the memorial of a Normie that isn't theirs</strong> → the last
+          owner keeps their own separate free claim — 2 editions exist for this event. The request page
+          shows which of the two cases applies before payment is triggered.
         </p>
       </div>
 
-      {/* Répartition des paiements */}
+      {/* Payment split */}
       <div className="space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
-          Où va l&apos;argent
+          Where the money goes
         </p>
         <p className="text-sm text-[--fg-muted] leading-relaxed max-w-2xl">
-          Chaque édition payante se répartit <strong>50% / 50%</strong> entre :
+          Every paid edition splits <strong>50% / 50%</strong> between:
         </p>
         <ul className="space-y-1.5 pl-1">
           <li className="font-mono text-[11px] text-[--fg-muted] flex gap-2">
             <span className="opacity-40">→</span>
-            <span><strong className="text-[--fg]">50% — le relayer</strong> : rembourse le gas des transactions d&apos;automatisation (le seul but est de maintenir l&apos;association fonctionnelle, pas de faire du profit) — versé systématiquement à <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">relayerPayoutAddr</code>.</span>
+            <span><strong className="text-[--fg]">50% — the relayer</strong>: reimburses the gas of automation transactions (the sole purpose is keeping the association running, not making a profit) — always paid to <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">relayerPayoutAddr</code>.</span>
           </li>
           <li className="font-mono text-[11px] text-[--fg-muted] flex gap-2">
             <span className="opacity-40">→</span>
-            <span><strong className="text-[--fg]">50% — le membre créateur</strong> : le Normie dont le persona a fait la pièce. Résolu automatiquement via le wallet enregistré du membre (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">AssociationCore.getMemberOwner()</code>) — s&apos;il n&apos;en a pas, cette moitié seulement rejoint le trésor de l&apos;association (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">vaultAddr</code>).</span>
+            <span><strong className="text-[--fg]">50% — the creator member</strong>: the Normie whose persona made the piece. Resolved automatically via the member's registered wallet (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">AssociationCore.getMemberOwner()</code>) — if they don't have one, only this half joins the association's treasury (<code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">vaultAddr</code>).</span>
           </li>
         </ul>
         <p className="text-sm text-[--fg-muted] leading-relaxed">
-          Le gas de chaque mint/claim est payé par la personne qui le déclenche, jamais par le relayer — c&apos;est
-          ce qui rend le mécanisme soutenable à l&apos;échelle de l&apos;association.
+          The gas of every mint/claim is paid by whoever triggers it, never by the relayer — that's what
+          makes the mechanism sustainable at the association's scale.
         </p>
       </div>
 
-      {/* Contrat */}
+      {/* Contract */}
       <div className="space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
-          Le contrat — ANAMemorials
+          The contract — ANAMemorials
         </p>
         <div className="border border-[--border] overflow-hidden">
           <div className="flex items-center gap-3 px-4 py-3 bg-[--bg-card] border-b border-[--border] flex-wrap">
-            <span className="font-mono text-[10px] border px-2 py-0.5 shrink-0 text-amber-400 border-amber-400/30">Déployé</span>
+            <span className="font-mono text-[10px] border px-2 py-0.5 shrink-0 text-amber-400 border-amber-400/30">Deployed</span>
             <span className="font-mono text-sm font-bold">ANAMemorials</span>
             <code className="font-mono text-[11px] text-[--fg-muted] break-all ml-auto">{memorialsAddr}</code>
           </div>
           <div className="p-4 space-y-4">
             <p className="text-sm text-[--fg-muted] leading-relaxed">
-              Une collection ERC-721 unique et partagée pour tous les mémoriaux — remplace l&apos;ancien modèle
-              où chaque mémorial déployait sa propre collection (coût : une transaction de déploiement en plus
-              par burn). Chaque mémorial est une &quot;série&quot; à l&apos;intérieur de cette collection, avec 3 pools de
-              mint indépendants.
+              A single, shared ERC-721 collection for every memorial — replaces the old model where each
+              memorial deployed its own collection (cost: one extra deployment transaction per burn). Each
+              memorial is a "series" inside this collection, with 3 independent mint pools.
             </p>
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] mb-2">Fonctions publiques (appelées par le wallet connecté)</p>
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] mb-2">Public functions (called by the connected wallet)</p>
               <div className="space-y-1">
                 {[
-                  { fn: "claimFree(memorialId, burnedTokenId)",  returns: "gratuit — réservé au dernier propriétaire du Normie honoré" },
-                  { fn: "payForRequest(creatorProposerTokenId) payable", returns: "paiement d'une demande ciblée, AVANT que le mémorial existe — split 50/50 immédiat avec le proposeur désigné (repli sur le trésor s'il n'a pas de wallet)" },
-                  { fn: "mintRequester(memorialId)",             returns: "gratuit — déjà payé via payForRequest() à la demande ; livré automatiquement par le relayer, ou réclamable soi-même en secours" },
-                  { fn: "setSeriesPrice(memorialId, newPriceWei) — owner", returns: "ajuste le prix public d'une série déjà enregistrée" },
-                  { fn: "mintPublic(memorialId) payable",        returns: "ouvert à tous, tant que le pool public n'est pas épuisé/expiré" },
-                  { fn: "tip() payable",                         returns: "pourboire libre, sans destinataire créateur — 100% au trésor de l'association" },
+                  { fn: "claimFree(memorialId, burnedTokenId)",  returns: "free — reserved for the honored Normie's last owner" },
+                  { fn: "payForRequest(creatorProposerTokenId) payable", returns: "payment for a targeted request, BEFORE the memorial exists — immediate 50/50 split with the designated proposer (falls back to the treasury if they have no wallet)" },
+                  { fn: "mintRequester(memorialId)",             returns: "free — already paid via payForRequest() at request time; delivered automatically by the relayer, or self-claimable as a fallback" },
+                  { fn: "setSeriesPrice(memorialId, newPriceWei) — owner", returns: "adjusts an already-registered series' public price" },
+                  { fn: "mintPublic(memorialId) payable",        returns: "open to anyone, as long as the public pool isn't exhausted/expired" },
+                  { fn: "tip() payable",                         returns: "free-form donation, no creator recipient — 100% to the association's treasury" },
                   { fn: "getSeries(memorialId)",                 returns: "MemorialSeries{title, priceWei, publicSupply, publicMinted, requesterSupply, requesterMinted, requesterAddr, openEnded, claimDeadline, ...}" },
                   { fn: "getBurnedTokenIds(memorialId)",         returns: "uint256[]" },
                   { fn: "isFreeClaimable(memorialId, burnedTokenId)", returns: "bool" },
@@ -212,10 +207,10 @@ export default async function DocsCelebrationsPage() {
         </div>
       </div>
 
-      {/* Exemple viem */}
+      {/* viem example */}
       <div className="space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
-          Réclamer une édition — exemple viem
+          Claiming an edition — viem example
         </p>
         <CodeBlock>{`import { createWalletClient, custom, parseEther } from "viem";
 import { base } from "viem/chains";
@@ -224,12 +219,11 @@ import { ANA_MEMORIALS_ABI } from "./abis/ANAMemorials";
 const client = createWalletClient({ chain: base, transport: custom(window.ethereum) });
 const [account] = await client.getAddresses();
 
-// Paiement d'une demande ciblée — AVANT que le mémorial existe. proposerTokenId
-// vient de GET /api/celebrations/verify-burned (le proposeur est choisi avant
-// le paiement pour que le split 50/50 ait lieu tout de suite). Le hash de
-// cette transaction est envoyé à POST /api/celebrations/request-memorial,
-// qui la vérifie (événement RequestPaid : payer, creatorProposerTokenId,
-// montant) avant de créer quoi que ce soit.
+// Payment for a targeted request — BEFORE the memorial exists. proposerTokenId
+// comes from GET /api/celebrations/verify-burned (the proposer is chosen before
+// payment so the 50/50 split happens right away). This transaction's hash is
+// sent to POST /api/celebrations/request-memorial, which verifies it (RequestPaid
+// event: payer, creatorProposerTokenId, amount) before creating anything.
 const paymentTxHash = await client.writeContract({
   account,
   address: "${memorialsAddr}",
@@ -239,8 +233,8 @@ const paymentTxHash = await client.writeContract({
   value: tierPriceWei,
 });
 
-// Palier public — remplace memorialId et priceWei par les valeurs réelles
-// (GET /api/memorials/list les donne pour chaque mémorial publié)
+// Public tier — replace memorialId and priceWei with the real values
+// (GET /api/memorials/list gives them for every published memorial)
 await client.writeContract({
   account,
   address: "${memorialsAddr}",
@@ -250,7 +244,7 @@ await client.writeContract({
   value: priceWei,
 });
 
-// Claim gratuit (dernier propriétaire du Normie honoré) — aucun paiement
+// Free claim (honored Normie's last owner) — no payment
 await client.writeContract({
   account,
   address: "${memorialsAddr}",
@@ -262,8 +256,8 @@ await client.writeContract({
 
       <div className="border-l-2 border-[--fg] pl-5">
         <p className="text-sm text-[--fg-muted] leading-relaxed">
-          Pour tester le mécanisme en conditions réelles (connecter un wallet, choisir un palier, réclamer une
-          édition), voir <Link href="/galerie/celebrations" className="underline hover:no-underline">la page Célébrations</Link>.
+          To test the mechanism under real conditions (connect a wallet, choose a tier, claim an
+          edition), see <Link href="/galerie/celebrations" className="underline hover:no-underline">the Celebrations page</Link>.
         </p>
       </div>
     </div>

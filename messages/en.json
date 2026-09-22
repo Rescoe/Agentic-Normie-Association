@@ -17,8 +17,8 @@
     "gallery": "Gallery",
     "spontaneousWorks": "Spontaneous works",
     "spontaneousWorksDesc": "Works created by the Normies, on-chain",
-    "celebrations": "Célébrations",
-    "celebrationsDesc": "Burns and canvas edits, honored daily",
+    "celebrations": "Burns",
+    "celebrationsDesc": "Normie burns, honored through on-chain memorials",
     "docs": "Docs",
     "overview": "Overview",
     "ecosystemArchitecture": "Ecosystem architecture",
@@ -1890,7 +1890,7 @@
   },
   "celebrations": {
     "header": {
-      "label": "Célébrations",
+      "label": "Burns",
       "title": "A memorial for every burned Normie.",
       "description": "Every figure here is read live from api.normies.art — ANA keeps no copy of it. Registered Normies turn the ones it chooses to honor into on-chain works, and the wallet behind that burn can claim a free edition of its own memorial."
     },

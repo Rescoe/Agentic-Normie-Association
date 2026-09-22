@@ -87,7 +87,7 @@ export function MemorialMintPanel() {
       load(); // refresh pool counts / claimed flags
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg.includes("User rejected") ? "Transaction annulée." : "Échec de la transaction.");
+      setError(msg.includes("User rejected") ? "Transaction cancelled." : "Transaction failed.");
     } finally {
       setPendingKey(null);
     }
@@ -95,11 +95,11 @@ export function MemorialMintPanel() {
 
   return (
     <div className="border border-[--border] bg-[--bg-card] p-6 space-y-4">
-      <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Éditions des mémoriaux</p>
+      <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Memorial editions</p>
 
       {!address && (
         <div className="flex items-center gap-3">
-          <p className="font-mono text-[11px] text-[--fg-muted]">Connecte ton wallet pour réclamer ou acheter une édition.</p>
+          <p className="font-mono text-[11px] text-[--fg-muted]">Connect your wallet to claim or buy an edition.</p>
           <ConnectButton />
         </div>
       )}
@@ -127,9 +127,9 @@ export function MemorialMintPanel() {
                 <p className="font-bold text-sm truncate" title={item.title}>{item.title}</p>
                 {item.cartelText && <p className="font-mono text-[10px] text-[--fg-muted] italic">{item.cartelText}</p>}
                 <p className="font-mono text-[10px] text-[--fg-muted]">
-                  {item.publicSupply > 0 && !item.openEnded && `${item.publicMinted}/${item.publicSupply} éditions publiques · `}
-                  {item.openEnded && `Édition ouverte jusqu'au ${new Date(item.claimDeadline * 1000).toLocaleDateString()} · `}
-                  {priceEth} ETH / édition
+                  {item.publicSupply > 0 && !item.openEnded && `${item.publicMinted}/${item.publicSupply} public editions · `}
+                  {item.openEnded && `Open edition until ${new Date(item.claimDeadline * 1000).toLocaleDateString()} · `}
+                  {priceEth} ETH / edition
                 </p>
 
                 <div className="flex flex-wrap gap-2">
@@ -139,7 +139,7 @@ export function MemorialMintPanel() {
                       disabled={pendingKey === `${item.memorialId}-claimFree`}
                       className="font-mono text-[10px] border border-green-400 text-green-400 px-2 py-1 hover:bg-green-400/10 disabled:opacity-50 disabled:cursor-wait"
                     >
-                      {pendingKey === `${item.memorialId}-claimFree` ? "…" : "✓ Réclamer gratuitement (Normie #" + myReserved.tokenId + ")"}
+                      {pendingKey === `${item.memorialId}-claimFree` ? "…" : "✓ Claim for free (Normie #" + myReserved.tokenId + ")"}
                     </button>
                   )}
                   {isRequester && (
@@ -148,7 +148,7 @@ export function MemorialMintPanel() {
                       disabled={pendingKey === `${item.memorialId}-mintRequester`}
                       className="font-mono text-[10px] border border-[--fg] px-2 py-1 hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait"
                     >
-                      {pendingKey === `${item.memorialId}-mintRequester` ? "…" : "Réclamer mon édition (déjà payée)"}
+                      {pendingKey === `${item.memorialId}-mintRequester` ? "…" : "Claim my edition (already paid)"}
                     </button>
                   )}
                   {publicAvailable && (
@@ -157,7 +157,7 @@ export function MemorialMintPanel() {
                       disabled={pendingKey === `${item.memorialId}-mintPublic` || !address}
                       className="font-mono text-[10px] border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors disabled:opacity-50 disabled:cursor-wait"
                     >
-                      {pendingKey === `${item.memorialId}-mintPublic` ? "…" : `Acheter une édition (${priceEth} ETH)`}
+                      {pendingKey === `${item.memorialId}-mintPublic` ? "…" : `Buy an edition (${priceEth} ETH)`}
                     </button>
                   )}
                 </div>
