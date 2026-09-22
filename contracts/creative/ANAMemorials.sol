@@ -46,6 +46,14 @@ import "../interfaces/IAssociationCore.sol";
 contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     using Strings for uint256;
 
+    // Must match memorialArt.ts's MEMORIAL_CANVAS_W/H exactly — the source
+    // canvas a raw SVG <g> fragment's coordinates (pixelImage.ts's
+    // pixelsToRunLengthSvg()) are expressed in, used only to map it onto
+    // tokenURI()'s 800x800 image via viewBox (_buildImageDataUri). A BMP data
+    // URI needs no such mapping — it carries its own dimensions internally.
+    uint256 private constant ARTWORK_CANVAS_W = 528;
+    uint256 private constant ARTWORK_CANVAS_H = 352;
+
     // ─── Types ────────────────────────────────────────────────────────────────
 
     struct MemorialSeries {
@@ -533,9 +541,10 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     ) internal pure returns (string memory) {
         // A data URI (BMP) embeds via <image href>. A raw SVG <g> fragment
         // (pixelImage.ts's pixelsToRunLengthSvg()) is spliced directly into a
-        // nested <svg> instead — its own viewBox maps the native 264x176
-        // pixel grid onto the 800x800 canvas, no base64/data-URI wrapping
-        // needed since it's already markup, not an opaque binary resource.
+        // nested <svg> instead — its own viewBox maps the native
+        // ARTWORK_CANVAS_W x ARTWORK_CANVAS_H pixel grid onto the 800x800
+        // canvas, no base64/data-URI wrapping needed since it's already
+        // markup, not an opaque binary resource.
         bytes memory artwork = isDataUri
             ? abi.encodePacked(
                 '<image x="0" y="0" width="800" height="800" preserveAspectRatio="xMidYMid meet" href="',
@@ -543,7 +552,9 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
                 '"/>'
             )
             : abi.encodePacked(
-                '<svg x="0" y="0" width="800" height="800" viewBox="0 0 264 176" preserveAspectRatio="xMidYMid meet">',
+                '<svg x="0" y="0" width="800" height="800" viewBox="0 0 ',
+                ARTWORK_CANVAS_W.toString(), ' ', ARTWORK_CANVAS_H.toString(),
+                '" preserveAspectRatio="xMidYMid meet">',
                 artworkContent,
                 '</svg>'
             );

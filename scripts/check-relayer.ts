@@ -49,6 +49,15 @@ const ROLE_LABELS: Record<string, string> = {
   [ROLES.RAPPORTEUR]:     "Rapporteur",
 };
 
+const MEMORIALS_ABI = [
+  { inputs: [], name: "owner",             outputs: [{ type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "relayerPayoutAddr", outputs: [{ type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "vaultAddr",         outputs: [{ type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "core",              outputs: [{ type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "getSeriesCount",    outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "addr", type: "address" }], name: "authorized", outputs: [{ type: "bool" }], stateMutability: "view", type: "function" },
+] as const;
+
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 async function main() {
@@ -127,6 +136,50 @@ async function main() {
   }
 
   // ── Key verdict ────────────────────────────────────────────────────────────
+
+  // ── ANAMemorials (burn memorials) ──────────────────────────────────────────
+
+  console.log("\n🗿  ANAMemorials diagnostic:");
+  const memorialsAddr = (process.env.ANA_MEMORIALS_ADDRESS ?? "") as `0x${string}`;
+  if (!memorialsAddr) {
+    console.log("   ⚠️   ANA_MEMORIALS_ADDRESS not set — skipping (not deployed yet, or env not configured).");
+  } else {
+    try {
+      const code = await client.getBytecode({ address: memorialsAddr });
+      if (!code || code === "0x") {
+        console.log(`   ❌  No bytecode at ${memorialsAddr} — wrong address, or wrong network.`);
+      } else {
+        const [owner, relayerPayoutAddr, vaultAddr, coreAddr, seriesCount, isAuthorized] = await Promise.all([
+          client.readContract({ address: memorialsAddr, abi: MEMORIALS_ABI, functionName: "owner" }),
+          client.readContract({ address: memorialsAddr, abi: MEMORIALS_ABI, functionName: "relayerPayoutAddr" }),
+          client.readContract({ address: memorialsAddr, abi: MEMORIALS_ABI, functionName: "vaultAddr" }),
+          client.readContract({ address: memorialsAddr, abi: MEMORIALS_ABI, functionName: "core" }),
+          client.readContract({ address: memorialsAddr, abi: MEMORIALS_ABI, functionName: "getSeriesCount" }),
+          client.readContract({ address: memorialsAddr, abi: MEMORIALS_ABI, functionName: "authorized", args: [relayer] }),
+        ]);
+        console.log(`   📍  Address            : ${memorialsAddr}`);
+        console.log(`   👑  Owner              : ${owner}`);
+        console.log(`   💸  relayerPayoutAddr  : ${relayerPayoutAddr}  ${(relayerPayoutAddr as string).toLowerCase() === relayer.toLowerCase() ? "✅ = relayer" : ""}`);
+        console.log(`   🏦  vaultAddr          : ${vaultAddr}`);
+        console.log(`   📚  Series registered  : ${seriesCount}`);
+        console.log(`   🔑  authorized[relayer]: ${isAuthorized ? "✅ true" : "❌ false — relayer can't registerMemorial()/addReservedClaims()"}`);
+
+        if ((relayerPayoutAddr as string).toLowerCase() === (vaultAddr as string).toLowerCase()) {
+          console.log("   ⚠️   relayerPayoutAddr == vaultAddr — every paid mint's 50% relayer share and any");
+          console.log("       no-wallet creator fallback land on the SAME address. Not necessarily wrong");
+          console.log("       (a valid config choice), but it defeats the point of having split them —");
+          console.log("       confirm this is intentional, not a leftover default.");
+        }
+        if ((coreAddr as string).toLowerCase() !== (process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS ?? "").toLowerCase()) {
+          console.log(`   ⚠️   core (${coreAddr}) does not match NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS — check for a stale deployment.`);
+        } else {
+          console.log("   ✅  core → matches AssociationCore");
+        }
+      }
+    } catch (e) {
+      console.log(`   ❌  Read failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 

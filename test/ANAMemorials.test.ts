@@ -370,7 +370,7 @@ describe("ANAMemorials", function () {
       const metadata = decodeTokenUri(await memorials.tokenURI(0));
       const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
       expect(svg).to.include(svgFragment);
-      expect(svg).to.include('viewBox="0 0 264 176"');
+      expect(svg).to.include('viewBox="0 0 528 352"'); // must match memorialArt.ts's MEMORIAL_CANVAS_W/H
       expect(svg).to.not.include("<image");
       // No animation_url for a raw fragment — it isn't a standalone renderable resource.
       expect(metadata.animation_url).to.equal(undefined);

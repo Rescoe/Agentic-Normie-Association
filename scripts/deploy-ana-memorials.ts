@@ -64,7 +64,10 @@ async function main() {
 
   console.log("\n─────────────────────────────────────────────────────");
   console.log("✅ Deployment complete!");
-  console.log(`\nAdd to .env.local / Vercel:\n  NEXT_PUBLIC_ANA_MEMORIALS_ADDRESS=${memorialsAddr}`);
+  // Server-only on purpose — client components fetch it via /api/memorials/list's
+  // contractAddress field instead of importing CONTRACT_ADDRESSES.ANAMemorials
+  // directly (Vercel rejects a NEXT_PUBLIC_-prefixed var with this name).
+  console.log(`\nAdd to .env.local / Vercel:\n  ANA_MEMORIALS_ADDRESS=${memorialsAddr}`);
   console.log("\nNo setter call needed on any existing contract — this deployment is additive only.");
   console.log("─────────────────────────────────────────────────────");
 }

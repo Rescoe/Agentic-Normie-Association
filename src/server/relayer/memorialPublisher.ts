@@ -79,7 +79,7 @@ function getClients() {
   const key   = process.env.RELAYER_PRIVATE_KEY as `0x${string}` | undefined;
   const addr  = CONTRACT_ADDRESSES.ANAMemorials as `0x${string}`;
   if (!key)  return { error: "RELAYER_PRIVATE_KEY not configured" } as const;
-  if (!addr) return { error: "NEXT_PUBLIC_ANA_MEMORIALS_ADDRESS not configured" } as const;
+  if (!addr) return { error: "ANA_MEMORIALS_ADDRESS not configured" } as const;
 
   const account      = privateKeyToAccount(key);
   const walletClient = createWalletClient({ account, chain: TARGET_CHAIN, transport: http(RPC_URL) });

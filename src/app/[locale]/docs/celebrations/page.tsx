@@ -57,12 +57,12 @@ export default async function DocsCelebrationsPage() {
         </p>
       </div>
 
-      {/* Deux chemins de création */}
+      {/* Trois chemins de création */}
       <div className="space-y-4">
         <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
-          Deux façons de déclencher un mémorial
+          Trois façons de déclencher un mémorial
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-[--border]">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[--border]">
           <div className="bg-[--bg] p-5 space-y-2">
             <p className="font-mono text-xs font-bold text-blue-400">Automatique — lot hebdomadaire</p>
             <p className="text-sm text-[--fg-muted] leading-relaxed">
@@ -87,6 +87,18 @@ export default async function DocsCelebrationsPage() {
               (le relayer appelle <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code> pour
               lui — gratuit, déjà payé en amont) — aucune action supplémentaire requise. Si ça échoue pour une
               raison quelconque, il peut toujours la réclamer lui-même depuis la page Célébrations.
+            </p>
+          </div>
+          <div className="bg-[--bg] p-5 space-y-2">
+            <p className="font-mono text-xs font-bold text-purple-400">Monument — palier de 1000 burns</p>
+            <p className="text-sm text-[--fg-muted] leading-relaxed">
+              Déclenché manuellement depuis l&apos;administration ANA, un monument collectif marque chaque
+              franchissement d&apos;un palier de 1000 burns cumulés sur l&apos;ensemble de la collection Normies —
+              un seul monument par palier, jamais réutilisé. Composition volontairement plus riche qu&apos;un
+              mémorial ordinaire (le persona utilise tout l&apos;espace créatif disponible plutôt que de rester
+              minimal). Contrairement aux deux autres chemins, aucun claim gratuit individuel n&apos;est réservé
+              (ce serait des milliers d&apos;entrées pour un seul monument) — un petit pool public fixe existe
+              simplement pour que le mint reste testable.
             </p>
           </div>
         </div>
