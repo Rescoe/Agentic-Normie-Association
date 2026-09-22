@@ -23,8 +23,19 @@ import {
 } from "@/lib/normiesPersona";
 import { listWorks } from "@/lib/workStore";
 
-export const MEMORIAL_CANVAS_W = 264;
-export const MEMORIAL_CANVAS_H = 176;
+// Deliberately larger than any single physical e-ink target (264x176/296x128/
+// 128x64 — see proof-of-draw's screenProfiles.ts) — this is a canonical
+// "master" resolution, downscaled per-screen off-chain at delivery time (a
+// proof-of-draw concern, not this repo's), never matched 1:1 to one device.
+// Was 264x176 (exactly the 2.7" e-ink's own profile) until this canvas was
+// generalized — a real bug, since it meant every other screen type received
+// an image sized for a device it wasn't. Safe to grow because on-chain
+// storage cost (encodeArtworkContent, pixelImage.ts) scales with what's
+// actually drawn, not with raw canvas pixel count — see MAX_SHAPES/
+// MAX_CIRCLE_RADIUS/MAX_DOTS_TOTAL_AREA below for the caps that keep the
+// worst case bounded regardless of canvas size.
+export const MEMORIAL_CANVAS_W = 528;
+export const MEMORIAL_CANVAS_H = 352;
 
 // Memorials are never for sale — the piece honors a departed member, it isn't
 // a Normie-priced edition. Set explicitly at creation (check-burns.ts,
@@ -37,7 +48,27 @@ export const MEMORIAL_EDITION_PRICE  = "0";
 export const MEMORIAL_EDITION_SUPPLY = 1;
 
 const MODEL      = "openai/gpt-oss-120b";
-const MAX_SHAPES = 28;
+// 18, not 28 — measured (Hardhat, explicit gas limit, not eth_estimateGas)
+// against the actual worst case this many shapes can produce at the current
+// canvas size: 27 max-radius circles + one max-area dots patch came in at
+// ~60% of Base's ~16.7M per-tx gas cap. Combined with MAX_CIRCLE_RADIUS and
+// MAX_DOTS_TOTAL_AREA below (both canvas-size-independent), this bounds
+// registerMemorial()'s cost regardless of composition or how large
+// MEMORIAL_CANVAS_W/H ever grows — "favor a few deliberate, well-placed
+// forms" (the prompt below) never gets close to this ceiling in practice;
+// it exists for the adversarial/degenerate case, not normal use.
+const MAX_SHAPES = 18;
+// Circle radius and total "dots" (per-pixel random noise) area are capped in
+// ABSOLUTE pixels, not scaled with canvas size — filled/hollow rects and
+// lines cost roughly the same regardless of canvas resolution (they collapse
+// to a handful of <rect>s in encodeArtworkContent's RLE encoding either way),
+// but circles and dots don't compress as well, and DO scale with resolution
+// if left uncapped. Measured: a single 40x40 dots patch at max density costs
+// ~5.6M gas alone; uncapped dots on a bigger canvas has produced actual
+// "ran out of gas" reverts in testing (the same failure mode this project
+// already hit three times this session for other reasons).
+const MAX_CIRCLE_RADIUS    = 25;
+const MAX_DOTS_TOTAL_AREA  = 1600; // shared budget across every "dots" shape in one composition
 const MAX_BURNED_IN_PROMPT = 5; // cap prompt size/cost for very large batch burns
 
 type Shape =
@@ -68,6 +99,7 @@ function rasterize(rawShapes: unknown): Uint8Array {
   };
 
   const shapes = (Array.isArray(rawShapes) ? rawShapes : []).slice(0, MAX_SHAPES) as Record<string, unknown>[];
+  let dotsAreaBudget = MAX_DOTS_TOTAL_AREA; // shared across every "dots" shape below, see the constant's comment
 
   for (const s of shapes) {
     if (s.type === "rect") {
@@ -82,7 +114,7 @@ function rasterize(rawShapes: unknown): Uint8Array {
       }
     } else if (s.type === "circle") {
       const cx = clampNum(s.cx, 0, w, w / 2), cy = clampNum(s.cy, 0, h, h / 2);
-      const r  = clampNum(s.r, 1, Math.max(w, h), 10);
+      const r  = clampNum(s.r, 1, MAX_CIRCLE_RADIUS, 10);
       const fill = s.fill !== false;
       for (let yy = Math.max(0, cy - r); yy < Math.min(h, cy + r); yy++) {
         for (let xx = Math.max(0, cx - r); xx < Math.min(w, cx + r); xx++) {
@@ -102,8 +134,19 @@ function rasterize(rawShapes: unknown): Uint8Array {
         for (let dx = -half; dx <= half; dx++) for (let dy = -half; dy <= half; dy++) setBlack(x + dx, y + dy);
       }
     } else if (s.type === "dots") {
+      if (dotsAreaBudget <= 0) continue; // budget exhausted by an earlier dots shape — skip, don't error
       const x = clampNum(s.x, 0, w - 1, 0), y = clampNum(s.y, 0, h - 1, 0);
-      const sw = clampNum(s.w, 1, w, 20), sh = clampNum(s.h, 1, h, 20);
+      let sw = clampNum(s.w, 1, w, 20), sh = clampNum(s.h, 1, h, 20);
+      // Clamp to whatever's left of the shared budget (roughly preserving
+      // this shape's own aspect ratio) rather than the canvas bounds — random
+      // noise doesn't compress the way rects/circles do, so area here (not
+      // canvas size) is what actually drives on-chain storage cost.
+      if (sw * sh > dotsAreaBudget) {
+        const scale = Math.sqrt(dotsAreaBudget / (sw * sh));
+        sw = Math.max(1, Math.floor(sw * scale));
+        sh = Math.max(1, Math.floor(sh * scale));
+      }
+      dotsAreaBudget -= sw * sh;
       const density = clampNum(s.density, 0.05, 0.9, 0.3);
       let seed = (Math.round(x) * 31 + Math.round(y) * 17 + Math.round(sw) * 7 + Math.round(sh) * 3) >>> 0 || 1;
       const rand = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 0xffffffff; };
@@ -140,7 +183,7 @@ function fallbackArtwork(): MemorialArtwork {
   return {
     pixels: rasterize([
       { type: "rect", x: 8, y: 8, w: MEMORIAL_CANVAS_W - 16, h: MEMORIAL_CANVAS_H - 16, fill: false },
-      { type: "circle", cx: MEMORIAL_CANVAS_W / 2, cy: MEMORIAL_CANVAS_H / 2, r: 30, fill: false },
+      { type: "circle", cx: MEMORIAL_CANVAS_W / 2, cy: MEMORIAL_CANVAS_H / 2, r: MAX_CIRCLE_RADIUS, fill: false },
     ]),
     cartel: "A minimal mark, offered when the words and shapes wouldn't come.",
   };
@@ -181,13 +224,13 @@ export async function createMemorialArtwork(params: {
 
 ${burnedBlock}
 ${historyBlock}
-You're designing on a small ${MEMORIAL_CANVAS_W}×${MEMORIAL_CANVAS_H} monochrome canvas — black ink on white, meant for a tiny physical e-ink screen (think woodcut/linocut silhouette, not detail or photorealism). Compose it from simple geometric primitives, and write a short cartel — your own artist statement, in character, 2-4 sentences — explaining what you made and why. You may reference the departed Normie(s) by name if it feels genuine, or make something more abstract about finitude, burning, and what persists on-chain — your call.
+You're designing on a ${MEMORIAL_CANVAS_W}×${MEMORIAL_CANVAS_H} monochrome canvas — black ink on white. This piece will end up downsized onto tiny physical e-ink screens (think woodcut/linocut silhouette, not detail or photorealism) — the extra working space is for precise, deliberate placement, not for fine detail that would vanish at that scale.  Compose it from simple geometric primitives, and write a short cartel — your own artist statement, in character, 2-4 sentences — explaining what you made and why. You may reference the departed Normie(s) by name if it feels genuine, or make something more abstract about finitude, burning, and what persists on-chain — your call.
 
 Available primitives (canvas coords: x 0-${MEMORIAL_CANVAS_W}, y 0-${MEMORIAL_CANVAS_H}):
 {"type":"rect","x":N,"y":N,"w":N,"h":N,"fill":true|false}
-{"type":"circle","cx":N,"cy":N,"r":N,"fill":true|false}
+{"type":"circle","cx":N,"cy":N,"r":N (max ${MAX_CIRCLE_RADIUS}),"fill":true|false}
 {"type":"line","x1":N,"y1":N,"x2":N,"y2":N,"thickness":1-6}
-{"type":"dots","x":N,"y":N,"w":N,"h":N,"density":0.05-0.9}
+{"type":"dots","x":N,"y":N,"w":N,"h":N (keep this patch modest, well under 40x40 — texture accent, not a fill),"density":0.05-0.9}
 
 Use at most ${MAX_SHAPES} shapes total — favor a few deliberate, well-placed forms over clutter, this will be read at a glance on a small screen.
 

@@ -117,20 +117,18 @@ export async function registerMemorialOnChain(
         BigInt(params.claimDurationSeconds),
       ],
       // Was 2M — wrong: no contract gets deployed here anymore, but
-      // `artworkContent` (the full ~8.5KB base64 BMP) IS still stored
-      // entirely in this call's MemorialSeries struct, via a genuinely
-      // expensive cold SSTORE (~266 32-byte words × ~22,100 gas ≈ 5.9M gas
-      // for that field alone) — the exact same class of gas-budget mistake
-      // already made and fixed twice for the old per-memorial pipeline
-      // (publishWork, initializeCollection). Confirmed in production:
-      // registerMemorial reverted with gasUsed EXACTLY 2,000,000 (the limit
-      // itself), the unmistakable signature of running out, not a logic
-      // revert — this repo's public RPC (mainnet.base.org) fails
-      // eth_estimateGas outright above a certain calldata/storage size, with
-      // no decodable revert reason, hence the explicit value instead of
-      // relying on estimation. 10M gives real margin under the node's
-      // ~16.7M-gas transaction cap.
-      gas: 10_000_000n,
+      // `artworkContent` IS still stored entirely in this call's
+      // MemorialSeries struct via a genuinely expensive cold SSTORE. Fixed to
+      // 10M, then to 15M when MEMORIAL_CANVAS_W/H grew 4x (encodeArtworkContent,
+      // pixelImage.ts, now usually picks the RLE/SVG encoding over BMP, but
+      // its own worst case — MAX_SHAPES circles at MAX_CIRCLE_RADIUS plus a
+      // maxed-out MAX_DOTS_TOTAL_AREA patch, see memorialArt.ts — measured at
+      // ~10M gas with an explicit Hardhat gas limit, not eth_estimateGas
+      // (this project's public RPC, mainnet.base.org, fails that call outright
+      // above a certain calldata/storage size with no decodable revert reason,
+      // hence always passing an explicit value here). 15M keeps real margin
+      // under the node's ~16.7M-gas transaction cap even at that worst case.
+      gas: 15_000_000n,
     });
 
     await logTxSubmitted({
