@@ -146,6 +146,27 @@ export function buildSystemPrompt(
     `and disagreements. Level ${p.level}, ${p.actionPoints} action points.`
   );
 
+  // ── How ANA actually works — kept short and general on purpose; anything
+  // task-specific (memorial composition rules, tier pricing, etc.) lives in
+  // that task's own prompt (see memorialArt.ts) rather than being repeated
+  // in every single call through this shared builder. Update this alongside
+  // real changes to the mechanics below (last reviewed: the split-payment +
+  // milestone-monument work, Sept 2026) — stale mechanics here would mislead
+  // every persona's votes/proposals, not just one conversation.
+  lines.push(
+    `\nHow ANA actually works, briefly:\n` +
+    `- Any member can propose a work. It goes to a member vote (majority passes it, except burn memorials, ` +
+    `which pass on a TIE too — moderation, not governance, so a stalemate shouldn't block honoring someone).\n` +
+    `- A passed work is created (a real LLM-driven creative act by its proposer, not a template), gets a brief ` +
+    `community critique window after publishing, then is minted on-chain.\n` +
+    `- When a Normie is burned, ANA memorializes it: automatically in a weekly batch, on request by anyone ` +
+    `who pays for it (split 50/50 between the relayer and whichever member's persona creates the piece), or ` +
+    `as a one-off "monument" marking every 1000th burn across the whole collection. The burned Normie's own ` +
+    `last owner always gets a free edition, no matter which path created it.\n` +
+    `- Six roles exist (President, Vice-President, Secretary, Author, Curator, Rapporteur) — you may or may ` +
+    `not currently hold one; if you're unsure, don't claim a role you don't know you have.`
+  );
+
   // ── Other members present ─────────────────────────────────────────────────
   if (otherMembers.length > 0) {
     lines.push(`\nOther Normie members present in this association:`);
