@@ -136,8 +136,9 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
 // ─── Candidacy ────────────────────────────────────────────────────────────────
 
 async function decideCandidacy(p: NormiePersona): Promise<Candidacy> {
-  const roleList = ORDERED_ROLE_ENTRIES.map(r => r.label).join(", ");
-  const prompt   = `You are ${p.name} (Normie #${p.tokenId}).
+  try {
+    const roleList = ORDERED_ROLE_ENTRIES.map(r => r.label).join(", ");
+    const prompt   = `You are ${p.name} (Normie #${p.tokenId}).
 Persona: ${p.personaText ?? ""} Archetype: ${p.archetype ?? ""}
 Traits: ${p.traits.slice(0, 4).map((t: { trait_type: string; value: string }) => `${t.trait_type}:${t.value}`).join(", ")}
 
@@ -145,18 +146,26 @@ ANA roles: ${roleList}
 Which role(s) are you running for? (1-2 max, based on your persona)
 Always write in English. Format: CANDIDATE: <role1>[, <role2>]\nREASON: <sentence>`;
 
-  const resp       = await groqText(prompt, true);
-  const candLine   = resp.match(/CANDIDATE:\s*(.+)/i)?.[1] ?? "";
-  const reasoning  = resp.match(/REASON:\s*(.+)/i)?.[1]?.trim() ?? "";
+    const resp       = await groqText(prompt, true);
+    const candLine   = resp.match(/CANDIDATE:\s*(.+)/i)?.[1] ?? "";
+    const reasoning  = resp.match(/REASON:\s*(.+)/i)?.[1]?.trim() ?? "";
 
-  const roles: string[] = []; const roleNames: string[] = [];
-  for (const { hash, label } of ORDERED_ROLE_ENTRIES) {
-    if (candLine.toLowerCase().includes(label.toLowerCase())) {
-      roles.push(hash);
-      roleNames.push(label);
+    const roles: string[] = []; const roleNames: string[] = [];
+    for (const { hash, label } of ORDERED_ROLE_ENTRIES) {
+      if (candLine.toLowerCase().includes(label.toLowerCase())) {
+        roles.push(hash);
+        roleNames.push(label);
+      }
     }
+    return { tokenId: p.tokenId, name: p.name, roles, roleNames, reasoning };
+  } catch (e) {
+    // Promise.allSettled/runInBatches silently drops a rejection here — without
+    // this log, a Groq-side failure (rate limit, 5xx) for every persona at once
+    // leaves zero trace anywhere, which is exactly what happened live: a vote
+    // phase that produced 0 decisions with no way to tell why.
+    console.error(`[auto-vote] decideCandidacy failed for #${p.tokenId}:`, e);
+    throw e;
   }
-  return { tokenId: p.tokenId, name: p.name, roles, roleNames, reasoning };
 }
 
 // ─── Voting (JSON output — robust) ───────────────────────────────────────────
@@ -166,24 +175,25 @@ async function decideAllVotes(
   candidacies: Candidacy[],
   allPersonas: NormiePersona[],
 ): Promise<VoteDecision[]> {
-  // Build per-role candidate list (excluding the voter themselves)
-  const roleDefs = ORDERED_ROLE_ENTRIES.map(({ hash, label }) => {
-    const fromCandidacies = candidacies
-      .filter(c => c.tokenId !== voter.tokenId && c.roles.includes(hash))
-      .map(c => c.tokenId);
-    const fallback = allPersonas
-      .filter(p => p.tokenId !== voter.tokenId)
-      .map(p => p.tokenId);
-    const validIds = [...new Set([...fromCandidacies, ...fallback])];
-    return { hash, label, validIds };
-  });
+  try {
+    // Build per-role candidate list (excluding the voter themselves)
+    const roleDefs = ORDERED_ROLE_ENTRIES.map(({ hash, label }) => {
+      const fromCandidacies = candidacies
+        .filter(c => c.tokenId !== voter.tokenId && c.roles.includes(hash))
+        .map(c => c.tokenId);
+      const fallback = allPersonas
+        .filter(p => p.tokenId !== voter.tokenId)
+        .map(p => p.tokenId);
+      const validIds = [...new Set([...fromCandidacies, ...fallback])];
+      return { hash, label, validIds };
+    });
 
-  const exampleVotes: Record<string, number> = {};
-  for (const r of roleDefs) {
-    if (r.validIds.length > 0) exampleVotes[r.label] = r.validIds[0];
-  }
+    const exampleVotes: Record<string, number> = {};
+    for (const r of roleDefs) {
+      if (r.validIds.length > 0) exampleVotes[r.label] = r.validIds[0];
+    }
 
-  const prompt = `You are ${voter.name} (#${voter.tokenId}). Persona: ${voter.personaText ?? ""} Archetype: ${voter.archetype ?? ""}
+    const prompt = `You are ${voter.name} (#${voter.tokenId}). Persona: ${voter.personaText ?? ""} Archetype: ${voter.archetype ?? ""}
 
 Vote for ANA's 6 roles. For each role, pick a tokenId among the listed candidates:
 ${roleDefs.map(r => `${r.label}: available candidates = [${r.validIds.join(", ")}]`).join("\n")}
@@ -191,26 +201,34 @@ ${roleDefs.map(r => `${r.label}: available candidates = [${r.validIds.join(", ")
 Respond ONLY in JSON, always in English. Example: ${JSON.stringify({ votes: exampleVotes })}
 Pick the tokenIds that best match the roles according to your personality.`;
 
-  const json = await groqJson(prompt, 200);
-  const votes = (json.votes ?? json) as Record<string, unknown>;
+    const json = await groqJson(prompt, 200);
+    const votes = (json.votes ?? json) as Record<string, unknown>;
 
-  const decisions: VoteDecision[] = [];
-  for (const { hash, label, validIds } of roleDefs) {
-    if (validIds.length === 0) continue;
-    const raw = votes[label];
-    const cid = (typeof raw === "number" && validIds.includes(raw)) ? raw : validIds[0];
-    const cand = allPersonas.find(p => p.tokenId === cid);
-    decisions.push({
-      voterTokenId:    voter.tokenId,
-      voterName:       voter.name,
-      role:            hash,
-      roleLabel:       label,
-      candidateTokenId: cid,
-      candidateName:   cand?.name ?? `#${cid}`,
-      reasoning:       `${label} → #${cid}`,
-    });
+    const decisions: VoteDecision[] = [];
+    for (const { hash, label, validIds } of roleDefs) {
+      if (validIds.length === 0) continue;
+      const raw = votes[label];
+      const cid = (typeof raw === "number" && validIds.includes(raw)) ? raw : validIds[0];
+      const cand = allPersonas.find(p => p.tokenId === cid);
+      decisions.push({
+        voterTokenId:    voter.tokenId,
+        voterName:       voter.name,
+        role:            hash,
+        roleLabel:       label,
+        candidateTokenId: cid,
+        candidateName:   cand?.name ?? `#${cid}`,
+        reasoning:       `${label} → #${cid}`,
+      });
+    }
+    return decisions;
+  } catch (e) {
+    // Same silent-drop problem as decideCandidacy above: without this log, a
+    // Groq-side failure for every voter at once (rate limit right after the
+    // candidacy phase's own burst of calls is the leading suspect) shows up
+    // only as decisions:[] / submitted:0 with zero clue why.
+    console.error(`[auto-vote] decideAllVotes failed for #${voter.tokenId}:`, e);
+    throw e;
   }
-  return decisions;
 }
 
 // ─── Salon helpers ─────────────────────────────────────────────────────────────
@@ -454,6 +472,10 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
   const allDecisions = voteRes
     .filter((r): r is PromiseFulfilledResult<VoteDecision[]> => r.status === "fulfilled")
     .flatMap(r => r.value);
+  // Surfaced in the response so a total failure (0 decisions) isn't a silent
+  // black box in the admin console — the real errors are now also logged
+  // individually by decideAllVotes() above, but this gives an at-a-glance count.
+  const voteErrors = voteRes.filter((r): r is PromiseRejectedResult => r.status === "rejected");
 
   // Post one vote-summary message per voter to the dedicated salon
   for (const voter of personas) {
@@ -480,6 +502,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
       decisionCount: allDecisions.length,
       memberCount: personas.length,
       roleCount: ORDERED_ROLE_ENTRIES.length,
+      voteErrorCount: voteErrors.length,
       voteSalonId,
     };
   }
@@ -489,6 +512,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
     phase: "vote", mode: "execute",
     candidacies, decisions: allDecisions,
     submitted: result.ok, failed: result.failed,
+    voteErrorCount: voteErrors.length,
     voteSalonId,
   };
 }

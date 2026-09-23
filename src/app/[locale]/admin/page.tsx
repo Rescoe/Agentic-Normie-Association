@@ -2784,7 +2784,11 @@ export default function AdminPage() {
                   // Non-fatal: continue to try closing
                 }
                 if ((v.submitted ?? 0) === 0) {
-                  throw new Error(v.failed?.length ? `Aucun vote enregistré on-chain : ${v.failed[0]}` : "Aucun vote enregistré on-chain (0 décision générée — voir la console).");
+                  throw new Error(
+                    v.failed?.length
+                      ? `Aucun vote enregistré on-chain : ${v.failed[0]}`
+                      : `Aucun vote enregistré on-chain (0 décision générée sur ${v.decisions?.length ?? 0} attendues, ${v.voteErrorCount ?? "?"} en erreur — voir les logs Vercel de /api/keeper/auto-vote pour la cause réelle).`
+                  );
                 }
                 // Try to auto-close via relayer (works if deadline passed; silent if not)
                 await fetch("/api/keeper/auto-vote", {
