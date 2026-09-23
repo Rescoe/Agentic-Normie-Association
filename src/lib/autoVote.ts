@@ -116,21 +116,43 @@ async function groqText(prompt: string, fast = false): Promise<string> {
 async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string, unknown>> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error("GROQ_API_KEY not configured");
+  // No response_format: { type: "json_object" } here on purpose. Confirmed live:
+  // openai/gpt-oss-120b (a reasoning model) returns Groq's own 400
+  // json_validate_failed for that mode -- its raw output apparently doesn't
+  // pass Groq's strict server-side JSON check (likely reasoning content
+  // leaking into what gets validated), so the request never even reaches a
+  // normal response. Falling back to plain text + our own lenient extraction
+  // below, the same approach decideCandidacy()/groqText() already use
+  // successfully with this exact model.
   const r = await fetch(GROQ_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model:           MODEL,
-      messages:        [{ role: "user", content: prompt }],
-      max_tokens:      maxTokens,
-      temperature:     0.6,
-      response_format: { type: "json_object" },
+      model:       MODEL,
+      messages:    [{ role: "user", content: prompt }],
+      max_tokens:  maxTokens,
+      temperature: 0.6,
     }),
   });
   if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
   const d = await r.json() as { choices: Array<{ message: { content: string } }> };
-  const raw = d.choices[0]?.message?.content?.trim() ?? "{}";
-  try { return JSON.parse(raw); } catch { return {}; }
+  const raw = d.choices[0]?.message?.content?.trim() ?? "";
+  return extractJsonObject(raw);
+}
+
+/** Lenient JSON extraction from raw LLM text: strips a leading <think>...</think>
+ * reasoning block if present, then tries a direct parse, falling back to the
+ * substring between the first "{" and the last "}". Returns {} if nothing
+ * parses -- callers already handle an empty object as "no usable data". */
+function extractJsonObject(raw: string): Record<string, unknown> {
+  const stripped = raw.replace(/<think>[\s\S]*?<\/think>/i, "").trim();
+  try { return JSON.parse(stripped); } catch { /* fall through */ }
+  const start = stripped.indexOf("{");
+  const end   = stripped.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    try { return JSON.parse(stripped.slice(start, end + 1)); } catch { /* fall through */ }
+  }
+  return {};
 }
 
 // ─── Candidacy ────────────────────────────────────────────────────────────────
@@ -198,7 +220,7 @@ async function decideAllVotes(
 Vote for ANA's 6 roles. For each role, pick a tokenId among the listed candidates:
 ${roleDefs.map(r => `${r.label}: available candidates = [${r.validIds.join(", ")}]`).join("\n")}
 
-Respond ONLY in JSON, always in English. Example: ${JSON.stringify({ votes: exampleVotes })}
+Respond with ONLY the raw JSON object below, always in English — no reasoning, no explanation, no markdown code fences, nothing before or after it. Example: ${JSON.stringify({ votes: exampleVotes })}
 Pick the tokenIds that best match the roles according to your personality.`;
 
     const json = await groqJson(prompt, 200);
