@@ -31,7 +31,6 @@ import {
   CONSTITUENT_ASSEMBLY_ABI,
   WORK_REGISTRY_ABI,
   ANA_COLLECTION_FACTORY_ABI,
-  CELEBRATION_REGISTRY_ABI,
   ANA_MEMORIALS_ABI,
   CONTRACT_ADDRESSES,
   ROLES,
@@ -49,8 +48,9 @@ const CORE_ADDR    = CONTRACT_ADDRESSES.AssociationCore       as `0x${string}`;
 const CA_ADDR      = CONTRACT_ADDRESSES.ConstituentAssembly   as `0x${string}`;
 const WR_ADDR      = CONTRACT_ADDRESSES.WorkRegistry          as `0x${string}`;
 const FACTORY_ADDR = CONTRACT_ADDRESSES.ANACollectionFactory  as `0x${string}`;
-const CELEBRATION_ADDR = CONTRACT_ADDRESSES.CelebrationRegistry as `0x${string}`;
-const MEMORIALS_ADDR = CONTRACT_ADDRESSES.ANAMemorials as `0x${string}`;
+// ANAMemorials's address is deliberately not exposed here — it isn't
+// NEXT_PUBLIC_-prefixed, so it would always be "" client-side. ANAMemorialsSection
+// fetches it from /api/memorials/list instead (see that route's own doc comment).
 const contractsDeployed = !!CONTRACT_ADDRESSES.AssociationCore;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -147,26 +147,25 @@ function AdminAction({
 }
 
 // ─── TabBar ───────────────────────────────────────────────────────────────────
-// One tab per contract (plus overview/pipeline/association) so "everything on
-// one endless scroll, mixed together" stops being the way to find a specific
-// contract action. Sections keep their existing position in the JSX (no
-// reordering, lower risk) — each is just wrapped in `{activeTab === "…" && (…)}`.
+// One-tab-per-contract (the previous iteration) turned out too fine-grained
+// in practice — the porteur lost track of where a specific button (e.g. the
+// monument trigger) had ended up. Grouped into fewer "lots" instead: contracts
+// that are used together share a tab, and everything that FEEDS ANAMemorials
+// (burn detection, the monument trigger) now lives right next to it instead of
+// under the generic "Pipeline & keeper" tab. Sections keep their existing
+// position in the JSX (no reordering, lower risk) — each is just wrapped in
+// `{activeTab === "…" && (…)}`. CelebrationRegistry and the two dead factory
+// contracts (FactoryRegistry, the pre-ANA CollectionFactory) dropped entirely
+// per the porteur's 23/09 audit request — see the vault note for why.
 
-type AdminTab =
-  | "overview" | "core" | "assembly" | "workregistry"
-  | "factory" | "celebration" | "memorials"
-  | "pipeline" | "association";
+type AdminTab = "overview" | "gouvernance" | "oeuvres" | "pipeline" | "association";
 
 const ADMIN_TABS: { id: AdminTab; label: string }[] = [
-  { id: "overview",     label: "Vue d'ensemble" },
-  { id: "core",         label: "AssociationCore" },
-  { id: "assembly",     label: "ConstituentAssembly" },
-  { id: "workregistry", label: "WorkRegistry" },
-  { id: "factory",      label: "ANACollectionFactory" },
-  { id: "celebration",  label: "CelebrationRegistry" },
-  { id: "memorials",    label: "ANAMemorials" },
-  { id: "pipeline",     label: "Pipeline & keeper" },
-  { id: "association",  label: "Association" },
+  { id: "overview",    label: "Vue d'ensemble" },
+  { id: "gouvernance", label: "Gouvernance" },
+  { id: "oeuvres",     label: "Œuvres & Mémoriaux" },
+  { id: "pipeline",    label: "Pipeline & keeper" },
+  { id: "association", label: "Association" },
 ];
 
 function TabBar({ active, onChange }: { active: AdminTab; onChange: (t: AdminTab) => void }) {
@@ -944,54 +943,10 @@ function CollectionFactorySection({
   );
 }
 
-// ─── CelebrationRegistrySection ──────────────────────────────────────────────
-
-function CelebrationRegistrySection({
-  writeContractAsync,
-}: {
-  writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
-}) {
-  void writeContractAsync; // no write actions left here — no sponsorship pool to fund
-
-  const { data: celebrationCount } = useReadContract({
-    address: CELEBRATION_ADDR, abi: CELEBRATION_REGISTRY_ABI, functionName: "celebrationCount",
-    query: { enabled: !!CELEBRATION_ADDR, refetchInterval: 15_000 },
-  });
-
-  if (!CELEBRATION_ADDR) {
-    return (
-      <section className="space-y-2 border-t border-[--border] pt-10">
-        <h2 className="text-xl font-bold">CelebrationRegistry</h2>
-        <p className="font-mono text-xs text-[--fg-muted]">
-          Non déployé — NEXT_PUBLIC_CELEBRATION_REGISTRY_ADDRESS absent. Les célébrations (burns) ne
-          sont pas honorées par un claim gratuit : les œuvres mémorial sont créées normalement.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="space-y-4 border-t border-[--border] pt-10">
-      <div>
-        <h2 className="text-xl font-bold">CelebrationRegistry</h2>
-        <p className="font-mono text-xs text-[--fg-muted] mt-1">
-          Claim gratuit pour le wallet honoré par une œuvre de célébration (burns, etc.) — aucun pool à
-          financer : ANAEditions.mintFreeTo() mint directement, sans paiement ni sponsoring.
-        </p>
-      </div>
-
-      <div className="border border-[--border] p-5 space-y-0 max-w-md">
-        <div className="flex items-center justify-between mb-3">
-          <p className="font-bold text-sm">État</p>
-          <a href={basescanAddr(CELEBRATION_ADDR)} target="_blank" rel="noopener noreferrer"
-            className="font-mono text-xs text-[--fg-muted] hover:underline">Basescan ↗</a>
-        </div>
-        <StatusRow label="Adresse" value={`${CELEBRATION_ADDR.slice(0,10)}…${CELEBRATION_ADDR.slice(-6)}`} />
-        <StatusRow label="Célébrations enregistrées" value={celebrationCount != null ? String(celebrationCount) : "—"} />
-      </div>
-    </section>
-  );
-}
+// CelebrationRegistrySection removed (23/09) — CelebrationRegistry's on-chain
+// write path (registerCelebrationOnChain) was confirmed dead code, called
+// from nowhere in the live app: ANAMemorials' own reservedClaims/claimFree
+// replaced its whole purpose for burns. See the vault note for the audit.
 
 // ─── ANAMemorialsSection ─────────────────────────────────────────────────────
 // Was entirely absent from admin — the contract with the most activity this
@@ -1019,33 +974,54 @@ function ANAMemorialsSection({
   const [err,   setErr]   = useState<Record<string, string | null>>({});
   const [tx,    setTx]    = useState<Record<string, string | null>>({});
 
+  // ANA_MEMORIALS_ADDRESS is deliberately NOT NEXT_PUBLIC_-prefixed (Vercel
+  // rejected that name) — it's invisible in the browser bundle, so
+  // CONTRACT_ADDRESSES.ANAMemorials is always "" client-side regardless of
+  // what's set server-side. This is a real bug this section shipped with
+  // (23/09): it showed "Non déployé" even with the env var correctly set,
+  // because it tried to import the address directly instead of fetching it.
+  // /api/memorials/list already solves exactly this for the public mint/claim
+  // UI (see its own doc comment) — reuse it here instead of re-inventing a
+  // second server-only-address-exposure route.
+  const [addr, setAddr] = useState<`0x${string}` | "">("");
+  useEffect(() => {
+    fetch("/api/memorials/list")
+      .then(r => r.json())
+      .then((d: { contractAddress?: string }) => setAddr((d.contractAddress ?? "") as `0x${string}`))
+      .catch(() => setAddr(""));
+  }, []);
+
   const { data: memorialsOwner } = useReadContract({
-    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "owner",
-    query: { enabled: !!MEMORIALS_ADDR },
+    address: addr || undefined, abi: ANA_MEMORIALS_ABI, functionName: "owner",
+    query: { enabled: !!addr },
   });
   const { data: relayerPayoutAddr } = useReadContract({
-    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "relayerPayoutAddr",
-    query: { enabled: !!MEMORIALS_ADDR },
+    address: addr || undefined, abi: ANA_MEMORIALS_ABI, functionName: "relayerPayoutAddr",
+    query: { enabled: !!addr },
   });
   const { data: vaultAddr } = useReadContract({
-    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "vaultAddr",
-    query: { enabled: !!MEMORIALS_ADDR },
+    address: addr || undefined, abi: ANA_MEMORIALS_ABI, functionName: "vaultAddr",
+    query: { enabled: !!addr },
   });
   const { data: coreAddr } = useReadContract({
-    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "core",
-    query: { enabled: !!MEMORIALS_ADDR },
+    address: addr || undefined, abi: ANA_MEMORIALS_ABI, functionName: "core",
+    query: { enabled: !!addr },
   });
   const { data: seriesCount } = useReadContract({
-    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "getSeriesCount",
-    query: { enabled: !!MEMORIALS_ADDR, refetchInterval: 15_000 },
+    address: addr || undefined, abi: ANA_MEMORIALS_ABI, functionName: "getSeriesCount",
+    query: { enabled: !!addr, refetchInterval: 15_000 },
+  });
+  const { data: milestoneStep } = useReadContract({
+    address: addr || undefined, abi: ANA_MEMORIALS_ABI, functionName: "MILESTONE_STEP",
+    query: { enabled: !!addr },
   });
 
-  if (!MEMORIALS_ADDR) {
+  if (!addr) {
     return (
       <section className="space-y-2 border-t border-[--border] pt-10">
         <h2 className="text-xl font-bold">ANAMemorials</h2>
         <p className="font-mono text-xs text-[--fg-muted]">
-          Non déployé — ANA_MEMORIALS_ADDRESS absent.
+          Chargement de l'adresse… (si ce message persiste, ANA_MEMORIALS_ADDRESS est absent côté serveur)
         </p>
       </section>
     );
@@ -1060,7 +1036,7 @@ function ANAMemorialsSection({
     setErr(e => ({ ...e, [key]: null }));
     try {
       const hash = await writeContractAsync({
-        address: MEMORIALS_ADDR,
+        address: addr as `0x${string}`,
         abi:     ANA_MEMORIALS_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
         functionName: functionName as never,
         args:    args as never,
@@ -1131,13 +1107,14 @@ function ANAMemorialsSection({
       <div className="border border-[--border] p-5 space-y-0 max-w-md">
         <div className="flex items-center justify-between mb-3">
           <p className="font-bold text-sm">État</p>
-          <a href={basescanAddr(MEMORIALS_ADDR)} target="_blank" rel="noopener noreferrer"
+          <a href={basescanAddr(addr)} target="_blank" rel="noopener noreferrer"
             className="font-mono text-xs text-[--fg-muted] hover:underline">Basescan ↗</a>
         </div>
-        <StatusRow label="Adresse"           value={`${MEMORIALS_ADDR.slice(0,10)}…${MEMORIALS_ADDR.slice(-6)}`} />
+        <StatusRow label="Adresse"           value={`${addr.slice(0,10)}…${addr.slice(-6)}`} />
         <StatusRow label="Owner"             value={memorialsOwner ? `${(memorialsOwner as string).slice(0,10)}…` : "—"} />
         <StatusRow label="Relayer payout"    value={relayerPayoutAddr ? `${(relayerPayoutAddr as string).slice(0,10)}…` : "—"} />
         <StatusRow label="Vault"             value={vaultAddr ? `${(vaultAddr as string).slice(0,10)}…` : "—"} />
+        <StatusRow label="Palier monument"   value={milestoneStep != null ? `${milestoneStep} burns` : "—"} />
         <StatusRow label="AssociationCore"   value={coreAddr ? `${(coreAddr as string).slice(0,10)}…` : "—"} />
         <StatusRow label="Mémoriaux enregistrés" value={seriesCount != null ? String(seriesCount) : "—"} ok={seriesCount != null && Number(seriesCount) > 0} />
       </div>
@@ -2173,6 +2150,20 @@ function MilestoneMemorialSection({ getAdminHeaders }: { getAdminHeaders: GetAdm
   const [running, setRunning] = useState(false);
   const [result,  setResult]  = useState<Record<string, unknown> | null>(null);
   const [error,   setError]   = useState<string | null>(null);
+  // Read from the contract (via /api/memorials/list, same address-exposure
+  // pattern as ANAMemorialsSection) rather than hard-coded — this exact
+  // number went stale here once already after MILESTONE_STEP changed on a
+  // redeploy (button kept saying "palier 1000" with a live 100 contract).
+  const [milestoneStep, setMilestoneStep] = useState<number | null>(null);
+  useEffect(() => {
+    fetch("/api/memorials/list")
+      .then(r => r.json())
+      .then((d: { milestoneStep?: number }) => setMilestoneStep(d.milestoneStep ?? null))
+      .catch(() => setMilestoneStep(null));
+  }, []);
+
+  const [resetting, setResetting] = useState(false);
+  const [resetMsg,  setResetMsg]  = useState<string | null>(null);
 
   const run = async () => {
     setRunning(true); setResult(null); setError(null);
@@ -2189,15 +2180,46 @@ function MilestoneMemorialSection({ getAdminHeaders }: { getAdminHeaders: GetAdm
     } finally { setRunning(false); }
   };
 
+  // totalBurnedTokens (normies.art) never resets on its own — this stores the
+  // real total AT THIS MOMENT as a baseline, so the next monument counts from
+  // milestone 1 again instead of jumping straight to wherever the whole
+  // collection's real burn history already is (2,000+ as of 23/09).
+  const resetBaseline = async () => {
+    setResetting(true); setResetMsg(null); setError(null);
+    try {
+      const r = await fetch("/api/keeper/milestone-memorial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify({ resetBaseline: true }),
+      });
+      const d = await r.json() as { message?: string; error?: string };
+      if (!r.ok) setError(d.error ?? `HTTP ${r.status}`);
+      else setResetMsg(d.message ?? "Compteur remis à zéro.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setResetting(false); }
+  };
+
   return (
     <div className="space-y-3">
-      <button
-        onClick={run}
-        disabled={running}
-        className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
-      >
-        {running ? "Création…" : "🗿 Créer le prochain monument (palier 1000)"}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={run}
+          disabled={running}
+          className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
+        >
+          {running ? "Création…" : `🗿 Créer le prochain monument (palier ${milestoneStep ?? "…"})`}
+        </button>
+        <button
+          onClick={resetBaseline}
+          disabled={resetting}
+          title="Fait repartir le compte des paliers de zéro à partir de maintenant, sans toucher au total réel de burns de la collection."
+          className="font-mono text-xs border border-orange-400 text-orange-600 px-5 py-2.5 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-wait"
+        >
+          {resetting ? "…" : "↺ Remettre le compteur de paliers à zéro"}
+        </button>
+      </div>
+      {resetMsg && <p className="font-mono text-xs text-orange-600">{resetMsg}</p>}
       {error && <p className="font-mono text-xs text-red-600">{error}</p>}
       {result && (
         <div className="border border-[--border] bg-[--bg-card] px-4 py-3 space-y-1">
@@ -2520,6 +2542,23 @@ export default function AdminPage() {
 
           {activeTab === "overview" && (
           <>
+          {/* Accès rapide — les 2 actions les plus fréquentes, sans avoir à
+              chercher dans quel onglet elles vivent. Mêmes composants que
+              l'onglet Œuvres & Mémoriaux, juste rendus une deuxième fois ici. */}
+          <section className="space-y-4">
+            <h2 className="text-xl font-bold">Accès rapide</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="border border-[--border] p-5 space-y-3">
+                <p className="font-bold text-sm">Vérifier les burns</p>
+                <BurnCheckSection getAdminHeaders={getAdminHeaders} />
+              </div>
+              <div className="border border-[--border] p-5 space-y-3">
+                <p className="font-bold text-sm">Monument commémoratif</p>
+                <MilestoneMemorialSection getAdminHeaders={getAdminHeaders} />
+              </div>
+            </div>
+          </section>
+
           {/* État des contrats */}
           <section className="space-y-4">
             <h2 className="text-xl font-bold">État des contrats</h2>
@@ -2596,7 +2635,7 @@ export default function AdminPage() {
           </>
           )}
 
-          {activeTab === "core" && (
+          {activeTab === "gouvernance" && (
           <>
           {/* ── Actions AssociationCore ── */}
           <section className="space-y-4">
@@ -2695,11 +2734,7 @@ export default function AdminPage() {
               </div>
             </div>
           </section>
-          </>
-          )}
 
-          {activeTab === "assembly" && (
-          <>
           {/* ── Actions ConstituentAssembly ── */}
           <section className="space-y-4">
             <div>
@@ -2814,7 +2849,7 @@ export default function AdminPage() {
           </>
           )}
 
-          {activeTab === "workregistry" && (
+          {activeTab === "oeuvres" && (
           <>
           {/* ── WorkRegistry ── */}
           <WorkRegistrySection
@@ -2842,21 +2877,18 @@ export default function AdminPage() {
           </>
           )}
 
-          {activeTab === "factory" && FACTORY_ADDR && (
+          {activeTab === "oeuvres" && FACTORY_ADDR && (
           <>
           {/* ── ANACollectionFactory ── */}
           <CollectionFactorySection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
           </>
           )}
 
-          {activeTab === "celebration" && (
-          <>
-          {/* ── CelebrationRegistry (renders its own "not deployed" notice) ── */}
-          <CelebrationRegistrySection writeContractAsync={writeContractAsync} />
-          </>
-          )}
+          {/* CelebrationRegistry dropped from the panel (23/09 audit) — its
+              on-chain write path is confirmed dead code, superseded entirely
+              by ANAMemorials' own reservedClaims/claimFree. */}
 
-          {activeTab === "memorials" && (
+          {activeTab === "oeuvres" && (
           <>
           {/* ── ANAMemorials ── */}
           <ANAMemorialsSection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
@@ -2887,7 +2919,11 @@ export default function AdminPage() {
             </div>
             <WorkTestPipelineSection getAdminHeaders={getAdminHeaders} />
           </section>
+          </>
+          )}
 
+          {activeTab === "oeuvres" && (
+          <>
           {/* ── Burns Normies ── */}
           <section className="space-y-4 border-t border-[--border] pt-10">
             <div>
@@ -2900,19 +2936,23 @@ export default function AdminPage() {
             <BurnCheckSection getAdminHeaders={getAdminHeaders} />
           </section>
 
-          {/* ── Monument commémoratif (palier de 1000 burns) ── */}
+          {/* ── Monument commémoratif ── */}
           <section className="space-y-4 border-t border-[--border] pt-10">
             <div>
               <h2 className="text-xl font-bold">Monument commémoratif</h2>
               <p className="font-mono text-xs text-[--fg-muted] mt-1">
-                Crée un mémorial collectif pour le prochain palier de 1000 burns atteint (un monument par palier, jamais réutilisé).
+                Crée un mémorial collectif pour le prochain palier atteint (fixé dans le contrat, voir le bouton — un monument par palier, jamais réutilisé).
                 Composition volontairement maximale — sert à tester le rendu le plus complexe possible sur plusieurs écrans physiques à la fois.
                 Ne réserve aucun claim gratuit individuel (contrairement au lot hebdomadaire) — juste un petit pool public fixe pour tester le mint.
               </p>
             </div>
             <MilestoneMemorialSection getAdminHeaders={getAdminHeaders} />
           </section>
+          </>
+          )}
 
+          {activeTab === "pipeline" && (
+          <>
           {/* ── Salon exchange keeper ── */}
           <section className="space-y-6 border-t border-[--border] pt-10">
             <div>
@@ -3070,14 +3110,18 @@ export default function AdminPage() {
           {/* ── Adresses ── */}
           <section className="space-y-3 border-t border-[--border] pt-8">
             <h2 className="text-xl font-bold">Adresses de déploiement (Base mainnet)</h2>
+            <p className="font-mono text-xs text-[--fg-muted]">
+              FactoryRegistry et CollectionFactory (le premier jet, pré-ANACollectionFactory) abandonnés — confirmés
+              inutilisés au runtime le 23/09. CelebrationRegistry retiré du panneau pour la même raison — son écriture
+              on-chain n'est plus jamais appelée, remplacée par les claims natifs d'ANAMemorials. ANAMemorials a sa
+              propre adresse affichée dans l&apos;onglet Œuvres &amp; Mémoriaux (son adresse n&apos;est pas exposée
+              au navigateur ici, volontairement — voir /api/memorials/list).
+            </p>
             <div className="space-y-2">
               {[
                 { name: "AssociationCore",       addr: CORE_ADDR },
                 { name: "ConstituentAssembly",   addr: CA_ADDR   },
-                { name: "FactoryRegistry",       addr: CONTRACT_ADDRESSES.FactoryRegistry },
                 { name: "ANACollectionFactory",  addr: FACTORY_ADDR },
-                { name: "CelebrationRegistry",   addr: CELEBRATION_ADDR },
-                { name: "ANAMemorials",          addr: MEMORIALS_ADDR },
               ].filter(c => c.addr).map(c => (
                 <div key={c.name} className="flex items-center justify-between border border-[--border] bg-[--bg-card] px-4 py-3">
                   <p className="font-mono text-xs font-bold">{c.name}</p>
