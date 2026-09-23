@@ -229,6 +229,68 @@ describe("AssociationCore", function () {
     });
   });
 
+  // ── migrateMembers() ───────────────────────────────────────────────────────
+
+  describe("migrateMembers()", function () {
+    async function registerOn(target: AssociationCore, tokenId: number, owner_: string, nonce: number) {
+      const deadline = (await time.latest()) + 600;
+      const { attestation, signature } = await buildAttestation({
+        tokenId, owner: owner_, nonce, deadline, relayer, core: await target.getAddress(),
+      });
+      await target.connect(await ethers.getSigner(owner_)).register(attestation, signature);
+    }
+
+    it("imports members from an old deployment, preserving their registeredAt", async function () {
+      const Factory = await ethers.getContractFactory("AssociationCore");
+      const oldCore = await Factory.deploy(relayer.address, "ANA", "ANA");
+      await oldCore.waitForDeployment();
+      await registerOn(oldCore, 42, user1.address, 1);
+      await registerOn(oldCore, 99, user2.address, 2);
+      const oldMember = await oldCore.members(42);
+
+      await expect(core.connect(owner).migrateMembers(await oldCore.getAddress(), [42, 99]))
+        .to.emit(core, "MemberRegistered").withArgs(42, user1.address, oldMember.registeredAt);
+
+      const migrated = await core.members(42);
+      expect(migrated.ownerAddress).to.equal(user1.address);
+      expect(migrated.registeredAt).to.equal(oldMember.registeredAt);
+      expect(migrated.active).to.equal(true);
+      expect(await core.members(99).then(m => m.active)).to.equal(true);
+      expect(await core.getMemberTokenIds()).to.deep.equal([42n, 99n]);
+    });
+
+    it("reverts for a non-owner caller", async function () {
+      const Factory = await ethers.getContractFactory("AssociationCore");
+      const oldCore = await Factory.deploy(relayer.address, "ANA", "ANA");
+      await expect(core.connect(user1).migrateMembers(await oldCore.getAddress(), [42]))
+        .to.be.revertedWithCustomError(core, "OwnableUnauthorizedAccount");
+    });
+
+    it("silently skips a tokenId the old contract never actually registered", async function () {
+      const Factory = await ethers.getContractFactory("AssociationCore");
+      const oldCore = await Factory.deploy(relayer.address, "ANA", "ANA");
+      await expect(core.connect(owner).migrateMembers(await oldCore.getAddress(), [999]))
+        .to.not.be.reverted;
+      expect((await core.members(999)).active).to.equal(false);
+    });
+
+    it("silently skips a tokenId already active on the new contract — safe to retry a chunk", async function () {
+      const Factory = await ethers.getContractFactory("AssociationCore");
+      const oldCore = await Factory.deploy(relayer.address, "ANA", "ANA");
+      await registerOn(oldCore, 42, user1.address, 1);
+      await registerOn(core, 42, user2.address, 5); // already active on the NEW contract, different owner
+
+      await core.connect(owner).migrateMembers(await oldCore.getAddress(), [42]);
+      // untouched — the already-active entry on the new contract wins, old data is not overwritten
+      expect((await core.members(42)).ownerAddress).to.equal(user2.address);
+    });
+
+    it("reverts on the zero address", async function () {
+      await expect(core.connect(owner).migrateMembers(ethers.ZeroAddress, [42]))
+        .to.be.revertedWithCustomError(core, "InvalidAddress");
+    });
+  });
+
   // ── grantRole() ────────────────────────────────────────────────────────────
 
   describe("grantRole()", function () {

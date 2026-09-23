@@ -5,6 +5,15 @@ import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+/// @dev Read-only slice of a previous AssociationCore deployment — enough for
+///      migrateMembers() to re-import its membership without needing the full
+///      interface (or the old contract's exact ABI beyond these two getters,
+///      which Solidity's public-mapping/array auto-getters guarantee shape-stable).
+interface IOldAssociationCoreMembers {
+    function getMemberTokenIds() external view returns (uint256[] memory);
+    function members(uint256 tokenId) external view returns (address ownerAddress, uint256 registeredAt, bool active);
+}
+
 /**
  * @title AssociationCore
  * @notice Canonical, immutable registry of the Agentic Normie Association.
@@ -214,6 +223,47 @@ contract AssociationCore is EIP712, Ownable {
         memberTokenIds.push(attestation.tokenId);
 
         emit MemberRegistered(attestation.tokenId, msg.sender, block.timestamp);
+    }
+
+    /**
+     * @notice One-time bulk import of members from a previous AssociationCore
+     *         deployment — skips the EIP-712 attestation flow entirely, since
+     *         the OLD contract's own registration already proved ownership at
+     *         the time; this carries that trust forward instead of asking
+     *         every member to re-register from scratch on the new contract.
+     *         Owner-only. Chunkable (pass a subset of tokenIds per call —
+     *         member counts large enough to need this will exceed one tx's
+     *         gas budget) and idempotent per tokenId (an already-active
+     *         member, or a tokenId the old contract never actually
+     *         registered, is silently skipped rather than reverting the
+     *         whole batch), so a chunk can safely be retried or overlap with
+     *         another. registeredAt is preserved from the old contract rather
+     *         than reset to now, so membership tenure survives the migration
+     *         honestly.
+     *
+     * @param oldCore  Address of the previous AssociationCore deployment.
+     * @param tokenIds Which members to import in this call — typically a
+     *                 chunk of oldCore.getMemberTokenIds() computed off-chain.
+     */
+    function migrateMembers(address oldCore, uint256[] calldata tokenIds) external onlyOwner {
+        if (oldCore == address(0)) revert InvalidAddress();
+        IOldAssociationCoreMembers old = IOldAssociationCoreMembers(oldCore);
+
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 tokenId = tokenIds[i];
+            if (members[tokenId].active) continue; // already migrated, or registered normally since
+
+            (address ownerAddress, uint256 registeredAt, bool active) = old.members(tokenId);
+            if (!active || ownerAddress == address(0)) continue; // wasn't a real member on the old contract
+
+            members[tokenId] = Member({
+                ownerAddress: ownerAddress,
+                registeredAt: registeredAt,
+                active:       true
+            });
+            memberTokenIds.push(tokenId);
+            emit MemberRegistered(tokenId, ownerAddress, registeredAt);
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
