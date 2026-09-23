@@ -106,7 +106,7 @@ export function MemorialDetailClient({ id }: { id: string }) {
   return (
     <div className="space-y-8">
       <Link href="/galerie/celebrations" className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg]">
-        ← Back to Burns
+        ← Back to Memorials
       </Link>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
