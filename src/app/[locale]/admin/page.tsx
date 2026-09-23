@@ -147,27 +147,36 @@ function AdminAction({
 }
 
 // ─── TabBar ───────────────────────────────────────────────────────────────────
-// Groups the page's ~15 sections into 3 tabs so "everything on one endless
-// scroll, mixed together" stops being the way to find a specific contract
-// action. Sections keep their existing position in the JSX (no reordering,
-// lower risk) — each is just wrapped in `{activeTab === "…" && (…)}`.
+// One tab per contract (plus overview/pipeline/association) so "everything on
+// one endless scroll, mixed together" stops being the way to find a specific
+// contract action. Sections keep their existing position in the JSX (no
+// reordering, lower risk) — each is just wrapped in `{activeTab === "…" && (…)}`.
 
-type AdminTab = "contracts" | "pipeline" | "association";
+type AdminTab =
+  | "overview" | "core" | "assembly" | "workregistry"
+  | "factory" | "celebration" | "memorials"
+  | "pipeline" | "association";
 
 const ADMIN_TABS: { id: AdminTab; label: string }[] = [
-  { id: "contracts",   label: "Contrats" },
-  { id: "pipeline",    label: "Pipeline & keeper" },
-  { id: "association", label: "Association" },
+  { id: "overview",     label: "Vue d'ensemble" },
+  { id: "core",         label: "AssociationCore" },
+  { id: "assembly",     label: "ConstituentAssembly" },
+  { id: "workregistry", label: "WorkRegistry" },
+  { id: "factory",      label: "ANACollectionFactory" },
+  { id: "celebration",  label: "CelebrationRegistry" },
+  { id: "memorials",    label: "ANAMemorials" },
+  { id: "pipeline",     label: "Pipeline & keeper" },
+  { id: "association",  label: "Association" },
 ];
 
 function TabBar({ active, onChange }: { active: AdminTab; onChange: (t: AdminTab) => void }) {
   return (
-    <div className="flex gap-1 border-b border-[--border] sticky top-[64px] bg-[--bg] z-10 -mx-6 px-6">
+    <div className="flex gap-1 border-b border-[--border] sticky top-[64px] bg-[--bg] z-10 -mx-6 px-6 overflow-x-auto whitespace-nowrap">
       {ADMIN_TABS.map(t => (
         <button
           key={t.id}
           onClick={() => onChange(t.id)}
-          className={`font-mono text-xs px-4 py-3 border-b-2 transition-colors ${
+          className={`shrink-0 font-mono text-xs px-4 py-3 border-b-2 transition-colors ${
             active === t.id
               ? "border-[--fg] text-[--fg] font-bold"
               : "border-transparent text-[--fg-muted] hover:text-[--fg]"
@@ -2390,7 +2399,7 @@ export default function AdminPage() {
   const [moduleInput,  setModuleInput]  = useState<string>(CA_ADDR);
   const [revokeInput,  setRevokeInput]  = useState("");
   const [relayerInput, setRelayerInput] = useState("");
-  const [activeTab,    setActiveTab]    = useState<AdminTab>("contracts");
+  const [activeTab,    setActiveTab]    = useState<AdminTab>("overview");
 
   // ── Actions ───────────────────────────────────────────────────────────────
   const execTx = useCallback(async (
@@ -2509,7 +2518,7 @@ export default function AdminPage() {
 
           <TabBar active={activeTab} onChange={setActiveTab} />
 
-          {activeTab === "contracts" && (
+          {activeTab === "overview" && (
           <>
           {/* État des contrats */}
           <section className="space-y-4">
@@ -2584,7 +2593,11 @@ export default function AdminPage() {
               </div>
             )}
           </section>
+          </>
+          )}
 
+          {activeTab === "core" && (
+          <>
           {/* ── Actions AssociationCore ── */}
           <section className="space-y-4">
             <div>
@@ -2682,7 +2695,11 @@ export default function AdminPage() {
               </div>
             </div>
           </section>
+          </>
+          )}
 
+          {activeTab === "assembly" && (
+          <>
           {/* ── Actions ConstituentAssembly ── */}
           <section className="space-y-4">
             <div>
@@ -2794,7 +2811,11 @@ export default function AdminPage() {
               }}
             />
           </section>
+          </>
+          )}
 
+          {activeTab === "workregistry" && (
+          <>
           {/* ── WorkRegistry ── */}
           <WorkRegistrySection
             isOwner={!!isCoreOwner}
@@ -2821,16 +2842,22 @@ export default function AdminPage() {
           </>
           )}
 
-          {activeTab === "contracts" && (
+          {activeTab === "factory" && FACTORY_ADDR && (
           <>
           {/* ── ANACollectionFactory ── */}
-          {FACTORY_ADDR && (
-            <CollectionFactorySection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
+          <CollectionFactorySection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
+          </>
           )}
 
+          {activeTab === "celebration" && (
+          <>
           {/* ── CelebrationRegistry (renders its own "not deployed" notice) ── */}
           <CelebrationRegistrySection writeContractAsync={writeContractAsync} />
+          </>
+          )}
 
+          {activeTab === "memorials" && (
+          <>
           {/* ── ANAMemorials ── */}
           <ANAMemorialsSection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
           </>
@@ -3003,17 +3030,20 @@ export default function AdminPage() {
           </>
           )}
 
-          {activeTab === "contracts" && (
+          {activeTab === "overview" && (
           <>
           {/* ── Adresses ── */}
           <section className="space-y-3 border-t border-[--border] pt-8">
             <h2 className="text-xl font-bold">Adresses de déploiement (Base mainnet)</h2>
             <div className="space-y-2">
               {[
-                { name: "AssociationCore",     addr: CORE_ADDR },
-                { name: "ConstituentAssembly", addr: CA_ADDR   },
-                { name: "FactoryRegistry",     addr: CONTRACT_ADDRESSES.FactoryRegistry },
-              ].map(c => (
+                { name: "AssociationCore",       addr: CORE_ADDR },
+                { name: "ConstituentAssembly",   addr: CA_ADDR   },
+                { name: "FactoryRegistry",       addr: CONTRACT_ADDRESSES.FactoryRegistry },
+                { name: "ANACollectionFactory",  addr: FACTORY_ADDR },
+                { name: "CelebrationRegistry",   addr: CELEBRATION_ADDR },
+                { name: "ANAMemorials",          addr: MEMORIALS_ADDR },
+              ].filter(c => c.addr).map(c => (
                 <div key={c.name} className="flex items-center justify-between border border-[--border] bg-[--bg-card] px-4 py-3">
                   <p className="font-mono text-xs font-bold">{c.name}</p>
                   <a
