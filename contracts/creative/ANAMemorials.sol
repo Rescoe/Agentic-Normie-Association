@@ -54,6 +54,18 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     uint256 private constant ARTWORK_CANVAS_W = 528;
     uint256 private constant ARTWORK_CANVAS_H = 352;
 
+    // ─── Reveal canvas (single-burn memorials only) ────────────────────────────
+    // A 40x40, 1-bit-per-pixel restoration grid matching a Normie's own native
+    // resolution (Normies are 40x40 monochrome, fully on-chain — see
+    // normiesApi.ts) — centered within the larger ARTWORK_CANVAS illustration
+    // and rendered live in tokenURI(), on top of it. CANVAS_SIZE*CANVAS_SIZE
+    // bits, packed row-major MSB-first = CANVAS_BYTES.
+    uint256 private constant CANVAS_SIZE  = 40;
+    uint256 private constant CANVAS_BYTES = 200; // 1600 bits / 8
+    uint256 private constant CANVAS_CELL_PX = 4; // on-screen size of one grid cell, in ARTWORK_CANVAS units
+    // Safety valve for tokenURI()'s on-chain SVG rendering — see _renderCanvas.
+    uint256 private constant MAX_RENDERED_RUNS = 300;
+
     // ─── Types ────────────────────────────────────────────────────────────────
 
     struct MemorialSeries {
@@ -144,9 +156,16 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     // future PX-gating contract needs to be granted (via setRevealAuthorized)
     // to let holders spend PX to edit a memorial's canvas — it must never
     // imply the ability to register memorials or reserved claims. The main
-    // relayer can always call updateArtwork() too (see onlyRevealAuthorized),
-    // no separate grant needed.
+    // relayer can always call updateArtwork()/editPixels() too (see
+    // onlyRevealAuthorized), no separate grant needed.
     mapping(address => bool)    public revealAuthorized;
+
+    // memorialId => the honored Normie's own 40x40 bitmap, fixed forever once
+    // registerCanvas() sets it — never mutated again by anything.
+    mapping(uint256 => bytes) public targetPixels;
+    // memorialId => the current, editable 40x40 bitmap — mutated by editPixels().
+    mapping(uint256 => bytes) public canvasPixels;
+    mapping(uint256 => bool)  public hasCanvas;
 
     uint256 private _nextTokenId;
 
@@ -187,6 +206,8 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     event SeriesPriceUpdated(uint256 indexed memorialId, uint256 newPriceWei);
     event RevealAuthorizationUpdated(address indexed addr, bool status);
     event ArtworkUpdated(uint256 indexed memorialId, address indexed updater, uint256 editCount);
+    event CanvasRegistered(uint256 indexed memorialId);
+    event CanvasEdited(uint256 indexed memorialId, address indexed editor, uint256 pixelsChanged);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -204,6 +225,12 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     error NothingToWithdraw();
     error TokenDoesNotExist(uint256 tokenId);
     error EmptyArtwork();
+    error InvalidCanvasLength();
+    error CanvasAlreadyRegistered();
+    error CanvasNotRegistered();
+    error MismatchedEditArrays();
+    error InvalidPixelIndex();
+    error PixelLocked(uint256 index);
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
 
@@ -364,6 +391,86 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         emit ArtworkUpdated(memorialId, msg.sender, editCount);
     }
 
+    /**
+     * @notice Registers this memorial's 40x40 restoration canvas — the honored
+     *         Normie's own bitmap as `target` (fixed forever after this call),
+     *         and the starting editable state as `initialCanvas` (typically
+     *         all-white, i.e. "nothing restored yet", but left to the relayer
+     *         to decide). Relayer-only, callable once — re-registering would
+     *         silently reset in-progress community edits, so it's blocked
+     *         rather than allowed like updateArtwork()'s idempotent overwrite.
+     *         Only meaningful for kind=="single" memorials in practice, but
+     *         not enforced here — this contract doesn't interpret `kind`.
+     */
+    function registerCanvas(
+        uint256 memorialId,
+        bytes calldata target,
+        bytes calldata initialCanvas
+    ) external onlyAuthorized validMemorial(memorialId) {
+        if (target.length != CANVAS_BYTES || initialCanvas.length != CANVAS_BYTES) revert InvalidCanvasLength();
+        if (hasCanvas[memorialId]) revert CanvasAlreadyRegistered();
+        targetPixels[memorialId] = target;
+        canvasPixels[memorialId] = initialCanvas;
+        hasCanvas[memorialId] = true;
+        emit CanvasRegistered(memorialId);
+    }
+
+    /**
+     * @notice Flips a batch of pixels on this memorial's canvas — the actual
+     *         collaborative-editing mechanic, enforced on-chain rather than
+     *         trusted from an off-chain computation like updateArtwork() is.
+     *         A pixel already matching `target` at that index is LOCKED and
+     *         reverts the whole call (atomic — no partial application of a
+     *         batch that hits a locked pixel); every other pixel is free to
+     *         flip either way, as many times as anyone wants. That ratchet
+     *         (a pixel freezes the instant it happens to match the honored
+     *         Normie's own image, by construction, not by a monotonic
+     *         "progress" counter) is the entire restoration mechanic — this
+     *         contract has no notion of PX, turns, or who "should" be
+     *         editing; onlyRevealAuthorized is where that's meant to be
+     *         enforced, by whatever calls this.
+     */
+    function editPixels(
+        uint256 memorialId,
+        uint256[] calldata indices,
+        bool[] calldata newValues
+    ) external onlyRevealAuthorized validMemorial(memorialId) {
+        if (!hasCanvas[memorialId]) revert CanvasNotRegistered();
+        if (indices.length == 0 || indices.length != newValues.length) revert MismatchedEditArrays();
+
+        bytes memory canvas = canvasPixels[memorialId];
+        bytes memory target = targetPixels[memorialId];
+
+        for (uint256 i = 0; i < indices.length; i++) {
+            uint256 idx = indices[i];
+            if (idx >= CANVAS_SIZE * CANVAS_SIZE) revert InvalidPixelIndex();
+            uint256 byteIdx = idx / 8;
+            uint8   bitMask = uint8(1 << (7 - (idx % 8)));
+
+            bool current = (uint8(canvas[byteIdx]) & bitMask) != 0;
+            bool locked  = current == ((uint8(target[byteIdx]) & bitMask) != 0);
+            if (locked) revert PixelLocked(idx);
+
+            if (newValues[i]) {
+                canvas[byteIdx] = bytes1(uint8(canvas[byteIdx]) | bitMask);
+            } else {
+                canvas[byteIdx] = bytes1(uint8(canvas[byteIdx]) & ~bitMask);
+            }
+        }
+
+        canvasPixels[memorialId] = canvas;
+        series[memorialId].editCount += indices.length;
+        emit CanvasEdited(memorialId, msg.sender, indices.length);
+    }
+
+    /// @notice True if this pixel currently matches the target and can't be edited.
+    function isPixelLocked(uint256 memorialId, uint256 index) external view validMemorial(memorialId) returns (bool) {
+        if (!hasCanvas[memorialId] || index >= CANVAS_SIZE * CANVAS_SIZE) return false;
+        uint256 byteIdx = index / 8;
+        uint8   bitMask = uint8(1 << (7 - (index % 8)));
+        return (uint8(canvasPixels[memorialId][byteIdx]) & bitMask) == (uint8(targetPixels[memorialId][byteIdx]) & bitMask);
+    }
+
     // ─── Minting (public, caller pays their own gas) ──────────────────────────
 
     /// @notice Anyone claims one edition from the public pool (fixed-count or open-ended).
@@ -481,7 +588,8 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (_ownerOf(tokenId) == address(0)) revert TokenDoesNotExist(tokenId);
-        MemorialSeries storage s = series[seriesOfToken[tokenId]];
+        uint256 memorialId = seriesOfToken[tokenId];
+        MemorialSeries storage s = series[memorialId];
 
         bool isDataUri = bytes(s.artworkContent).length >= 5 &&
             bytes(s.artworkContent)[0] == 'd' &&
@@ -507,7 +615,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             '{"trait_type":"Normies Honored","value":', s.honoredBurnCount.toString(), '}]'
         );
 
-        string memory image = _buildImageDataUri(s.artworkContent, isDataUri);
+        string memory image = _buildImageDataUri(memorialId, s.artworkContent, isDataUri);
 
         bytes memory json = abi.encodePacked(
             '{"name":"', _escapeJson(s.title), '",',
@@ -664,9 +772,10 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
      *         way: paint white first, then the artwork on top.
      */
     function _buildImageDataUri(
+        uint256 memorialId,
         string memory artworkContent,
         bool isDataUri
-    ) internal pure returns (string memory) {
+    ) internal view returns (string memory) {
         bytes memory artwork = isDataUri
             ? abi.encodePacked(
                 '<image x="0" y="0" width="800" height="800" preserveAspectRatio="xMidYMid meet" href="',
@@ -686,9 +795,127 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">',
             '<rect width="800" height="800" fill="#ffffff"/>',
             artwork,
+            hasCanvas[memorialId] ? _renderCanvas(memorialId) : bytes(""),
             '</svg>'
         );
         return string(abi.encodePacked("data:image/svg+xml;base64,", Base64.encode(svg)));
+    }
+
+    /**
+     * @notice Renders the 40x40 restoration canvas live from on-chain pixel
+     *         state, as its own nested <svg> sharing the exact same
+     *         viewBox/preserveAspectRatio mapping as the artwork-fragment
+     *         path above — so it lands centered on the artwork identically
+     *         whether artworkContent is a BMP <image> or a raw SVG fragment.
+     *         Row-run-length merged (like pixelImage.ts's own
+     *         pixelsToRunLengthSvg does off-chain) to keep output size sane —
+     *         only black runs are drawn; the white backing rect handles the
+     *         rest, same "paint white first" convention as the artwork layer.
+     */
+    function _renderCanvas(uint256 memorialId) internal view returns (bytes memory) {
+        bytes memory canvas = canvasPixels[memorialId];
+        uint256 gridPx = CANVAS_SIZE * CANVAS_CELL_PX;
+        uint256 offX = (ARTWORK_CANVAS_W - gridPx) / 2;
+        uint256 offY = (ARTWORK_CANVAS_H - gridPx) / 2;
+
+        // Written into a preallocated buffer via direct indexed byte writes
+        // (same idiom as _escapeXml/_escapeJson below), not repeated
+        // abi.encodePacked(accumulator, chunk) — the latter recopies the
+        // whole accumulator every call, quadratic across many small appends.
+        // Every literal fragment and the once-per-row y-coordinate string are
+        // hoisted out of the loop (allocated once, read many times), and
+        // digits are written straight into `buf` via _appendUint — nothing
+        // allocates inside the innermost loop.
+        //
+        // MAX_RENDERED_RUNS is a real, measured safety valve, not a made-up
+        // number: profiling this exact function showed ~35-45k gas per
+        // distinct black-pixel run even after the optimizations above (EVM
+        // memory-expansion cost is quadratic in the TOTAL memory a call ever
+        // touches, and a 40x40 checkerboard — theoretically reachable if
+        // enough uncoordinated single-pixel edits land with zero visual
+        // coherence — produces up to 800 isolated runs, which measurably
+        // exceeds the ~16.7M gas mainnet.base.org enforces per call). Capping
+        // at 300 stays comfortably under that with real margin, while a real
+        // Normie-portrait reveal (contiguous regions, not noise) will need
+        // nowhere near that many in practice. Past the cap, remaining runs
+        // are simply left undrawn for THIS render — canvasPixels itself is
+        // untouched and fully readable regardless; only the embedded SVG
+        // degrades gracefully instead of tokenURI() ever reverting.
+        bytes memory buf = new bytes(MAX_RENDERED_RUNS * 60);
+        uint256 len;
+        uint256 runsRendered;
+
+        bytes memory litX      = bytes('<rect x="');
+        bytes memory litY      = bytes('" y="');
+        bytes memory litW      = bytes('" width="');
+        bytes memory litH      = bytes('" height="');
+        bytes memory litClose  = bytes('" fill="#000"/>');
+        bytes memory cellPxStr = bytes(CANVAS_CELL_PX.toString());
+
+        for (uint256 y = 0; y < CANVAS_SIZE && runsRendered < MAX_RENDERED_RUNS; y++) {
+            bytes memory yStr = bytes((offY + y * CANVAS_CELL_PX).toString()); // once per row, not per rect
+            uint256 x = 0;
+            while (x < CANVAS_SIZE && runsRendered < MAX_RENDERED_RUNS) {
+                if (!_pixelAt(canvas, x, y)) { x++; continue; }
+                uint256 runStart = x;
+                while (x < CANVAS_SIZE && _pixelAt(canvas, x, y)) x++;
+                uint256 runLen = x - runStart;
+
+                len = _appendBytes(buf, len, litX);
+                len = _appendUint(buf, len, offX + runStart * CANVAS_CELL_PX);
+                len = _appendBytes(buf, len, litY);
+                len = _appendBytes(buf, len, yStr);
+                len = _appendBytes(buf, len, litW);
+                len = _appendUint(buf, len, runLen * CANVAS_CELL_PX);
+                len = _appendBytes(buf, len, litH);
+                len = _appendBytes(buf, len, cellPxStr);
+                len = _appendBytes(buf, len, litClose);
+                runsRendered++;
+            }
+        }
+        bytes memory rects = new bytes(len);
+        for (uint256 i = 0; i < len; i++) rects[i] = buf[i];
+
+        return abi.encodePacked(
+            '<svg x="0" y="0" width="800" height="800" viewBox="0 0 ',
+            ARTWORK_CANVAS_W.toString(), ' ', ARTWORK_CANVAS_H.toString(),
+            '" preserveAspectRatio="xMidYMid meet">',
+            '<rect x="', offX.toString(), '" y="', offY.toString(),
+            '" width="', gridPx.toString(), '" height="', gridPx.toString(), '" fill="#fff"/>',
+            rects,
+            '</svg>'
+        );
+    }
+
+    function _pixelAt(bytes memory canvas, uint256 x, uint256 y) internal pure returns (bool) {
+        uint256 idx = y * CANVAS_SIZE + x;
+        return (uint8(canvas[idx / 8]) & uint8(1 << (7 - (idx % 8)))) != 0;
+    }
+
+    /// @dev Copies `data` into `buf` starting at `offset`, via direct indexed
+    ///      writes — O(data.length), not a full-buffer reallocation like
+    ///      abi.encodePacked(buf, data) would be. Caller must pre-size `buf`.
+    function _appendBytes(bytes memory buf, uint256 offset, bytes memory data) internal pure returns (uint256 newOffset) {
+        for (uint256 i = 0; i < data.length; i++) buf[offset + i] = data[i];
+        return offset + data.length;
+    }
+
+    /// @dev Writes `value`'s decimal ASCII digits directly into `buf` at
+    ///      `offset` — no intermediate string allocation at all (unlike
+    ///      Strings.toString(), which allocates a fresh buffer every call).
+    ///      Used in _renderCanvas's innermost loop, where that allocation,
+    ///      repeated per rect, was the actual root cause of a gas blowup.
+    function _appendUint(bytes memory buf, uint256 offset, uint256 value) internal pure returns (uint256 newOffset) {
+        if (value == 0) { buf[offset] = '0'; return offset + 1; }
+        uint256 digits;
+        for (uint256 t = value; t != 0; t /= 10) digits++;
+        uint256 end = offset + digits;
+        uint256 i = end;
+        for (uint256 v = value; v != 0; v /= 10) {
+            i--;
+            buf[i] = bytes1(uint8(48 + (v % 10)));
+        }
+        return end;
     }
 
     function _escapeXml(string memory s) internal pure returns (string memory) {

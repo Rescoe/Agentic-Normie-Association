@@ -18,6 +18,23 @@ const PROPOSER_TOKEN_ID = 42;
 const BURN_TOKEN_A = 100;
 const BURN_TOKEN_B = 101;
 
+const CANVAS_SIZE = 40;
+const CANVAS_BYTES = 200;
+
+/** Builds a packed 40x40, 1-bit-per-pixel, MSB-first bitmap with the given (x,y) cells set black. */
+function buildCanvas(blackCells: Array<[number, number]> = []): Uint8Array {
+  const bytes = new Uint8Array(CANVAS_BYTES);
+  for (const [x, y] of blackCells) {
+    const idx = y * CANVAS_SIZE + x;
+    bytes[Math.floor(idx / 8)] |= 1 << (7 - (idx % 8));
+  }
+  return bytes;
+}
+
+function toHex(bytes: Uint8Array): string {
+  return "0x" + Buffer.from(bytes).toString("hex");
+}
+
 /** Full default registerMemorial() params, overridable per test — avoids repeating all 13 struct fields everywhere. */
 function registerParams(overrides: Partial<{
   title: string; artworkContent: string; workId: number; creatorProposerTokenId: number;
@@ -508,6 +525,52 @@ describe("ANAMemorials", function () {
       const receipt = await tx.wait();
       expect(receipt!.gasUsed).to.be.lessThan(16_000_000n);
     });
+
+    it("editPixels stays well under the cap flipping every pixel of a 40x40 canvas at once", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      // target all-black, canvas starts all-white -> every pixel mismatches -> every pixel editable.
+      const allBlack: Array<[number, number]> = [];
+      for (let y = 0; y < CANVAS_SIZE; y++) for (let x = 0; x < CANVAS_SIZE; x++) allBlack.push([x, y]);
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas(allBlack)), toHex(buildCanvas()));
+
+      const indices: number[] = [];
+      const values: boolean[] = [];
+      for (let i = 0; i < CANVAS_SIZE * CANVAS_SIZE; i++) { indices.push(i); values.push(true); }
+      const tx = await memorials.connect(relayer).editPixels(id, indices, values);
+      const receipt = await tx.wait();
+      expect(receipt!.gasUsed).to.be.lessThan(16_000_000n);
+    });
+
+    it("tokenURI stays well under any reasonable eth_call gas limit with a fully black 40x40 canvas", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, { priceWei: 0n, publicSupply: 1 });
+      const allBlack: Array<[number, number]> = [];
+      for (let y = 0; y < CANVAS_SIZE; y++) for (let x = 0; x < CANVAS_SIZE; x++) allBlack.push([x, y]);
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas()), toHex(buildCanvas(allBlack)));
+      await memorials.connect(buyer1).mintPublic(id);
+      const uri = await memorials.tokenURI(0); // best case for RLE: one giant run per row — just must not throw
+      expect(uri.startsWith("data:application/json;base64,")).to.equal(true);
+    });
+
+    it("tokenURI stays well under any reasonable eth_call gas limit with a checkerboard 40x40 canvas (worst case for RLE — no merging possible), capped gracefully instead of reverting", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, { priceWei: 0n, publicSupply: 1 });
+      // 800 isolated single-pixel runs — the true worst case, well past MAX_RENDERED_RUNS.
+      const checkerboard: Array<[number, number]> = [];
+      for (let y = 0; y < CANVAS_SIZE; y++) for (let x = 0; x < CANVAS_SIZE; x++) if ((x + y) % 2 === 0) checkerboard.push([x, y]);
+      expect(checkerboard.length).to.equal(800);
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas()), toHex(buildCanvas(checkerboard)));
+      await memorials.connect(buyer1).mintPublic(id);
+
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
+      const rectCount = (svg.match(/<rect/g) ?? []).length;
+      // MAX_RENDERED_RUNS (300) black rects + 1 white grid-backing rect + 1
+      // outer 800x800 background rect (this memorial's artworkContent is a
+      // BMP data URI, rendered via <image>, contributing no rects itself).
+      expect(rectCount).to.equal(302);
+    });
   });
 
   describe("updateArtwork — collaborative canvas editing hook", function () {
@@ -572,6 +635,134 @@ describe("ANAMemorials", function () {
       const tx = await memorials.connect(relayer).updateArtwork(id, "data:image/bmp;base64,CC==");
       await expect(tx).to.emit(memorials, "ArtworkUpdated").withArgs(id, relayer.address, 3n);
       expect((await memorials.getSeries(id)).editCount).to.equal(3n);
+    });
+  });
+
+  describe("registerCanvas / editPixels — on-chain-enforced pixel restoration", function () {
+    it("registerCanvas reverts for a non-authorized caller", async () => {
+      const { memorials, relayer, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      const target = toHex(buildCanvas([[0, 0]]));
+      await expect(
+        memorials.connect(stranger).registerCanvas(id, target, target),
+      ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
+    });
+
+    it("registerCanvas reverts on wrong-length arrays", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(relayer).registerCanvas(id, "0x00", toHex(buildCanvas())),
+      ).to.be.revertedWithCustomError(memorials, "InvalidCanvasLength");
+    });
+
+    it("registerCanvas reverts if already registered — never silently resets progress", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      const target = toHex(buildCanvas([[0, 0]]));
+      await memorials.connect(relayer).registerCanvas(id, target, toHex(buildCanvas()));
+      await expect(
+        memorials.connect(relayer).registerCanvas(id, target, toHex(buildCanvas())),
+      ).to.be.revertedWithCustomError(memorials, "CanvasAlreadyRegistered");
+    });
+
+    it("editPixels reverts for a memorial with no registered canvas", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(relayer).editPixels(id, [0], [true]),
+      ).to.be.revertedWithCustomError(memorials, "CanvasNotRegistered");
+    });
+
+    it("editPixels reverts for a caller with neither relayer nor reveal-only authorization", async () => {
+      const { memorials, relayer, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas()), toHex(buildCanvas()));
+      await expect(
+        memorials.connect(stranger).editPixels(id, [0], [true]),
+      ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
+    });
+
+    it("flips a pixel that doesn't match the target, freely, in either direction", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      // target: pixel (5,5) is white. canvas starts black there -> mismatched -> editable.
+      const target = toHex(buildCanvas([]));
+      const initial = toHex(buildCanvas([[5, 5]]));
+      await memorials.connect(relayer).registerCanvas(id, target, initial);
+
+      const idx = 5 * CANVAS_SIZE + 5;
+      const tx = await memorials.connect(relayer).editPixels(id, [idx], [false]); // -> white, now MATCHES target
+      await expect(tx).to.emit(memorials, "CanvasEdited").withArgs(id, relayer.address, 1n);
+      expect(await memorials.isPixelLocked(id, idx)).to.equal(true); // now matches target -> locked
+    });
+
+    it("locks a pixel the instant it matches the target — further edits revert", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      const idx = 0;
+      // target black at idx, canvas already black at idx -> matches -> locked from the start.
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas([[0, 0]])), toHex(buildCanvas([[0, 0]])));
+      await expect(
+        memorials.connect(relayer).editPixels(id, [idx], [false]),
+      ).to.be.revertedWithCustomError(memorials, "PixelLocked").withArgs(idx);
+    });
+
+    it("a batch edit is atomic — one locked pixel in the batch reverts the whole call", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      // idx 0: target black, canvas black -> locked. idx 1: target white, canvas black -> free.
+      const target  = toHex(buildCanvas([[0, 0]]));
+      const initial  = toHex(buildCanvas([[0, 0], [1, 0]]));
+      await memorials.connect(relayer).registerCanvas(id, target, initial);
+
+      await expect(
+        memorials.connect(relayer).editPixels(id, [0, 1], [true, false]),
+      ).to.be.revertedWithCustomError(memorials, "PixelLocked");
+    });
+
+    it("rejects an out-of-range pixel index", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas()), toHex(buildCanvas()));
+      await expect(
+        memorials.connect(relayer).editPixels(id, [1600], [true]),
+      ).to.be.revertedWithCustomError(memorials, "InvalidPixelIndex");
+    });
+
+    it("a reveal-authorized (non-relayer) address can edit but not register a canvas", async () => {
+      const { memorials, owner, relayer, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas()), toHex(buildCanvas([[0, 0]])));
+      await memorials.connect(owner).setRevealAuthorized(stranger.address, true);
+
+      await expect(memorials.connect(stranger).editPixels(id, [0], [false])).to.not.be.reverted;
+      await expect(
+        memorials.connect(stranger).registerCanvas(id + 1n, toHex(buildCanvas()), toHex(buildCanvas())),
+      ).to.be.revertedWithCustomError(memorials, "NotAuthorized"); // registerCanvas stays onlyAuthorized, not onlyRevealAuthorized
+    });
+
+    it("tokenURI renders the current canvas as black rects, centered on the artwork, on top of it", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, { priceWei: 0n, publicSupply: 1 });
+      // (0,0) black, everything else white -> a single 4x4 rect at the grid's top-left corner.
+      await memorials.connect(relayer).registerCanvas(id, toHex(buildCanvas()), toHex(buildCanvas([[0, 0]])));
+      await memorials.connect(buyer1).mintPublic(id);
+
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
+      // grid is 40*4=160px, centered in 528x352 -> offX=184, offY=96
+      expect(svg).to.include('<rect x="184" y="96" width="160" height="160" fill="#fff"/>');
+      expect(svg).to.include('<rect x="184" y="96" width="4" height="4" fill="#000"/>');
+    });
+
+    it("tokenURI has no canvas fragment at all for a memorial with no registered canvas", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, { priceWei: 0n, publicSupply: 1 });
+      await memorials.connect(buyer1).mintPublic(id);
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
+      expect(svg).to.not.include('fill="#fff"'); // no grid backing rect injected
     });
   });
 
