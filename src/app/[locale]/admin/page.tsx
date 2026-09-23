@@ -32,6 +32,7 @@ import {
   WORK_REGISTRY_ABI,
   ANA_COLLECTION_FACTORY_ABI,
   CELEBRATION_REGISTRY_ABI,
+  ANA_MEMORIALS_ABI,
   CONTRACT_ADDRESSES,
   ROLES,
   ROLE_LABELS,
@@ -49,6 +50,7 @@ const CA_ADDR      = CONTRACT_ADDRESSES.ConstituentAssembly   as `0x${string}`;
 const WR_ADDR      = CONTRACT_ADDRESSES.WorkRegistry          as `0x${string}`;
 const FACTORY_ADDR = CONTRACT_ADDRESSES.ANACollectionFactory  as `0x${string}`;
 const CELEBRATION_ADDR = CONTRACT_ADDRESSES.CelebrationRegistry as `0x${string}`;
+const MEMORIALS_ADDR = CONTRACT_ADDRESSES.ANAMemorials as `0x${string}`;
 const contractsDeployed = !!CONTRACT_ADDRESSES.AssociationCore;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -140,6 +142,40 @@ function AdminAction({
           {hash.slice(0, 18)}…{hash.slice(-6)} ↗
         </a>
       )}
+    </div>
+  );
+}
+
+// ─── TabBar ───────────────────────────────────────────────────────────────────
+// Groups the page's ~15 sections into 3 tabs so "everything on one endless
+// scroll, mixed together" stops being the way to find a specific contract
+// action. Sections keep their existing position in the JSX (no reordering,
+// lower risk) — each is just wrapped in `{activeTab === "…" && (…)}`.
+
+type AdminTab = "contracts" | "pipeline" | "association";
+
+const ADMIN_TABS: { id: AdminTab; label: string }[] = [
+  { id: "contracts",   label: "Contrats" },
+  { id: "pipeline",    label: "Pipeline & keeper" },
+  { id: "association", label: "Association" },
+];
+
+function TabBar({ active, onChange }: { active: AdminTab; onChange: (t: AdminTab) => void }) {
+  return (
+    <div className="flex gap-1 border-b border-[--border] sticky top-[64px] bg-[--bg] z-10 -mx-6 px-6">
+      {ADMIN_TABS.map(t => (
+        <button
+          key={t.id}
+          onClick={() => onChange(t.id)}
+          className={`font-mono text-xs px-4 py-3 border-b-2 transition-colors ${
+            active === t.id
+              ? "border-[--fg] text-[--fg] font-bold"
+              : "border-transparent text-[--fg-muted] hover:text-[--fg]"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -943,6 +979,224 @@ function CelebrationRegistrySection({
         </div>
         <StatusRow label="Adresse" value={`${CELEBRATION_ADDR.slice(0,10)}…${CELEBRATION_ADDR.slice(-6)}`} />
         <StatusRow label="Célébrations enregistrées" value={celebrationCount != null ? String(celebrationCount) : "—"} />
+      </div>
+    </section>
+  );
+}
+
+// ─── ANAMemorialsSection ─────────────────────────────────────────────────────
+// Was entirely absent from admin — the contract with the most activity this
+// session had no UI presence at all. Curated actions (same pattern as
+// CollectionFactorySection) rather than a raw ABI console: registerMemorial/
+// registerCanvas/editPixels are relayer-driven off-chain (check-burns,
+// batch-memorial, milestone-memorial routes above), not something to
+// trigger by hand here — this section only covers the owner-only setters.
+
+function ANAMemorialsSection({
+  isOwner,
+  writeContractAsync,
+}: {
+  isOwner: boolean;
+  writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
+}) {
+  const [authorizeAddr, setAuthorizeAddr]         = useState("");
+  const [revealAuthAddr, setRevealAuthAddr]       = useState("");
+  const [relayerPayoutInput, setRelayerPayoutInput] = useState("");
+  const [vaultInput, setVaultInput]               = useState("");
+  const [priceMemorialId, setPriceMemorialId]     = useState("");
+  const [priceWei, setPriceWei]                   = useState("");
+
+  const [state, setState] = useState<Record<string, "idle" | "pending" | "done" | "error">>({});
+  const [err,   setErr]   = useState<Record<string, string | null>>({});
+  const [tx,    setTx]    = useState<Record<string, string | null>>({});
+
+  const { data: memorialsOwner } = useReadContract({
+    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "owner",
+    query: { enabled: !!MEMORIALS_ADDR },
+  });
+  const { data: relayerPayoutAddr } = useReadContract({
+    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "relayerPayoutAddr",
+    query: { enabled: !!MEMORIALS_ADDR },
+  });
+  const { data: vaultAddr } = useReadContract({
+    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "vaultAddr",
+    query: { enabled: !!MEMORIALS_ADDR },
+  });
+  const { data: coreAddr } = useReadContract({
+    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "core",
+    query: { enabled: !!MEMORIALS_ADDR },
+  });
+  const { data: seriesCount } = useReadContract({
+    address: MEMORIALS_ADDR, abi: ANA_MEMORIALS_ABI, functionName: "getSeriesCount",
+    query: { enabled: !!MEMORIALS_ADDR, refetchInterval: 15_000 },
+  });
+
+  if (!MEMORIALS_ADDR) {
+    return (
+      <section className="space-y-2 border-t border-[--border] pt-10">
+        <h2 className="text-xl font-bold">ANAMemorials</h2>
+        <p className="font-mono text-xs text-[--fg-muted]">
+          Non déployé — ANA_MEMORIALS_ADDRESS absent.
+        </p>
+      </section>
+    );
+  }
+
+  async function run(
+    key: string,
+    functionName: string,
+    args: unknown[],
+  ) {
+    setState(s => ({ ...s, [key]: "pending" }));
+    setErr(e => ({ ...e, [key]: null }));
+    try {
+      const hash = await writeContractAsync({
+        address: MEMORIALS_ADDR,
+        abi:     ANA_MEMORIALS_ABI as Parameters<typeof writeContractAsync>[0]["abi"],
+        functionName: functionName as never,
+        args:    args as never,
+      });
+      setTx(t => ({ ...t, [key]: hash }));
+      setState(s => ({ ...s, [key]: "done" }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr(er => ({ ...er, [key]: msg.includes("rejected") ? "Transaction annulée" : msg.slice(0, 150) }));
+      setState(s => ({ ...s, [key]: "error" }));
+    }
+  }
+
+  function ActionRow({
+    id, label, description, placeholder, value, onChange, buttonLabel, danger, onExec, disabled,
+  }: {
+    id: string; label: string; description: string; placeholder: string;
+    value: string; onChange: (v: string) => void; buttonLabel: string;
+    danger?: boolean; onExec: () => void; disabled?: boolean;
+  }) {
+    return (
+      <div className={`border p-5 space-y-3 ${danger ? "border-red-300" : "border-[--border]"}`}>
+        <div>
+          <p className={`font-bold text-sm ${danger ? "text-red-700" : ""}`}>{label}</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">{description}</p>
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            placeholder={placeholder}
+            className={`font-mono text-xs border bg-[--bg] px-3 py-2 flex-1 focus:outline-none ${
+              danger ? "border-red-300 focus:border-red-500" : "border-[--border] focus:border-[--fg]"
+            }`}
+          />
+          <button
+            onClick={onExec}
+            disabled={!isOwner || state[id] === "pending" || disabled}
+            className={`font-mono text-xs px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ${
+              danger ? "border border-red-400 text-red-600 hover:bg-red-50" : "bg-[--fg] text-[--bg] hover:opacity-80"
+            }`}
+          >
+            {state[id] === "pending" ? "En cours…" : state[id] === "done" ? "✓ Fait" : buttonLabel}
+          </button>
+        </div>
+        {err[id] && <p className="font-mono text-xs text-red-600">{err[id]}</p>}
+        {tx[id] && (
+          <a href={basescanTx(tx[id]!)} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] underline">
+            tx: {tx[id]!.slice(0, 16)}… ↗
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <section className="space-y-4 border-t border-[--border] pt-10">
+      <div>
+        <h2 className="text-xl font-bold">ANAMemorials</h2>
+        <p className="font-mono text-xs text-[--fg-muted] mt-1">
+          Collection partagée pour tous les mémoriaux de burn. registerMemorial/registerCanvas/
+          editPixels sont pilotés par le relayer (crons ci-dessous) — cette section ne couvre que
+          les réglages réservés au owner.
+        </p>
+      </div>
+
+      <div className="border border-[--border] p-5 space-y-0 max-w-md">
+        <div className="flex items-center justify-between mb-3">
+          <p className="font-bold text-sm">État</p>
+          <a href={basescanAddr(MEMORIALS_ADDR)} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] hover:underline">Basescan ↗</a>
+        </div>
+        <StatusRow label="Adresse"           value={`${MEMORIALS_ADDR.slice(0,10)}…${MEMORIALS_ADDR.slice(-6)}`} />
+        <StatusRow label="Owner"             value={memorialsOwner ? `${(memorialsOwner as string).slice(0,10)}…` : "—"} />
+        <StatusRow label="Relayer payout"    value={relayerPayoutAddr ? `${(relayerPayoutAddr as string).slice(0,10)}…` : "—"} />
+        <StatusRow label="Vault"             value={vaultAddr ? `${(vaultAddr as string).slice(0,10)}…` : "—"} />
+        <StatusRow label="AssociationCore"   value={coreAddr ? `${(coreAddr as string).slice(0,10)}…` : "—"} />
+        <StatusRow label="Mémoriaux enregistrés" value={seriesCount != null ? String(seriesCount) : "—"} ok={seriesCount != null && Number(seriesCount) > 0} />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ActionRow
+          id="setAuthorized" label="Autoriser un relayer"
+          description="Donne le droit d'appeler registerMemorial/addReservedClaims/registerCanvas/updateArtwork."
+          placeholder="0x… adresse à autoriser" value={authorizeAddr} onChange={setAuthorizeAddr}
+          buttonLabel="Autoriser →" disabled={!isAddress(authorizeAddr)}
+          onExec={() => run("setAuthorized", "setAuthorized", [authorizeAddr as `0x${string}`, true])}
+        />
+        <ActionRow
+          id="setRevealAuthorized" label="Autoriser en édition (reveal-only)"
+          description="Droit d'appeler UNIQUEMENT editPixels/updateArtwork — jamais registerMemorial. C'est le point d'entrée prévu pour le futur contrat de gating PX."
+          placeholder="0x… adresse du futur contrat PX" value={revealAuthAddr} onChange={setRevealAuthAddr}
+          buttonLabel="Autoriser →" disabled={!isAddress(revealAuthAddr)}
+          onExec={() => run("setRevealAuthorized", "setRevealAuthorized", [revealAuthAddr as `0x${string}`, true])}
+        />
+        <ActionRow
+          id="setRelayerPayoutAddr" label="Changer l'adresse de paiement relayer" danger
+          description="Reçoit toujours 50% des mints/claims payants et des payForRequest(). À ne changer qu'en cas de compromission."
+          placeholder="0x… nouvelle adresse" value={relayerPayoutInput} onChange={setRelayerPayoutInput}
+          buttonLabel="Mettre à jour" disabled={!isAddress(relayerPayoutInput)}
+          onExec={() => run("setRelayerPayoutAddr", "setRelayerPayoutAddr", [relayerPayoutInput as `0x${string}`])}
+        />
+        <ActionRow
+          id="setVaultAddr" label="Changer l'adresse du vault" danger
+          description="Filet créateur sans wallet (auteur non-résolu) + destination des tips. À ne changer qu'en cas de compromission."
+          placeholder="0x… nouvelle adresse" value={vaultInput} onChange={setVaultInput}
+          buttonLabel="Mettre à jour" disabled={!isAddress(vaultInput)}
+          onExec={() => run("setVaultAddr", "setVaultAddr", [vaultInput as `0x${string}`])}
+        />
+      </div>
+
+      <div className="border border-[--border] p-5 space-y-3 max-w-md">
+        <div>
+          <p className="font-bold text-sm">Changer le prix d&apos;une série</p>
+          <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+            N&apos;affecte que mintPublic() à partir de maintenant — mintRequester/claimFree restent gratuits.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={priceMemorialId} onChange={e => setPriceMemorialId(e.target.value)}
+            placeholder="memorialId" type="number"
+            className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 w-28 focus:outline-none focus:border-[--fg]"
+          />
+          <input
+            value={priceWei} onChange={e => setPriceWei(e.target.value)}
+            placeholder="nouveau prix, en wei"
+            className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-[--fg]"
+          />
+          <button
+            onClick={() => run("setSeriesPrice", "setSeriesPrice", [BigInt(priceMemorialId || "0"), BigInt(priceWei || "0")])}
+            disabled={!isOwner || state.setSeriesPrice === "pending" || !priceMemorialId || !priceWei}
+            className="font-mono text-xs bg-[--fg] text-[--bg] px-4 py-2 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            {state.setSeriesPrice === "pending" ? "En cours…" : "Mettre à jour"}
+          </button>
+        </div>
+        {err.setSeriesPrice && <p className="font-mono text-xs text-red-600">{err.setSeriesPrice}</p>}
+        {tx.setSeriesPrice && (
+          <a href={basescanTx(tx.setSeriesPrice)} target="_blank" rel="noopener noreferrer"
+            className="font-mono text-xs text-[--fg-muted] underline">
+            tx: {tx.setSeriesPrice.slice(0, 16)}… ↗
+          </a>
+        )}
       </div>
     </section>
   );
@@ -2136,6 +2390,7 @@ export default function AdminPage() {
   const [moduleInput,  setModuleInput]  = useState<string>(CA_ADDR);
   const [revokeInput,  setRevokeInput]  = useState("");
   const [relayerInput, setRelayerInput] = useState("");
+  const [activeTab,    setActiveTab]    = useState<AdminTab>("contracts");
 
   // ── Actions ───────────────────────────────────────────────────────────────
   const execTx = useCallback(async (
@@ -2252,6 +2507,10 @@ export default function AdminPage() {
             </p>
           </div>
 
+          <TabBar active={activeTab} onChange={setActiveTab} />
+
+          {activeTab === "contracts" && (
+          <>
           {/* État des contrats */}
           <section className="space-y-4">
             <h2 className="text-xl font-bold">État des contrats</h2>
@@ -2543,7 +2802,11 @@ export default function AdminPage() {
             onRefresh={() => router.refresh()}
             getAdminHeaders={getAdminHeaders}
           />
+          </>
+          )}
 
+          {activeTab === "pipeline" && (
+          <>
           {/* ── Auto-vote (test) ── */}
           <section className="space-y-4 border-t border-[--border] pt-10">
             <div>
@@ -2555,7 +2818,11 @@ export default function AdminPage() {
             </div>
             <AutoVoteSection sessionActive={session?.active ?? false} getAdminHeaders={getAdminHeaders} />
           </section>
+          </>
+          )}
 
+          {activeTab === "contracts" && (
+          <>
           {/* ── ANACollectionFactory ── */}
           {FACTORY_ADDR && (
             <CollectionFactorySection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
@@ -2564,6 +2831,13 @@ export default function AdminPage() {
           {/* ── CelebrationRegistry (renders its own "not deployed" notice) ── */}
           <CelebrationRegistrySection writeContractAsync={writeContractAsync} />
 
+          {/* ── ANAMemorials ── */}
+          <ANAMemorialsSection isOwner={!!isCoreOwner} writeContractAsync={writeContractAsync} />
+          </>
+          )}
+
+          {activeTab === "pipeline" && (
+          <>
           {/* ── Work lifecycle + status ── */}
           <section className="space-y-4 border-t border-[--border] pt-10">
             <div>
@@ -2623,7 +2897,11 @@ export default function AdminPage() {
             </div>
             <SalonExchangeSection getAdminHeaders={getAdminHeaders} />
           </section>
+          </>
+          )}
 
+          {activeTab === "association" && (
+          <>
           {/* ── Besoins humains remontés par les Normies ── */}
           <section className="space-y-6 border-t border-[--border] pt-10">
             <div>
@@ -2722,7 +3000,11 @@ export default function AdminPage() {
               ))}
             </div>
           </section>
+          </>
+          )}
 
+          {activeTab === "contracts" && (
+          <>
           {/* ── Adresses ── */}
           <section className="space-y-3 border-t border-[--border] pt-8">
             <h2 className="text-xl font-bold">Adresses de déploiement (Base mainnet)</h2>
@@ -2745,6 +3027,8 @@ export default function AdminPage() {
               ))}
             </div>
           </section>
+          </>
+          )}
 
         </div>
       </main>
