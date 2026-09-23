@@ -2758,12 +2758,19 @@ export default function AdminPage() {
               disabled={!session?.active || sessionLoading}
               disabledReason={sessionLoading ? "Chargement…" : "Ouvrez une session d'abord"}
               onExec={async () => {
+                // Was silently swallowing any HTTP-level error (r.ok never checked) —
+                // a 500/401 from either call just fell through with candidacies/decisions
+                // undefined, no vote was ever submitted, and nothing threw unless
+                // `failed` happened to be populated. That's why repeated clicks could
+                // look like "nothing happens" with zero visible error.
                 const r1 = await fetch("/api/keeper/auto-vote", {
                   method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
                   body: JSON.stringify({ phase: "candidacy" }),
                 });
                 const c = await r1.json();
                 console.log("[auto-vote] candidacy:", c);
+                if (!r1.ok) throw new Error(`candidacy failed : ${(c as { error?: string }).error ?? `HTTP ${r1.status}`}`);
+
                 const r2 = await fetch("/api/keeper/auto-vote", {
                   method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
                   // Pass candidacies from phase=candidacy to avoid re-running LLM + duplicate messages
@@ -2771,18 +2778,19 @@ export default function AdminPage() {
                 });
                 const v = await r2.json();
                 console.log("[auto-vote] vote:", v);
+                if (!r2.ok) throw new Error(`vote failed : ${(v as { error?: string }).error ?? `HTTP ${r2.status}`}`);
                 if (v.failed?.length) {
                   console.warn("[auto-vote] failed txs:", v.failed);
                   // Non-fatal: continue to try closing
+                }
+                if ((v.submitted ?? 0) === 0) {
+                  throw new Error(v.failed?.length ? `Aucun vote enregistré on-chain : ${v.failed[0]}` : "Aucun vote enregistré on-chain (0 décision générée — voir la console).");
                 }
                 // Try to auto-close via relayer (works if deadline passed; silent if not)
                 await fetch("/api/keeper/auto-vote", {
                   method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
                   body: JSON.stringify({ phase: "close" }),
                 }).then(r => r.json()).then(d => console.log("[auto-vote] close:", d)).catch(() => null);
-                if ((v.submitted ?? 0) === 0 && v.failed?.length) {
-                  throw new Error(`Aucun vote enregistré on-chain : ${v.failed[0]}`);
-                }
               }}
             />
 

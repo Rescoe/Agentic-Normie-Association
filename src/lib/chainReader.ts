@@ -51,7 +51,7 @@ const ASSEMBLY_ABI = parseAbi([
   "function getVoteCount(bytes32 role, uint256 candidateTokenId) external view returns (uint256)",
   "function getLeader(bytes32 role) external view returns (uint256 tokenId, uint256 count)",
   "function getCandidates(bytes32 role) external view returns (uint256[])",
-  "function hasVoted(uint256 voterTokenId, bytes32 role) external view returns (bool)",
+  "function hasVoted(uint256 sessionId, uint256 voterTokenId, bytes32 role) external view returns (bool)",
 ]);
 
 const WORK_ABI = parseAbi([

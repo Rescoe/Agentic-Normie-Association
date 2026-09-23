@@ -52,17 +52,26 @@ contract ConstituentAssembly is Ownable {
     uint256   public sessionCount;
     bytes32[] public electableRoles;
 
-    // voterTokenId => role => has voted
-    mapping(uint256 => mapping(bytes32 => bool))    public hasVoted;
+    // Scoped by sessionId — a member who voted in session N must be able to vote
+    // again in session N+1 (elections recur every ELECTION_TERM, see
+    // electionSchedule.ts), and session N+1's tallies must start from zero
+    // instead of inheriting session N's candidates/votes. Before this, all four
+    // mappings below were flat (no sessionId key), meaning a member's very first
+    // vote for a role permanently blocked them from ever voting for that role
+    // again in any future session, and vote tallies accumulated across sessions
+    // forever instead of resetting.
 
-    // role => candidateTokenId => vote count
-    mapping(bytes32 => mapping(uint256 => uint256)) public voteCounts;
+    // sessionId => voterTokenId => role => has voted
+    mapping(uint256 => mapping(uint256 => mapping(bytes32 => bool))) public hasVoted;
 
-    // role => ordered list of candidates that received ≥1 vote
-    mapping(bytes32 => uint256[])                   public candidates;
+    // sessionId => role => candidateTokenId => vote count
+    mapping(uint256 => mapping(bytes32 => mapping(uint256 => uint256))) public voteCounts;
 
-    // role => candidateTokenId => already in candidates[] (dedup guard)
-    mapping(bytes32 => mapping(uint256 => bool))    private _candidateAdded;
+    // sessionId => role => ordered list of candidates that received ≥1 vote
+    mapping(uint256 => mapping(bytes32 => uint256[])) public candidates;
+
+    // sessionId => role => candidateTokenId => already in candidates[] (dedup guard)
+    mapping(uint256 => mapping(bytes32 => mapping(uint256 => bool))) private _candidateAdded;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Events
@@ -260,18 +269,19 @@ contract ConstituentAssembly is Ownable {
         bytes32 role,
         uint256 candidateTokenId
     ) internal {
-        if (hasVoted[voterTokenId][role]) revert AlreadyVotedForRole(voterTokenId, role);
+        uint256 sid = currentSession.id;
+        if (hasVoted[sid][voterTokenId][role]) revert AlreadyVotedForRole(voterTokenId, role);
         if (!_isElectable(role)) revert RoleNotElectable(role);
 
-        hasVoted[voterTokenId][role] = true;
+        hasVoted[sid][voterTokenId][role] = true;
 
-        if (!_candidateAdded[role][candidateTokenId]) {
-            candidates[role].push(candidateTokenId);
-            _candidateAdded[role][candidateTokenId] = true;
+        if (!_candidateAdded[sid][role][candidateTokenId]) {
+            candidates[sid][role].push(candidateTokenId);
+            _candidateAdded[sid][role][candidateTokenId] = true;
         }
-        voteCounts[role][candidateTokenId]++;
+        voteCounts[sid][role][candidateTokenId]++;
 
-        emit VoteCast(currentSession.id, voterTokenId, role, candidateTokenId);
+        emit VoteCast(sid, voterTokenId, role, candidateTokenId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -281,7 +291,7 @@ contract ConstituentAssembly is Ownable {
     function getVoteCount(bytes32 role, uint256 candidateTokenId)
         external view returns (uint256)
     {
-        return voteCounts[role][candidateTokenId];
+        return voteCounts[currentSession.id][role][candidateTokenId];
     }
 
     function getLeader(bytes32 role)
@@ -291,7 +301,7 @@ contract ConstituentAssembly is Ownable {
     }
 
     function getCandidates(bytes32 role) external view returns (uint256[] memory) {
-        return candidates[role];
+        return candidates[currentSession.id][role];
     }
 
     function getElectableRoles() external view returns (bytes32[] memory) {
@@ -317,11 +327,12 @@ contract ConstituentAssembly is Ownable {
     function _getLeader(bytes32 role)
         internal view returns (uint256 winnerTokenId, uint256 maxVotes)
     {
-        uint256[] storage cands = candidates[role];
+        uint256 sid = currentSession.id;
+        uint256[] storage cands = candidates[sid][role];
         bool found = false;
 
         for (uint256 i = 0; i < cands.length; i++) {
-            uint256 count = voteCounts[role][cands[i]];
+            uint256 count = voteCounts[sid][role][cands[i]];
             if (!found || count > maxVotes) {
                 maxVotes      = count;
                 winnerTokenId = cands[i];

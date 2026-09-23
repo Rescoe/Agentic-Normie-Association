@@ -215,12 +215,14 @@ function OrganigrammeElus({ resolved }: { resolved: boolean }) {
 function RoleVoteCard({
   role,
   sessionActive,
+  sessionId,
   myMemberIds,
   allMemberIds,
   isConnected,
 }: {
   role:          { hash: `0x${string}`; label: string; labelKey: string; group: string };
   sessionActive: boolean;
+  sessionId:     bigint;
   myMemberIds:   number[];
   allMemberIds:  number[];
   isConnected:   boolean;
@@ -247,7 +249,7 @@ function RoleVoteCard({
     contracts: myMemberIds.map((id) => ({
       address: CA_ADDR, abi: CONSTITUENT_ASSEMBLY_ABI,
       functionName: "hasVoted" as const,
-      args: [BigInt(id), role.hash] as [bigint, `0x${string}`],
+      args: [sessionId, BigInt(id), role.hash] as [bigint, bigint, `0x${string}`],
     })),
     query: { enabled: myMemberIds.length > 0 && contractsDeployed },
   });
@@ -828,7 +830,7 @@ export function AssemblyClient({
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {institutionalRoles.map(role => (
-                <RoleVoteCard key={role.hash} role={role} sessionActive={true}
+                <RoleVoteCard key={role.hash} role={role} sessionActive={true} sessionId={liveSession?.id ?? BigInt(initialSessionId)}
                   myMemberIds={myMemberIds} allMemberIds={allMemberIds} isConnected={isConnected} />
               ))}
             </div>
@@ -839,7 +841,7 @@ export function AssemblyClient({
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {creativeRoles.map(role => (
-                <RoleVoteCard key={role.hash} role={role} sessionActive={true}
+                <RoleVoteCard key={role.hash} role={role} sessionActive={true} sessionId={liveSession?.id ?? BigInt(initialSessionId)}
                   myMemberIds={myMemberIds} allMemberIds={allMemberIds} isConnected={isConnected} />
               ))}
             </div>

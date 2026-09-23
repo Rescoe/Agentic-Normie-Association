@@ -38,7 +38,7 @@ function getDeployedContracts(t: Awaited<ReturnType<typeof getTranslations>>) {
     reads: [
       { fn: "getLeader(roleHash)",            returns: "[tokenId, count]" },
       { fn: "getVoteCount(role, tokenId)",    returns: "uint256" },
-      { fn: "hasVoted(sessionId, tokenId)",   returns: "bool" },
+      { fn: "hasVoted(sessionId, tokenId, role)", returns: "bool" },
       { fn: "currentSession()",              returns: "SessionInfo" },
     ],
   },
