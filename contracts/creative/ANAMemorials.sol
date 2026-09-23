@@ -63,6 +63,10 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     uint256 private constant CANVAS_SIZE  = 40;
     uint256 private constant CANVAS_BYTES = 200; // 1600 bits / 8
     uint256 private constant CANVAS_CELL_PX = 4; // on-screen size of one grid cell, in ARTWORK_CANVAS units
+    // White margin around the grid, one cell wide, separating the restored
+    // portrait from the rest of the memorial artwork — never editable, since
+    // it isn't part of the 40x40 bitmap at all, purely a rendering frame.
+    uint256 private constant CANVAS_BORDER_PX = CANVAS_CELL_PX;
     // Safety valve for tokenURI()'s on-chain SVG rendering — see _renderCanvas.
     uint256 private constant MAX_RENDERED_RUNS = 300;
 
@@ -876,12 +880,16 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         bytes memory rects = new bytes(len);
         for (uint256 i = 0; i < len; i++) rects[i] = buf[i];
 
+        // White margin, one cell wide on every side, framing the grid apart
+        // from the rest of the artwork — not part of canvasPixels/
+        // targetPixels at all, so structurally never touched by editPixels().
         return abi.encodePacked(
             '<svg x="0" y="0" width="800" height="800" viewBox="0 0 ',
             ARTWORK_CANVAS_W.toString(), ' ', ARTWORK_CANVAS_H.toString(),
             '" preserveAspectRatio="xMidYMid meet">',
-            '<rect x="', offX.toString(), '" y="', offY.toString(),
-            '" width="', gridPx.toString(), '" height="', gridPx.toString(), '" fill="#fff"/>',
+            '<rect x="', (offX - CANVAS_BORDER_PX).toString(), '" y="', (offY - CANVAS_BORDER_PX).toString(),
+            '" width="', (gridPx + 2 * CANVAS_BORDER_PX).toString(),
+            '" height="', (gridPx + 2 * CANVAS_BORDER_PX).toString(), '" fill="#fff"/>',
             rects,
             '</svg>'
         );

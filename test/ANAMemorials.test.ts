@@ -752,7 +752,8 @@ describe("ANAMemorials", function () {
       const metadata = decodeTokenUri(await memorials.tokenURI(0));
       const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
       // grid is 40*4=160px, centered in 528x352 -> offX=184, offY=96
-      expect(svg).to.include('<rect x="184" y="96" width="160" height="160" fill="#fff"/>');
+      // grid backing rect, expanded by CANVAS_BORDER_PX (4) on every side: 184-4=180, 96-4=92, 160+2*4=168
+      expect(svg).to.include('<rect x="180" y="92" width="168" height="168" fill="#fff"/>');
       expect(svg).to.include('<rect x="184" y="96" width="4" height="4" fill="#000"/>');
     });
 
