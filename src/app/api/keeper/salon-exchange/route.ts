@@ -619,13 +619,28 @@ export async function POST(req: NextRequest) {
     // Self-call (not a direct function import) to avoid coupling this route to
     // work-lifecycle's internals — same x-cron-secret auth work-lifecycle
     // already accepts, added here rather than exposed to the caller.
+    // Wrapped in try/catch: an unhandled rejection here (network blip, cold
+    // start, work-lifecycle itself timing out near its own 60s budget) used to
+    // crash this whole route with a 500 — which is exactly what GitHub Actions'
+    // "ANA — Auto Exchange" cron reported failing intermittently (only on the
+    // ~50% of runs where shouldAdvance was true). Same self-fetch bug class as
+    // election-cycle's (see project_ana_election_cycle_self_fetch_bug), just
+    // never converted to a direct call here. A soft failure here should not
+    // fail the whole exchange tick — worst case, this advance is skipped and
+    // the next tick tries again.
     const selfUrl = `${req.nextUrl.protocol}//${host}/api/keeper/work-lifecycle`;
-    const r = await fetch(selfUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
-      body: "{}",
-    });
-    const workLifecycle = r.ok ? await r.json() as Record<string, unknown> : { error: `HTTP ${r.status}` };
+    let workLifecycle: Record<string, unknown>;
+    try {
+      const r = await fetch(selfUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-cron-secret": cronSecret },
+        body: "{}",
+      });
+      workLifecycle = r.ok ? await r.json() as Record<string, unknown> : { error: `HTTP ${r.status}` };
+    } catch (e) {
+      console.error("[salon-exchange] work-lifecycle self-fetch failed:", e);
+      workLifecycle = { error: e instanceof Error ? e.message : String(e) };
+    }
 
     if (!isCron && !isAdminCall) await recordStim(getClientIp(req));
 
