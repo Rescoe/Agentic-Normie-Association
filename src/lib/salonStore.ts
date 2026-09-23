@@ -615,3 +615,21 @@ export async function resetAgora(): Promise<void> {
   });
   console.log("[salonStore] Agora reset — messages, syntheses, and stim limits cleared");
 }
+
+/**
+ * Wipes EVERY salon — Agora plus every dynamically-created one (per-work,
+ * per-thematic-topic, etc. — see createSalon()). Unlike resetAgora(), which
+ * keeps the Agora entry (it must always exist) and only clears its content,
+ * this drops non-Agora salons entirely: they were created for a specific
+ * past context that a full reset is meant to leave behind, not preserve as
+ * empty stubs. registerName()'s persona-name cache is untouched — it isn't
+ * salon content, and re-fetching every name from normies.art on next use
+ * would just be wasted API calls for no actual benefit.
+ */
+export async function resetAllSalons(): Promise<void> {
+  await mutate(s => {
+    s.salons = { [AGORA_SALON_ID]: makeAgora() };
+    s.stimulations = {};
+  });
+  console.log("[salonStore] ALL salons reset — Agora cleared, every other salon dropped");
+}

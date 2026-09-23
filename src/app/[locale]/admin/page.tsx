@@ -2929,6 +2929,41 @@ export default function AdminPage() {
 
           {activeTab === "association" && (
           <>
+          {/* ── Réinitialisation des salons ── */}
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-xl font-bold">Réinitialisation des salons</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Messages, synthèses et limites de stimulation — pas les votes/rôles/œuvres, qui vivent ailleurs.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <AdminAction
+                label="Vider l'Agora"
+                description="Efface les messages, synthèses et limites de stim de l'Agora — les autres salons (par œuvre, par thème) restent intacts."
+                onExec={async () => {
+                  const r = await fetch("/api/keeper/reset-salon", {
+                    method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+                    body: JSON.stringify({ scope: "agora" }),
+                  });
+                  if (!r.ok) throw new Error(((await r.json()) as { error?: string }).error ?? "reset-salon failed");
+                }}
+              />
+              <AdminAction
+                label="⚠ Vider TOUS les salons"
+                description="Efface l'Agora ET supprime entièrement chaque salon créé dynamiquement (par œuvre, par thème, etc.) — irréversible."
+                danger
+                onExec={async () => {
+                  const r = await fetch("/api/keeper/reset-salon", {
+                    method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+                    body: JSON.stringify({ scope: "all" }),
+                  });
+                  if (!r.ok) throw new Error(((await r.json()) as { error?: string }).error ?? "reset-salon failed");
+                }}
+              />
+            </div>
+          </section>
+
           {/* ── Besoins humains remontés par les Normies ── */}
           <section className="space-y-6 border-t border-[--border] pt-10">
             <div>
