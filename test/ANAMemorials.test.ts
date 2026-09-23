@@ -159,6 +159,49 @@ describe("ANAMemorials", function () {
     });
   });
 
+  describe("registerMemorial — MILESTONE_STEP enforcement (hard-coded, not owner-adjustable)", function () {
+    it("reverts for a milestone with a honoredBurnCount that isn't a multiple of MILESTONE_STEP", async () => {
+      const { memorials, relayer } = await deployFixture();
+      await expect(
+        memorials.connect(relayer).registerMemorial(
+          registerParams({ kind: "milestone", honoredBurnCount: 250 }),
+        ),
+      ).to.be.revertedWithCustomError(memorials, "InvalidMilestoneCount").withArgs(250n, 100n);
+    });
+
+    it("reverts for a milestone with honoredBurnCount == 0", async () => {
+      const { memorials, relayer } = await deployFixture();
+      await expect(
+        memorials.connect(relayer).registerMemorial(
+          registerParams({ kind: "milestone", honoredBurnCount: 0 }),
+        ),
+      ).to.be.revertedWithCustomError(memorials, "InvalidMilestoneCount").withArgs(0n, 100n);
+    });
+
+    it("accepts a milestone whose honoredBurnCount is an exact multiple of MILESTONE_STEP", async () => {
+      const { memorials, relayer } = await deployFixture();
+      await expect(
+        memorials.connect(relayer).registerMemorial(
+          registerParams({ kind: "milestone", honoredBurnCount: 100 }),
+        ),
+      ).to.not.be.reverted;
+    });
+
+    it("does not apply to any other kind — a non-milestone can honor any count", async () => {
+      const { memorials, relayer } = await deployFixture();
+      await expect(
+        memorials.connect(relayer).registerMemorial(
+          registerParams({ kind: "batch", honoredBurnCount: 37 }),
+        ),
+      ).to.not.be.reverted;
+    });
+
+    it("MILESTONE_STEP is 100 and publicly readable", async () => {
+      const { memorials } = await deployFixture();
+      expect(await memorials.MILESTONE_STEP()).to.equal(100n);
+    });
+  });
+
   describe("mintPublic", function () {
     it("reverts once publicSupply is exhausted", async () => {
       const { memorials, relayer, buyer1, buyer2, stranger } = await deployFixture();
@@ -441,12 +484,12 @@ describe("ANAMemorials", function () {
       const metadata = decodeTokenUri(await memorials.tokenURI(0));
       const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
       expect(svg).to.include(svgFragment);
-      expect(svg).to.include('viewBox="0 0 528 352"'); // must match memorialArt.ts's MEMORIAL_CANVAS_W/H
+      expect(svg).to.include('viewBox="0 0 360 240"'); // must match memorialArt.ts's MEMORIAL_CANVAS_W/H
       expect(svg).to.not.include("<image");
       // A raw <g> fragment only ever draws BLACK pixels — without an explicit
       // white rect behind it, "white" areas are transparent, not white (they'd
       // show through as the outer canvas's own background instead).
-      expect(svg).to.include('<rect width="528" height="352" fill="#ffffff"/>');
+      expect(svg).to.include('<rect width="360" height="240" fill="#ffffff"/>');
       // No animation_url for a raw fragment — it isn't a standalone renderable resource.
       expect(metadata.animation_url).to.equal(undefined);
     });
@@ -522,6 +565,24 @@ describe("ANAMemorials", function () {
         recipients.push(ethers.Wallet.createRandom().address);
       }
       const tx = await memorials.connect(relayer).addReservedClaims(id, ids, recipients);
+      const receipt = await tx.wait();
+      expect(receipt!.gasUsed).to.be.lessThan(16_000_000n);
+    });
+
+    it("registerMemorial stays well under the cap for the true worst-case artworkContent (the encodeArtworkContent BMP fallback at MEMORIAL_CANVAS_W/H) — regression test for a real on-chain 'out of gas' revert on the 528x352 canvas", async () => {
+      const { memorials, relayer } = await deployFixture();
+      // Reproduces pixelImage.ts's pixelsToBmpDataUri() output LENGTH (not its
+      // exact bytes — content doesn't matter, only size, since storage cost is
+      // per-byte) at the canvas size memorialArt.ts's MEMORIAL_CANVAS_W/H uses.
+      const W = 360, H = 240;
+      const rawBitmapBytes = Math.ceil((W * H) / 8);
+      const bmpHeaderApprox = 62;
+      const base64Len = Math.ceil((rawBitmapBytes + bmpHeaderApprox) / 3) * 4;
+      const worstCaseArtwork = "data:image/bmp;base64," + "A".repeat(base64Len);
+
+      const tx = await memorials.connect(relayer).registerMemorial(
+        registerParams({ artworkContent: worstCaseArtwork, kind: "milestone", honoredBurnCount: 2000, publicSupply: 10 }),
+      );
       const receipt = await tx.wait();
       expect(receipt!.gasUsed).to.be.lessThan(16_000_000n);
     });
@@ -751,10 +812,10 @@ describe("ANAMemorials", function () {
 
       const metadata = decodeTokenUri(await memorials.tokenURI(0));
       const svg = Buffer.from((metadata.image as string).split(",", 2)[1], "base64").toString("utf-8");
-      // grid is 40*4=160px, centered in 528x352 -> offX=184, offY=96
-      // grid backing rect, expanded by CANVAS_BORDER_PX (4) on every side: 184-4=180, 96-4=92, 160+2*4=168
-      expect(svg).to.include('<rect x="180" y="92" width="168" height="168" fill="#fff"/>');
-      expect(svg).to.include('<rect x="184" y="96" width="4" height="4" fill="#000"/>');
+      // grid is 40*4=160px, centered in 360x240 -> offX=100, offY=40
+      // grid backing rect, expanded by CANVAS_BORDER_PX (4) on every side: 100-4=96, 40-4=36, 160+2*4=168
+      expect(svg).to.include('<rect x="96" y="36" width="168" height="168" fill="#fff"/>');
+      expect(svg).to.include('<rect x="100" y="40" width="4" height="4" fill="#000"/>');
     });
 
     it("tokenURI has no canvas fragment at all for a memorial with no registered canvas", async () => {

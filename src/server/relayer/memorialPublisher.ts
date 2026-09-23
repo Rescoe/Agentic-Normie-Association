@@ -127,15 +127,22 @@ export async function registerMemorialOnChain(
       // Was 2M — wrong: no contract gets deployed here anymore, but
       // `artworkContent` IS still stored entirely in this call's
       // MemorialSeries struct via a genuinely expensive cold SSTORE. Fixed to
-      // 10M, then to 15M when MEMORIAL_CANVAS_W/H grew 4x (encodeArtworkContent,
-      // pixelImage.ts, now usually picks the RLE/SVG encoding over BMP, but
-      // its own worst case — MAX_SHAPES circles at MAX_CIRCLE_RADIUS plus a
-      // maxed-out MAX_DOTS_TOTAL_AREA patch, see memorialArt.ts — measured at
-      // ~10M gas with an explicit Hardhat gas limit, not eth_estimateGas
-      // (this project's public RPC, mainnet.base.org, fails that call outright
-      // above a certain calldata/storage size with no decodable revert reason,
+      // 10M against the RLE-SVG path's own worst case (MAX_SHAPES circles at
+      // MAX_CIRCLE_RADIUS plus a maxed-out MAX_DOTS_TOTAL_AREA patch), then a
+      // REAL on-chain "out of gas" revert (23/09, a live "Monument — 2,000
+      // Normies" registration) proved that measurement incomplete:
+      // encodeArtworkContent() (pixelImage.ts) picks whichever of RLE-SVG or a
+      // raw-pixel BMP fallback is smaller, and that BMP fallback's size
+      // depends on canvas AREA alone, bypassing every shape-based cap when a
+      // dense composition (a maximalComplexity monument) falls back to it.
+      // MEMORIAL_CANVAS_W/H was cut from 528x352 to 360x240 the same day to
+      // fix the actual root cause (see that constant's own comment in
+      // memorialArt.ts) — the true worst case (that BMP fallback, at the new
+      // canvas size) now measures ~10.6M gas (Hardhat, explicit gas limit,
+      // not eth_estimateGas — mainnet.base.org fails that call outright above
+      // a certain calldata/storage size with no decodable revert reason,
       // hence always passing an explicit value here). 15M keeps real margin
-      // under the node's ~16.7M-gas transaction cap even at that worst case.
+      // under both that measurement and the node's ~16.7M-gas transaction cap.
       gas: 15_000_000n,
     });
 

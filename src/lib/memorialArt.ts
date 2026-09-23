@@ -27,15 +27,28 @@ import { listWorks } from "@/lib/workStore";
 // 128x64 — see proof-of-draw's screenProfiles.ts) — this is a canonical
 // "master" resolution, downscaled per-screen off-chain at delivery time (a
 // proof-of-draw concern, not this repo's), never matched 1:1 to one device.
-// Was 264x176 (exactly the 2.7" e-ink's own profile) until this canvas was
-// generalized — a real bug, since it meant every other screen type received
-// an image sized for a device it wasn't. Safe to grow because on-chain
-// storage cost (encodeArtworkContent, pixelImage.ts) scales with what's
-// actually drawn, not with raw canvas pixel count — see MAX_SHAPES/
-// MAX_CIRCLE_RADIUS/MAX_DOTS_TOTAL_AREA below for the caps that keep the
-// worst case bounded regardless of canvas size.
-export const MEMORIAL_CANVAS_W = 528;
-export const MEMORIAL_CANVAS_H = 352;
+// Was 264x176 (exactly the 2.7" e-ink's own profile) until generalized to
+// 528x352 (a real fix, since 264x176 meant every other screen type received
+// an image sized for a device it wasn't) — then found and fixed BACK DOWN to
+// 360x240 (23/09) after a real on-chain failure: encodeArtworkContent()
+// (pixelImage.ts) picks the SMALLER of a raw-pixel BMP fallback and a
+// run-length-encoded SVG, and that BMP fallback's size is fixed by canvas
+// AREA alone, completely independent of what's actually drawn — a dense
+// composition (a maximalComplexity monument, especially after
+// densifyComposition's firmer shape-count floor) can fall back to it. At
+// 528x352 that fallback is ~31KB, and registerMemorial() storing a ~31KB
+// string genuinely exceeds the ~16.7M gas mainnet.base.org enforces per
+// call — confirmed live (an actual "Monument — 2,000 Normies" registration
+// reverted "out of gas" on-chain) and reproduced/measured in Hardhat.
+// 360x240 keeps the worst-case BMP fallback around ~10.6M gas (real margin
+// under both the relayer's 15M gas limit and Base's ~16.7M cap) while still
+// comfortably exceeding every individual physical screen's own resolution in
+// both dimensions (max width 296, max height 176) — the property the
+// generalization was for in the first place. Any future increase MUST be
+// re-measured against registerMemorial()'s actual worst case (see the
+// gas-cap sanity tests in test/ANAMemorials.test.ts), not assumed safe.
+export const MEMORIAL_CANVAS_W = 360;
+export const MEMORIAL_CANVAS_H = 240;
 
 // Memorials are never for sale — the piece honors a departed member, it isn't
 // a Normie-priced edition. Set explicitly at creation (check-burns.ts,
@@ -49,14 +62,16 @@ export const MEMORIAL_EDITION_SUPPLY = 1;
 
 const MODEL      = "openai/gpt-oss-120b";
 // 18, not 28 — measured (Hardhat, explicit gas limit, not eth_estimateGas)
-// against the actual worst case this many shapes can produce at the current
-// canvas size: 27 max-radius circles + one max-area dots patch came in at
-// ~60% of Base's ~16.7M per-tx gas cap. Combined with MAX_CIRCLE_RADIUS and
-// MAX_DOTS_TOTAL_AREA below (both canvas-size-independent), this bounds
-// registerMemorial()'s cost regardless of composition or how large
-// MEMORIAL_CANVAS_W/H ever grows — "favor a few deliberate, well-placed
-// forms" (the prompt below) never gets close to this ceiling in practice;
-// it exists for the adversarial/degenerate case, not normal use.
+// against the worst case this many shapes can produce via the RLE-SVG
+// encoding path. NOTE, corrected 23/09 after a real on-chain failure: this
+// bounds the RLE-SVG path only. encodeArtworkContent() (pixelImage.ts) picks
+// whichever of RLE-SVG or a raw-pixel BMP is SMALLER, and the BMP fallback's
+// size depends on canvas AREA alone — completely bypassing MAX_SHAPES/
+// MAX_CIRCLE_RADIUS/MAX_DOTS_TOTAL_AREA, which is exactly what let a real
+// monument's registerMemorial() exceed Base's ~16.7M gas cap despite these
+// caps. The TRUE worst-case bound is MEMORIAL_CANVAS_W/H above (see its own
+// comment) — these shape caps matter for keeping the RLE-SVG path itself
+// reasonably sized, not for bounding the absolute worst case anymore.
 const MAX_SHAPES = 18;
 // Circle radius and total "dots" (per-pixel random noise) area are capped in
 // ABSOLUTE pixels, not scaled with canvas size — filled/hollow rects and
@@ -66,7 +81,7 @@ const MAX_SHAPES = 18;
 // if left uncapped. Measured: a single 40x40 dots patch at max density costs
 // ~5.6M gas alone; uncapped dots on a bigger canvas has produced actual
 // "ran out of gas" reverts in testing (the same failure mode this project
-// already hit three times this session for other reasons).
+// already hit multiple times this session for related reasons).
 const MAX_CIRCLE_RADIUS    = 25;
 const MAX_DOTS_TOTAL_AREA  = 1600; // shared budget across every "dots" shape in one composition
 const MAX_BURNED_IN_PROMPT = 5; // cap prompt size/cost for very large batch burns
@@ -299,20 +314,20 @@ ${maximalComplexity
 
 Example of a real, deliberate composition (a different subject — study the density and variety, not the content) showing what "elaborate" actually looks like in this format, not just a handful of primitives scattered on a page:
 {"cartel":"A lattice of departures, each line a path not walked twice.","shapes":[
-{"type":"rect","x":40,"y":40,"w":448,"h":272,"fill":false},
-{"type":"line","x1":40,"y1":176,"x2":488,"y2":176,"thickness":2},
-{"type":"line","x1":264,"y1":40,"x2":264,"y2":312,"thickness":1},
-{"type":"circle","cx":264,"cy":176,"r":22,"fill":false},
-{"type":"circle","cx":150,"cy":100,"r":10,"fill":true},
-{"type":"circle","cx":380,"cy":100,"r":10,"fill":true},
-{"type":"circle","cx":150,"cy":250,"r":10,"fill":true},
-{"type":"circle","cx":380,"cy":250,"r":10,"fill":true},
-{"type":"line","x1":150,"y1":100,"x2":264,"y2":176,"thickness":1},
-{"type":"line","x1":380,"y1":100,"x2":264,"y2":176,"thickness":1},
-{"type":"line","x1":150,"y1":250,"x2":264,"y2":176,"thickness":1},
-{"type":"line","x1":380,"y1":250,"x2":264,"y2":176,"thickness":1},
-{"type":"dots","x":60,"y":280,"w":30,"h":25,"density":0.4},
-{"type":"dots","x":440,"y":50,"w":30,"h":25,"density":0.4}
+{"type":"rect","x":27,"y":27,"w":306,"h":185,"fill":false},
+{"type":"line","x1":27,"y1":120,"x2":333,"y2":120,"thickness":2},
+{"type":"line","x1":180,"y1":27,"x2":180,"y2":213,"thickness":1},
+{"type":"circle","cx":180,"cy":120,"r":15,"fill":false},
+{"type":"circle","cx":102,"cy":68,"r":7,"fill":true},
+{"type":"circle","cx":259,"cy":68,"r":7,"fill":true},
+{"type":"circle","cx":102,"cy":170,"r":7,"fill":true},
+{"type":"circle","cx":259,"cy":170,"r":7,"fill":true},
+{"type":"line","x1":102,"y1":68,"x2":180,"y2":120,"thickness":1},
+{"type":"line","x1":259,"y1":68,"x2":180,"y2":120,"thickness":1},
+{"type":"line","x1":102,"y1":170,"x2":180,"y2":120,"thickness":1},
+{"type":"line","x1":259,"y1":170,"x2":180,"y2":120,"thickness":1},
+{"type":"dots","x":41,"y":191,"w":20,"h":17,"density":0.4},
+{"type":"dots","x":300,"y":34,"w":20,"h":17,"density":0.4}
 ]}
 
 JSON only:

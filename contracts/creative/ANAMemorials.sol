@@ -51,8 +51,8 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     // pixelsToRunLengthSvg()) are expressed in, used only to map it onto
     // tokenURI()'s 800x800 image via viewBox (_buildImageDataUri). A BMP data
     // URI needs no such mapping — it carries its own dimensions internally.
-    uint256 private constant ARTWORK_CANVAS_W = 528;
-    uint256 private constant ARTWORK_CANVAS_H = 352;
+    uint256 private constant ARTWORK_CANVAS_W = 360;
+    uint256 private constant ARTWORK_CANVAS_H = 240;
 
     // ─── Reveal canvas (single-burn memorials only) ────────────────────────────
     // A 40x40, 1-bit-per-pixel restoration grid matching a Normie's own native
@@ -69,6 +69,16 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     uint256 private constant CANVAS_BORDER_PX = CANVAS_CELL_PX;
     // Safety valve for tokenURI()'s on-chain SVG rendering — see _renderCanvas.
     uint256 private constant MAX_RENDERED_RUNS = 300;
+
+    // Every "milestone" monument honors an exact multiple of this many burns —
+    // a hard on-chain constant, deliberately not owner-adjustable (no setter
+    // exists). Collectors can verify the cadence directly rather than trust
+    // that the team won't quietly change it. 100, not 1000: with ~1,000
+    // Normies total and burn rate expected to slow well before every one is
+    // gone, 1000 would have meant at most a handful of monuments ever: 100
+    // yields ~30, real content instead of a rare curiosity, while staying far
+    // more deliberate than a monument per individual burn.
+    uint256 public constant MILESTONE_STEP = 100;
 
     // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -235,6 +245,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     error MismatchedEditArrays();
     error InvalidPixelIndex();
     error PixelLocked(uint256 index);
+    error InvalidMilestoneCount(uint256 honoredBurnCount, uint256 step);
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
 
@@ -294,6 +305,15 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     ) external onlyAuthorized returns (uint256 memorialId) {
         require(bytes(p.artworkContent).length > 0, "Empty artwork");
         if (p.requesterSupply > 0 && p.requesterAddr == address(0)) revert ZeroAddress();
+        // "milestone" is the one kind this contract actually enforces, not
+        // just labels — every other kind ("batch"/"requested"/anything else
+        // the relayer sends) is free-form, per the notice above.
+        if (
+            keccak256(bytes(p.kind)) == keccak256(bytes("milestone")) &&
+            (p.honoredBurnCount == 0 || p.honoredBurnCount % MILESTONE_STEP != 0)
+        ) {
+            revert InvalidMilestoneCount(p.honoredBurnCount, MILESTONE_STEP);
+        }
 
         address creatorAddr = core.getMemberOwner(p.creatorProposerTokenId);
         bool creatorUsesVault = creatorAddr == address(0);
@@ -765,7 +785,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
      *         this image is showing the actual piece, not a captioned card.
      *
      *         Both paths need an explicit white background: a BMP data URI's
-     *         own aspect ratio (528:352) doesn't match the outer 800x800
+     *         own aspect ratio (360:240) doesn't match the outer 800x800
      *         canvas, so preserveAspectRatio="xMidYMid meet" letterboxes it —
      *         without a rect behind it, those margins show whatever's behind
      *         them. A raw SVG <g> fragment (pixelsToRunLengthSvg()) is worse
