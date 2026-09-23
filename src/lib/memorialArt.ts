@@ -247,8 +247,26 @@ Available primitives (canvas coords: x 0-${MEMORIAL_CANVAS_W}, y 0-${MEMORIAL_CA
 {"type":"dots","x":N,"y":N,"w":N,"h":N (keep this patch modest, well under 40x40 — texture accent, not a fill),"density":0.05-0.9}
 
 ${maximalComplexity
-    ? `Use up to ${MAX_SHAPES} shapes — for THIS piece specifically, use as much of that budget as you meaningfully can. This is a monument, not a single eulogy: it should visibly read as denser and more elaborate than an ordinary memorial, while still composing something coherent, not clutter for its own sake.`
+    ? `Use AT LEAST 10 and up to ${MAX_SHAPES} shapes — this is a firm minimum, not a suggestion. This is a monument, not a single eulogy: it should visibly read as denser and more elaborate than an ordinary memorial, while still composing something coherent, not clutter for its own sake.`
     : `Use at most ${MAX_SHAPES} shapes total — favor a few deliberate, well-placed forms over clutter, this will be read at a glance on a small screen.`}
+
+Example of a real, deliberate composition (a different subject — study the density and variety, not the content) showing what "elaborate" actually looks like in this format, not just a handful of primitives scattered on a page:
+{"cartel":"A lattice of departures, each line a path not walked twice.","shapes":[
+{"type":"rect","x":40,"y":40,"w":448,"h":272,"fill":false},
+{"type":"line","x1":40,"y1":176,"x2":488,"y2":176,"thickness":2},
+{"type":"line","x1":264,"y1":40,"x2":264,"y2":312,"thickness":1},
+{"type":"circle","cx":264,"cy":176,"r":22,"fill":false},
+{"type":"circle","cx":150,"cy":100,"r":10,"fill":true},
+{"type":"circle","cx":380,"cy":100,"r":10,"fill":true},
+{"type":"circle","cx":150,"cy":250,"r":10,"fill":true},
+{"type":"circle","cx":380,"cy":250,"r":10,"fill":true},
+{"type":"line","x1":150,"y1":100,"x2":264,"y2":176,"thickness":1},
+{"type":"line","x1":380,"y1":100,"x2":264,"y2":176,"thickness":1},
+{"type":"line","x1":150,"y1":250,"x2":264,"y2":176,"thickness":1},
+{"type":"line","x1":380,"y1":250,"x2":264,"y2":176,"thickness":1},
+{"type":"dots","x":60,"y":280,"w":30,"h":25,"density":0.4},
+{"type":"dots","x":440,"y":50,"w":30,"h":25,"density":0.4}
+]}
 
 JSON only:
 {"cartel":"your artist statement","shapes":[...]}`;
@@ -258,7 +276,7 @@ JSON only:
       { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers)) },
       { role: "user", content: userPrompt },
     ],
-    900,
+    maximalComplexity ? 2200 : 1400,
   );
   if (!raw) return fallbackArtwork();
 
