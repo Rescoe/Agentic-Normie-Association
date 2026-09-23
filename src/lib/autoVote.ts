@@ -39,6 +39,40 @@ const pub  = createPublicClient({ chain: CHAIN, transport: http(RPC_URL, { timeo
 const CORE = CONTRACT_ADDRESSES.AssociationCore     as `0x${string}`;
 const CA   = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
 
+// ─── Batching for per-persona Groq calls ───────────────────────────────────────
+//
+// decideCandidacy() and decideAllVotes() each fire one Groq request per persona.
+// At 4 members that's fine fully parallel — at hundreds or thousands it would
+// fire that many concurrent requests from a single serverless invocation and
+// get rate-limited by Groq. Below BATCH_THRESHOLD members, run everyone in one
+// shot (unchanged behavior). Above it, split into chunks scaling with
+// membership (100 members → chunks of 10, 1000 → chunks of 100, per the
+// porteur's own sizing) but capped at MAX_BATCH_SIZE: Groq's own concurrency
+// limit is a fixed number tied to the account, not to how many Normies are
+// registered, so the chunk size can't be allowed to keep growing with N —
+// without the cap, 1000+ members would still fire 100+ simultaneous requests
+// and risk the exact rate-limiting this is meant to avoid.
+const BATCH_THRESHOLD = 10;
+const MAX_BATCH_SIZE  = 20;
+
+function computeBatchSize(n: number): number {
+  if (n <= BATCH_THRESHOLD) return n;
+  return Math.min(Math.max(1, Math.ceil(n / 10)), MAX_BATCH_SIZE);
+}
+
+async function runInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    results.push(...(await Promise.allSettled(chunk.map(fn))));
+  }
+  return results;
+}
+
 // Ordered role entries — stable order matching ROLES object definition
 const ORDERED_ROLE_ENTRIES = (Object.entries(ROLES) as [string, string][]).map(([, hash]) => ({
   hash,
@@ -360,7 +394,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
     candidacies = body.candidacies;
     console.log(`[auto-vote] reusing ${candidacies.length} candidacies from body`);
   } else {
-    const candRes = await Promise.allSettled(personas.map(p => decideCandidacy(p)));
+    const candRes = await runInBatches(personas, computeBatchSize(personas.length), decideCandidacy);
     candidacies   = candRes
       .filter((r): r is PromiseFulfilledResult<Candidacy> => r.status === "fulfilled")
       .map(r => r.value);
@@ -412,7 +446,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
   }
 
   // ── Vote phase ────────────────────────────────────────────────────────────
-  const voteRes      = await Promise.allSettled(personas.map(p => decideAllVotes(p, candidacies, personas)));
+  const voteRes      = await runInBatches(personas, computeBatchSize(personas.length), p => decideAllVotes(p, candidacies, personas));
   const allDecisions = voteRes
     .filter((r): r is PromiseFulfilledResult<VoteDecision[]> => r.status === "fulfilled")
     .flatMap(r => r.value);
