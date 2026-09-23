@@ -19,10 +19,14 @@
  * the fact) — createMemorialArtwork() is called with maximalComplexity so it
  * uses the full shape budget instead of favoring minimalism, and
  * totalHonoredOverride so the piece frames itself around the true milestone
- * count rather than the small representative sample of burnedTokenIds
- * actually fetched for prompt flavor (fetching/prompting with every one of
- * potentially thousands of real burns would be wasteful and pointless — the
- * LLM only ever uses up to 5 of them for identity texture regardless).
+ * count. The FULL window of burns this milestone covers (up to
+ * MILESTONE_STEP of them, fetched by offsetting from the current total — see
+ * below) is fetched and stored on the work, not just a small sample: only up
+ * to MAX_BURNED_IN_PROMPT of them actually reach the LLM prompt
+ * (memorialArt.ts caps that internally), but the complete list is what later
+ * gets recorded on-chain via addHonoredTokenIds() (23/09 — the porteur
+ * explicitly wanted the real list, not a handful, "quitte à ce que ce soit
+ * un monument aux morts").
  *
  * Deliberately does NOT reserve a free claim per burned Normie's last owner
  * the way batch-memorial does — doing that for potentially thousands of
@@ -45,7 +49,6 @@ import { getMemorialPricing } from "@/lib/memorialPricing";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { getHistoryStats, getBurnedTokens } from "@/lib/normiesApi";
 
-const SAMPLE_SIZE               = 6;  // representative burns fetched for persona flavor — not exhaustive
 const MILESTONE_PUBLIC_SUPPLY   = 10; // fixed, small — this endpoint is about rendering, not distributing thousands of editions
 
 const baseClient = createPublicClient({
@@ -178,20 +181,32 @@ export async function POST(req: NextRequest) {
   try { proposer = await buildPersona(proposerId); }
   catch { return NextResponse.json({ error: "Impossible de construire le persona du proposeur" }, { status: 503 }); }
 
-  let sampleTokenIds: number[] = [];
+  // The FULL window of burns this specific milestone newly covers — burns
+  // (milestoneBurnCount - MILESTONE_STEP + 1) through milestoneBurnCount,
+  // in absolute terms — not just a handful for LLM flavor. getBurnedTokens()
+  // returns newest-first from the CURRENT total, so skipping the burns newer
+  // than this window (offset) and taking exactly MILESTONE_STEP of them
+  // lands on the right set even if more burns have happened since totalBurned
+  // was read above. Stored on work.burnedTokenIds so work-lifecycle.ts's
+  // stepPublishingMemorial() can later record the complete list on-chain via
+  // addHonoredTokenIds() — the porteur explicitly wanted the full list, not
+  // just a sample, "quitte à ce que ça soit un monument aux morts."
+  let periodTokenIds: number[] = [];
   try {
-    const recent = await getBurnedTokens(SAMPLE_SIZE, 0);
-    sampleTokenIds = recent.map(t => Number(t.tokenId));
+    const offset = Math.max(0, totalBurned - milestoneBurnCount);
+    const period = await getBurnedTokens(MILESTONE_STEP, offset);
+    periodTokenIds = period.map(t => Number(t.tokenId));
   } catch { /* non-fatal — createMemorialArtwork handles an empty sample fine */ }
 
-  // A real creative act, informed by a handful of real recent burns for
-  // texture, but explicitly framed (totalHonoredOverride) around the true
-  // milestone count, and permitted (maximalComplexity) to use the full shape
-  // budget — this is meant to be the most visually complex composition the
-  // pipeline can produce, for testing rendering across multiple physical
+  // A real creative act, informed by real recent burns for texture (only up
+  // to MAX_BURNED_IN_PROMPT of them actually reach the LLM prompt — see
+  // memorialArt.ts), but explicitly framed (totalHonoredOverride) around the
+  // true milestone count, and permitted (maximalComplexity) to use the full
+  // shape budget — this is meant to be the most visually complex composition
+  // the pipeline can produce, for testing rendering across multiple physical
   // screens at once.
   const { pixels, cartel } = await createMemorialArtwork({
-    proposer, burnedTokenIds: sampleTokenIds, otherMembers: [],
+    proposer, burnedTokenIds: periodTokenIds, otherMembers: [],
     totalHonoredOverride: milestoneBurnCount,
     maximalComplexity:    true,
   });
@@ -229,8 +244,8 @@ export async function POST(req: NextRequest) {
     suggestedForm:  "pixel-drawing",
     artForm:        "pixel-drawing",
     isBurnMemorial: true,
-    burnedTokenId:  sampleTokenIds[0],
-    burnedTokenIds: sampleTokenIds,
+    burnedTokenId:  periodTokenIds[0],
+    burnedTokenIds: periodTokenIds,
     memorialKind:   "milestone",
     memorialMilestoneNumber:        milestoneNumber,
     memorialTotalBurnedAtMilestone: milestoneBurnCount,

@@ -159,6 +159,11 @@ export const ANAMemorialsAbi = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "EmptyTokenIdList",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -461,6 +466,25 @@ export const ANAMemorialsAbi = [
       }
     ],
     "name": "EditionMinted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "count",
+        "type": "uint256"
+      }
+    ],
+    "name": "HonoredTokenIdsAdded",
     "type": "event"
   },
   {
@@ -791,6 +815,24 @@ export const ANAMemorialsAbi = [
       },
       {
         "internalType": "uint256[]",
+        "name": "tokenIds",
+        "type": "uint256[]"
+      }
+    ],
+    "name": "addHonoredTokenIds",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256[]",
         "name": "burnedTokenIds",
         "type": "uint256[]"
       },
@@ -1022,6 +1064,11 @@ export const ANAMemorialsAbi = [
           {
             "internalType": "string",
             "name": "artworkContent",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "cartel",
             "type": "string"
           },
           {
@@ -1381,6 +1428,11 @@ export const ANAMemorialsAbi = [
           },
           {
             "internalType": "string",
+            "name": "cartel",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
             "name": "creatorName",
             "type": "string"
           },
@@ -1607,6 +1659,11 @@ export const ANAMemorialsAbi = [
       {
         "internalType": "string",
         "name": "artworkContent",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "cartel",
         "type": "string"
       },
       {

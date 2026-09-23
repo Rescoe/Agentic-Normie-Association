@@ -43,6 +43,13 @@ export const RESERVED_CLAIMS_CHUNK_SIZE = 100;
 export interface RegisterMemorialParams {
   title:                  string;
   artworkContent:         string; // BMP data URI, or a raw RLE/SVG <g> fragment (pixelImage.ts)
+  // The real artist statement — stored on-chain and used verbatim as
+  // tokenURI()'s JSON "description" when non-empty (ANAMemorials.sol falls
+  // back to a generic templated line otherwise). Before this field existed,
+  // OpenSea and every other on-chain consumer only ever saw that generic
+  // line — the real cartel (already written by the LLM persona for every
+  // memorial) never made it past workStore.
+  cartel:                 string;
   workId:                 number; // WorkRegistry id, 0 if not linked
   creatorProposerTokenId: number;
   creatorName:            string;
@@ -112,6 +119,7 @@ export async function registerMemorialOnChain(
       args: [{
         title:                  params.title,
         artworkContent:         params.artworkContent,
+        cartel:                 params.cartel,
         creatorName:            params.creatorName,
         kind:                   params.kind,
         honoredBurnCount:       BigInt(params.honoredBurnCount),
@@ -233,6 +241,70 @@ export async function addReservedClaimsOnChain(
       txHashes.push(hash);
     } catch (e) {
       const err = `addReservedClaims failed (chunk ${i}-${i + idsChunk.length}): ${e instanceof Error ? e.message : String(e)}`;
+      return { success: false, txHashes, error: err };
+    }
+  }
+
+  return { success: true, txHashes };
+}
+
+export interface AddHonoredTokenIdsParams {
+  memorialId:    number;
+  tokenIds:      number[];
+  workIdForLog?: string;
+}
+
+export interface AddHonoredTokenIdsResult {
+  success:  boolean;
+  txHashes: string[];
+  error?:   string;
+}
+
+/**
+ * Populates a memorial's on-chain honored-Normies display list
+ * (burnedTokenIdsOf / getBurnedTokenIds()) for memorials that never call
+ * addReservedClaimsOnChain() — specifically "milestone" monuments, which
+ * deliberately reserve zero individual free claims (see that function's own
+ * doc comment) but still honor a real, large set of burns that deserves to
+ * be on-chain and complete, not just a handful sampled for LLM prompt
+ * flavor. Chunked the same way as addReservedClaimsOnChain(), for the same
+ * reason (a large period can span several transactions).
+ */
+export async function addHonoredTokenIdsOnChain(
+  params: AddHonoredTokenIdsParams,
+): Promise<AddHonoredTokenIdsResult> {
+  const clients = getClients();
+  if ("error" in clients) return { success: false, txHashes: [], error: clients.error };
+  const { walletClient, publicClient, addr } = clients;
+
+  const txHashes: string[] = [];
+  for (let i = 0; i < params.tokenIds.length; i += RESERVED_CLAIMS_CHUNK_SIZE) {
+    const idsChunk = params.tokenIds.slice(i, i + RESERVED_CLAIMS_CHUNK_SIZE).map(BigInt);
+
+    try {
+      const hash = await walletClient.writeContract({
+        address: addr, abi: ANA_MEMORIALS_ABI, functionName: "addHonoredTokenIds",
+        args: [BigInt(params.memorialId), idsChunk],
+        gas: 4_000_000n, // same chunk size/budget as addReservedClaims — this does strictly less work per entry
+      });
+
+      await logTxSubmitted({
+        txHash: hash, type: "add-honored-token-ids", initiator: "relayer",
+        contractName: "ANAMemorials", functionName: "addHonoredTokenIds",
+        fromAddress: walletClient.account!.address, targetAddress: addr, workId: params.workIdForLog,
+      });
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+      if (receipt.status !== "success") {
+        const err = `addHonoredTokenIds reverted on-chain (chunk ${i}-${i + idsChunk.length}, gasUsed: ${receipt.gasUsed}) — tx: ${hash}`;
+        await logTxFailed(hash, err);
+        return { success: false, txHashes, error: err };
+      }
+
+      await logTxConfirmed(hash, receipt.blockNumber, { chunkStart: i, chunkSize: idsChunk.length });
+      txHashes.push(hash);
+    } catch (e) {
+      const err = `addHonoredTokenIds failed (chunk ${i}-${i + idsChunk.length}): ${e instanceof Error ? e.message : String(e)}`;
       return { success: false, txHashes, error: err };
     }
   }

@@ -23,7 +23,7 @@ import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqu
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
 import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
-import { registerMemorialOnChain, addReservedClaimsOnChain, deliverRequesterEditionOnChain } from "@/server/relayer/memorialPublisher";
+import { registerMemorialOnChain, addReservedClaimsOnChain, addHonoredTokenIdsOnChain, deliverRequesterEditionOnChain } from "@/server/relayer/memorialPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch } from "@/lib/groq";
@@ -1171,6 +1171,7 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
     const registerResult = await registerMemorialOnChain({
       title:                  work.title,
       artworkContent,
+      cartel:                 work.cartelText ?? "",
       workId:                 onChainWorkId,
       creatorProposerTokenId: work.proposedBy,
       creatorName:            work.proposedByName,
@@ -1219,6 +1220,25 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
     }
     await updateWork(work.id, { reservedClaimsAdded: true });
     console.log(`[work-lifecycle] reserved ${burnedTokenIds.length} free claim(s) on memorial #${onChainMemorialId}`);
+  }
+
+  // ── Step 3.5: record the full honored-Normies list on-chain for "milestone" ──
+  // monuments — these deliberately have zero reservedClaimRecipients (see
+  // Step 3's own comment), which used to leave getBurnedTokenIds() always
+  // empty for them. work.burnedTokenIds is populated with the FULL period
+  // window by milestone-memorial/route.ts (not just a small LLM-flavor
+  // sample) specifically so this step has something complete to submit.
+  if (work.memorialKind === "milestone" && (work.burnedTokenIds?.length ?? 0) > 0 && !work.honoredTokenIdsAdded) {
+    const honorResult = await addHonoredTokenIdsOnChain({
+      memorialId: onChainMemorialId, tokenIds: work.burnedTokenIds!, workIdForLog: work.id,
+    });
+    if (!honorResult.success) {
+      const errMsg = honorResult.error ?? "addHonoredTokenIds failed (unknown)";
+      await updateWork(work.id, { validationNote: `addHonoredTokenIds: ${errMsg.slice(0, 280)}` });
+      return `addHonoredTokenIds failed: ${errMsg.slice(0, 200)}`;
+    }
+    await updateWork(work.id, { honoredTokenIdsAdded: true });
+    console.log(`[work-lifecycle] recorded ${work.burnedTokenIds!.length} honored Normie(s) on memorial #${onChainMemorialId}`);
   }
 
   // ── Step 4: auto-deliver the requester's own edition (best-effort) ──

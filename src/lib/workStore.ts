@@ -171,6 +171,10 @@ export interface ANAWork {
   reservedClaimRecipients?: Record<number, string>;
   onChainMemorialId?:       number; // series index in the shared ANAMemorials contract
   reservedClaimsAdded?:     boolean; // guards against re-adding (wasted gas) on a PUBLISHING retry
+  // Same idempotency guard, for addHonoredTokenIds() — "milestone" monuments
+  // only (batch/requested memorials get their honored-list populated as a
+  // side effect of reservedClaimRecipients above, via addReservedClaims).
+  honoredTokenIdsAdded?:    boolean;
   // Proof the requester paid for a "requested" memorial BEFORE it was created
   // (ANAMemorials.payForRequest(), verified in request-memorial/route.ts) — the relayer
   // is compensated for creation cost regardless of whether the memorial is
