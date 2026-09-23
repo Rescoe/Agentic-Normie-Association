@@ -40,6 +40,29 @@ export function extractJsonObject(raw: string): Record<string, unknown> {
   return {};
 }
 
+export interface GroqMessageResponse {
+  content?:          string;
+  reasoning?:        string;
+  reasoning_content?: string;
+}
+export interface GroqChatResponse {
+  choices: Array<{ message: GroqMessageResponse; finish_reason?: string }>;
+}
+
+/**
+ * Reasoning models (openai/gpt-oss-*) can spend the whole max_tokens budget on
+ * internal deliberation and leave `message.content` empty -- confirmed live
+ * (23/09): a propose-work call billed 350 real output tokens on Groq's own
+ * dashboard yet came back with an empty `content`, because the tokens went
+ * into reasoning instead. Groq exposes that reasoning separately (the field
+ * name isn't consistent across model versions: reasoning / reasoning_content)
+ * -- fall back to it instead of treating an empty content as a hard failure.
+ */
+export function extractContent(data: GroqChatResponse): string {
+  const msg = data.choices[0]?.message;
+  return (msg?.content?.trim()) || (msg?.reasoning ?? msg?.reasoning_content ?? "").trim();
+}
+
 /**
  * If the model was cut off mid-response (finish_reason "length" — hit max_tokens
  * before finishing), trim back to the last complete sentence instead of publishing

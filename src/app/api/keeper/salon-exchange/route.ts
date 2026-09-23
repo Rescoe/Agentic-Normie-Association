@@ -21,7 +21,7 @@ import {
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
-import { groqFetch, trimIfTruncated, extractJsonObject } from "@/lib/groq";
+import { groqFetch, trimIfTruncated, extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
 import { readCache } from "@/lib/activityScanner";
 
 const MODEL = "openai/gpt-oss-120b";
@@ -195,8 +195,8 @@ async function generateSpeech(
       max_tokens: 400, temperature: 0.92,
     });
     if (!res.ok) { console.error(`[salon-exchange] Groq ${res.status}`); return null; }
-    const data = await res.json() as { choices: Array<{ message: { content: string }; finish_reason?: string }> };
-    const raw  = data.choices[0]?.message?.content?.trim();
+    const data = await res.json() as GroqChatResponse;
+    const raw  = extractContent(data);
     return raw ? trimIfTruncated(raw, data.choices[0]?.finish_reason) : null;
   } catch (e) {
     console.error("[salon-exchange] generateSpeech error:", e);
@@ -230,8 +230,8 @@ async function generateSummaryText(salon: Salon): Promise<string | null> {
       max_tokens: 300, temperature: 0.5,
     });
     if (!res.ok) { console.error(`[synthesis] Groq ${res.status}`); return null; }
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content?.trim() ?? null;
+    const data = await res.json() as GroqChatResponse;
+    return extractContent(data) || null;
   } catch (e) {
     console.error("[synthesis] error:", e);
     return null;
@@ -484,13 +484,17 @@ Reply with ONLY the raw JSON object below — no reasoning, no explanation, no m
       // max_tokens/truncation issue as originally guessed here. Asking for
       // JSON in the prompt instead and parsing leniently with
       // extractJsonObject(), same fix as autoVote.ts's groqJson().
-      max_tokens:  350,
+      // max_tokens bumped 350->900: this same model can spend the whole
+      // budget on internal reasoning before emitting content (confirmed live
+      // on propose-work's near-identical call) -- extractContent() below also
+      // falls back to the reasoning field if content still comes back empty.
+      max_tokens:  900,
       temperature: 0.97,
     });
 
     if (!res.ok) return null;
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    const raw  = extractJsonObject(data.choices[0]?.message?.content ?? "") as Record<string, string | boolean>;
+    const data = await res.json() as GroqChatResponse;
+    const raw  = extractJsonObject(extractContent(data)) as Record<string, string | boolean>;
 
     // The character's own call, not just a dice roll — an in-character "not right
     // now" is a legitimate outcome, not a failure to route around.

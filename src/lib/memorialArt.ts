@@ -16,7 +16,7 @@
  * (GET /api/ana-art/feed only exposes pixels/canvasW/canvasH/title/agent).
  */
 
-import { groqFetch, extractJsonObject } from "@/lib/groq";
+import { groqFetch, extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
 import {
   buildPersona, buildSystemPrompt, personaToPromptBlock, sampleOtherMembers,
   type NormiePersona,
@@ -189,8 +189,8 @@ async function groq(messages: Array<{ role: "system" | "user"; content: string }
       model: MODEL, messages, max_tokens: maxTokens, temperature: 0.85,
     });
     if (!res.ok) { console.error(`[memorialArt] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content?.trim() ?? null;
+    const data = await res.json() as GroqChatResponse;
+    return extractContent(data) || null;
   } catch (e) {
     console.error("[memorialArt] groq error:", e);
     return null;

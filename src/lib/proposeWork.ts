@@ -18,7 +18,7 @@ import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROL
 import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { baseRpcTransport } from "@/lib/baseRpc";
-import { extractJsonObject } from "@/lib/groq";
+import { extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -121,7 +121,12 @@ export async function runProposeWork(forcedProposerId: number | null): Promise<P
     // extractJsonObject() below, same fix as autoVote.ts's groqJson().
     body: JSON.stringify({
       model:       "openai/gpt-oss-120b",
-      max_tokens:  350,
+      // Was 350 -- confirmed live (23/09): this call billed 350 real output
+      // tokens on Groq's dashboard yet came back with empty content, because
+      // this model can spend the whole budget on internal reasoning before
+      // ever emitting the final JSON. Bumped for headroom; extractContent()
+      // below also falls back to the reasoning field if content is still empty.
+      max_tokens:  900,
       temperature: 0.97,
       messages: [
         { role: "system", content: buildSystemPrompt(proposer, others) },
@@ -159,9 +164,9 @@ Respond with ONLY the raw JSON object below, always in English — no reasoning,
   if (!res) throw new Error("Groq request failed (network error)");
   if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 500)}`);
 
-  const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-  const raw  = data.choices[0]?.message?.content?.trim();
-  if (!raw) throw new Error("LLM returned empty response");
+  const data = await res.json() as GroqChatResponse;
+  const raw  = extractContent(data);
+  if (!raw) throw new Error(`LLM returned empty response (finish_reason=${data.choices[0]?.finish_reason ?? "?"})`);
 
   const parsed = extractJsonObject(raw) as { title?: string; proposal?: string; suggestedForm?: string };
   if (!parsed.title || !parsed.proposal) throw new Error(`LLM response missing title or proposal: ${raw.slice(0, 200)}`);

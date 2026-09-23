@@ -26,7 +26,7 @@ import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
 import { registerMemorialOnChain, addReservedClaimsOnChain, addHonoredTokenIdsOnChain, deliverRequesterEditionOnChain } from "@/server/relayer/memorialPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
-import { groqFetch, extractJsonObject } from "@/lib/groq";
+import { groqFetch, extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
@@ -166,8 +166,8 @@ async function groq(
       temperature: opts.temp      ?? 0.7,
     });
     if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content?.trim() ?? null;
+    const data = await res.json() as GroqChatResponse;
+    return extractContent(data) || null;
   } catch (e) {
     console.error("[work-lifecycle] groq error:", e);
     return null;

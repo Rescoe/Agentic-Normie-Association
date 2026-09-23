@@ -26,7 +26,7 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 import { runProposeWork } from "@/lib/proposeWork";
 import { baseRpcTransport } from "@/lib/baseRpc";
-import { extractJsonObject } from "@/lib/groq";
+import { extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
@@ -110,8 +110,8 @@ async function groqText(prompt: string, fast = false): Promise<string> {
     }),
   });
   if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
-  const d = await r.json() as { choices: Array<{ message: { content: string } }> };
-  return d.choices[0]?.message?.content?.trim() ?? "";
+  const d = await r.json() as GroqChatResponse;
+  return extractContent(d);
 }
 
 async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string, unknown>> {
@@ -136,9 +136,8 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
     }),
   });
   if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
-  const d = await r.json() as { choices: Array<{ message: { content: string } }> };
-  const raw = d.choices[0]?.message?.content?.trim() ?? "";
-  return extractJsonObject(raw);
+  const d = await r.json() as GroqChatResponse;
+  return extractJsonObject(extractContent(d));
 }
 
 // ─── Candidacy ────────────────────────────────────────────────────────────────
