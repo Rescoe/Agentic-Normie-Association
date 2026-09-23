@@ -2714,18 +2714,25 @@ export default function AdminPage() {
               <SessionCountdown deadline={session.deadline} />
             )}
 
+            {/* Résumé du fonctionnement — pour ne pas se tromper de bouton */}
+            <div className="border border-[--border] bg-[--bg-card] p-3 space-y-1.5 text-[11px] text-[--fg-muted]">
+              <p><strong className="text-[--fg]">Déroulé normal :</strong> 1) Ouvrir la session (7 jours) → 2) Lancer le vote automatique <em>une seule fois</em> (candidatures + votes on-chain) → 3) attendre la fin des 7 jours : le cron « Election Cycle » clôture tout seul, assigne les 6 rôles ET fait proposer une œuvre collective par l&apos;Auteur élu.</p>
+              <p>⚠ Chaque clic sur « Lancer le vote automatique » relance les candidatures (nouveaux messages dans le salon) même si le vote a déjà eu lieu — les votes déjà enregistrés ne sont pas dupliqués, mais ça donne l&apos;impression que « ça boucle » alors que le vote est peut-être déjà complet.</p>
+              <p>⚠ « Clôturer manuellement » ignore le délai de 7 jours et assigne les rôles tout de suite, mais ne déclenche PAS la création de l&apos;œuvre collective (cette étape n&apos;existe que dans le chemin automatique). Utilisez le bouton « Proposer une œuvre (Auteur élu) » juste en dessous après coup si besoin.</p>
+            </div>
+
             {/* openSession — onlyOwner on-chain, so this can ONLY ever be triggered by
                 the connected owner wallet. The election-cycle cron uses the relayer key,
                 which is deliberately NOT the owner, so it can never call this itself —
                 opening a session is the one step that requires a human click here. */}
             <AdminAction
-              label={`Ouvrir la session de vote (${ELECTION_VOTE_WINDOW_SECONDS / 86400} jours)`}
+              label={`1️⃣ Ouvrir la session de vote (${ELECTION_VOTE_WINDOW_SECONDS / 86400} jours)`}
               description={
                 sessionLoading
                   ? "Lecture de l'état de la session…"
                   : session?.active
                   ? "Une session est déjà active — clôturez-la d'abord."
-                  : `Démarre la phase de vote pour ${ELECTION_VOTE_WINDOW_SECONDS / 86400} jours. triggerClose() (relayer, automatique) disponible après expiration.`
+                  : `Démarre le compte à rebours de ${ELECTION_VOTE_WINDOW_SECONDS / 86400} jours pendant lequel candidatures et votes sont possibles. Rien ne se clôture avant ce délai (sauf clôture manuelle ci-dessous).`
               }
               disabled={!isCaOwner || !!session?.active || sessionLoading}
               disabledReason={
@@ -2740,12 +2747,12 @@ export default function AdminPage() {
 
             {/* Lancer le vote automatique (candidature + votes via LLM) */}
             <AdminAction
-              label="🤖 Lancer le vote automatique (LLM + relayer)"
+              label="2️⃣ Lancer le vote automatique (LLM + relayer)"
               description={
                 sessionLoading
                   ? "Vérification de la session en cours…"
                   : session?.active
-                  ? "Phase candidature puis vote : chaque Normie choisit ses rôles et vote via son persona LLM. Le relayer soumet les tx."
+                  ? "Chaque Normie choisit ses rôles (candidature) puis vote via son persona LLM — le relayer soumet les votes on-chain. À utiliser UNE SEULE FOIS par session : le cron « Election Cycle » (toutes les 6h) fait déjà ce travail automatiquement dès qu'une session est ouverte, ce bouton sert surtout à forcer/vérifier manuellement. Ne clôture PAS la session (voir boutons ci-dessous)."
                   : "⚠ Aucune session active — ouvrez une session de vote d'abord."
               }
               disabled={!session?.active || sessionLoading}
@@ -2781,8 +2788,8 @@ export default function AdminPage() {
 
             {/* closeSession — manuel (owner) */}
             <AdminAction
-              label="Clôturer manuellement (owner)"
-              description="Ferme le vote avant expiration. Attribue les 6 rôles on-chain."
+              label="3️⃣a Clôturer manuellement (owner, avant expiration)"
+              description="Ignore les 7 jours et attribue les 6 rôles on-chain immédiatement, avec les votes déjà enregistrés. Utile pour tester sans attendre. ⚠ NE crée PAS l'œuvre collective de l'Auteur élu (cette étape n'existe que dans le chemin automatique ci-dessous) — utilisez le bouton « Proposer une œuvre » juste après si vous en avez besoin."
               danger
               disabled={!isCaOwner || !session?.active || isCAAuthorized === false || sessionLoading}
               disabledReason={
@@ -2798,8 +2805,8 @@ export default function AdminPage() {
 
             {/* triggerClose — permissionless après deadline */}
             <AdminAction
-              label="⏰ Clôturer après expiration (permissionless)"
-              description="Appelle triggerClose() via le relayer — disponible quand la deadline est passée."
+              label="3️⃣b Clôturer après expiration (permissionless, chemin complet)"
+              description="Le chemin normal, automatique : attribue les 6 rôles ET fait proposer une œuvre par l'Auteur élu — mais seulement disponible une fois les 7 jours écoulés (sinon le contrat refuse). C'est ce que le cron « Election Cycle » fait tout seul toutes les 6h — ce bouton sert juste à forcer/vérifier."
               disabled={sessionLoading || !session?.active || (session?.deadline ? Number(session.deadline) > Math.floor(Date.now() / 1000) : true)}
               disabledReason="Session non expirée ou inactive"
               onExec={async () => {
@@ -2809,6 +2816,20 @@ export default function AdminPage() {
                 });
                 const d = await r.json();
                 if (!r.ok) throw new Error((d as { error?: string }).error ?? "triggerClose failed");
+              }}
+            />
+
+            {/* Recovery: propose-work manuel — nécessaire si on est passé par
+                closeSession() direct (owner), qui n'appelle jamais runProposeWork(). */}
+            <AdminAction
+              label="✍️ Proposer une œuvre (Auteur élu)"
+              description="Fait générer et enregistrer une proposition d'œuvre par le Normie élu Auteur (ou un membre au hasard si aucun Auteur élu). À utiliser après une clôture manuelle, puisque celle-ci ne déclenche pas cette étape automatiquement."
+              onExec={async () => {
+                const r = await fetch("/api/keeper/propose-work", {
+                  method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error((d as { error?: string }).error ?? "propose-work failed");
               }}
             />
           </section>
