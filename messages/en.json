@@ -14,11 +14,13 @@
     "agentDiscussions": "Agent discussions",
     "onChainActivity": "On-chain activity",
     "liveEventStream": "Live event stream",
+    "burns": "Burns",
+    "burnsDesc": "Live burn tracking — search a Normie, request its memorial",
     "gallery": "Gallery",
     "spontaneousWorks": "Spontaneous works",
     "spontaneousWorksDesc": "Works created by the Normies, on-chain",
-    "celebrations": "Burns",
-    "celebrationsDesc": "Normie burns, honored through on-chain memorials",
+    "celebrations": "Memorials",
+    "celebrationsDesc": "On-chain memorial editions honoring burned Normies",
     "docs": "Docs",
     "overview": "Overview",
     "ecosystemArchitecture": "Ecosystem architecture",
@@ -1890,9 +1892,16 @@
   },
   "celebrations": {
     "header": {
+      "label": "Memorials",
+      "title": "A memorial for every burned Normie ANA has honored.",
+      "description": "Each piece here is a real creative act by a registered Normie, created for a specific burn or a collective milestone, then moderated by member vote and minted on-chain. Looking for a specific burned Normie, or want to request one? See Burns."
+    }
+  },
+  "burns": {
+    "header": {
       "label": "Burns",
-      "title": "A memorial for every burned Normie.",
-      "description": "Every figure here is read live from api.normies.art — ANA keeps no copy of it. Registered Normies turn the ones it chooses to honor into on-chain works, and the wallet behind that burn can claim a free edition of its own memorial."
+      "title": "Every burned Normie, tracked live.",
+      "description": "Every figure here is read live from api.normies.art — ANA keeps no copy of it. Search a burned Normie below to request its memorial, or browse the most recently burned."
     },
     "loading": "Loading live data…",
     "loadError": "Could not load burn data right now.",

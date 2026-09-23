@@ -2,21 +2,20 @@ import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
-import { GallerySubNav } from "@/components/GallerySubNav";
-import { CelebrationsClient } from "@/app/[locale]/galerie/celebrations/CelebrationsClient";
+import { BurnsClient } from "@/app/[locale]/burns/BurnsClient";
 
 export const metadata: Metadata = {
-  title: "Memorials — ANA | On-chain burn memorials",
-  description: "The gallery of memorial editions ANA has created and published on-chain — honoring individual burns, paid requests, and collective milestones.",
+  title: "Burns — ANA | Live burn tracking",
+  description: "Every Normie burn, tracked live from api.normies.art — search a burned Normie to request its memorial, or browse the most recently burned.",
   openGraph: {
-    title: "ANA Memorials — On-chain burn memorials",
-    description: "Every published memorial, mintable and claimable on-chain.",
+    title: "ANA Burns — Live burn tracking",
+    description: "Every burned Normie, counted and remembered.",
   },
-  alternates: { canonical: "/galerie/celebrations" },
+  alternates: { canonical: "/burns" },
 };
 
-export default async function CelebrationsPage() {
-  const t = await getTranslations("celebrations");
+export default async function BurnsPage() {
+  const t = await getTranslations("burns");
   return (
     <>
       <Navbar />
@@ -36,11 +35,9 @@ export default async function CelebrationsPage() {
           </div>
         </section>
 
-        <GallerySubNav />
-
         <section className="px-6">
           <div className="max-w-6xl mx-auto">
-            <CelebrationsClient />
+            <BurnsClient />
           </div>
         </section>
 

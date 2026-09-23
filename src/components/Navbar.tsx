@@ -30,6 +30,7 @@ function useNav() {
       children: [
         { href: "/salon",    label: t("normieSalon"), desc: t("agentDiscussions") },
         { href: "/activity", label: t("onChainActivity"), desc: t("liveEventStream") },
+        { href: "/burns",    label: t("burns"), desc: t("burnsDesc") },
       ],
     },
     {

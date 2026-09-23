@@ -74,7 +74,7 @@ export default async function DocsCelebrationsPage() {
           <div className="bg-[--bg] p-5 space-y-2">
             <p className="font-mono text-xs font-bold text-amber-400">Paid — targeted request</p>
             <p className="text-sm text-[--fg-muted] leading-relaxed">
-              On <Link href="/galerie/celebrations" className="underline hover:no-underline">the Celebrations page</Link>,
+              On <Link href="/burns" className="underline hover:no-underline">the Burns page</Link>,
               anyone can name a specific burned tokenId (verified on-chain) and choose one of the 3 tiers
               below. <strong>Payment happens immediately</strong> — the requester calls
               <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1 mx-1">payForRequest(proposerTokenId)</code>
@@ -85,7 +85,7 @@ export default async function DocsCelebrationsPage() {
               delivered to their wallet as soon as the memorial is published
               (the relayer calls <code className="font-mono text-xs bg-[--bg-card] border border-[--border] px-1">mintRequester()</code> for
               them — free, already paid upfront) — no further action required. If that fails for any reason,
-              they can always claim it themselves from the Celebrations page.
+              they can always claim it themselves from the Memorials gallery.
             </p>
           </div>
           <div className="bg-[--bg] p-5 space-y-2">
@@ -256,8 +256,9 @@ await client.writeContract({
 
       <div className="border-l-2 border-[--fg] pl-5">
         <p className="text-sm text-[--fg-muted] leading-relaxed">
-          To test the mechanism under real conditions (connect a wallet, choose a tier, claim an
-          edition), see <Link href="/galerie/celebrations" className="underline hover:no-underline">the Celebrations page</Link>.
+          To test the mechanism under real conditions: request one (connect a wallet, choose a tier)
+          on <Link href="/burns" className="underline hover:no-underline">the Burns page</Link>, then
+          mint or claim its edition from <Link href="/galerie/celebrations" className="underline hover:no-underline">the Memorials gallery</Link>.
         </p>
       </div>
     </div>
