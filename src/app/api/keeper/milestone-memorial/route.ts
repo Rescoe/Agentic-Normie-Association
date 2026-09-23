@@ -36,7 +36,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http, formatEther } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { createWork, listWorks } from "@/lib/workStore";
+import { createWork } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri } from "@/lib/pixelImage";
@@ -145,16 +145,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Real state of the contract itself, PLUS anything already mid-pipeline
-  // off-chain (proposed but not yet published on-chain) — takes the higher
-  // of the two so a work still sitting in VOTE_OPEN for milestone N doesn't
-  // get silently duplicated by a second call before it's had a chance to publish.
-  const onChainCreated = await getOnChainMilestonesCreated(addr, MILESTONE_STEP);
-  const pendingNumbers = (await listWorks())
-    .filter(w => w.memorialKind === "milestone" && w.state !== "REJECTED")
-    .map(w => w.memorialMilestoneNumber ?? 0);
-  const pendingCreated = pendingNumbers.length > 0 ? Math.max(...pendingNumbers) : 0;
-  const alreadyCreated = Math.max(onChainCreated, pendingCreated);
+  // Purely the contract's own real state — NOT combined with off-chain
+  // pending works anymore. An earlier version took Math.max() with any
+  // not-yet-published workStore record to avoid a hypothetical double
+  // proposal, but that backfired for real: a stuck/abandoned milestone-1
+  // work (never actually published on-chain) permanently blocked milestone 1
+  // from ever being offered again, silently skipping straight to milestone 2
+  // — exactly what happened live (23/09). The porteur was explicit twice now:
+  // this counter must depend on the contract's real state, full stop. A
+  // genuinely stuck work should be resolved directly (reject it, or retry
+  // its publish) rather than worked around here.
+  const alreadyCreated = await getOnChainMilestonesCreated(addr, MILESTONE_STEP);
 
   if (alreadyCreated >= highestAvailableMilestone) {
     return NextResponse.json(
@@ -259,7 +260,7 @@ export async function POST(req: NextRequest) {
     milestoneStep:           MILESTONE_STEP,
     totalBurnedHonored:      milestoneBurnCount,
     totalBurnedNow:          totalBurned,
-    onChainMilestonesCreated: onChainCreated,
+    onChainMilestonesCreated: alreadyCreated,
     nextMilestoneAvailableAt: (milestoneNumber + 1) * MILESTONE_STEP,
   });
 }

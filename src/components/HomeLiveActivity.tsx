@@ -162,11 +162,18 @@ export function HomeLiveActivity() {
                             title={w.title}
                           />
                         </div>
-                      ) : (
-                        <p className="text-xs text-[--fg-muted] leading-relaxed line-clamp-2 italic">
-                          {(w.artworkText ?? "").slice(0, 100)}…
-                        </p>
-                      )}
+                      ) : w.artworkText ? (
+                        // artworkText is a "data:image/bmp;base64,..." data URI, not
+                        // caption text — was being dumped as raw truncated text here
+                        // instead of rendered as the actual pixel artwork.
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={w.artworkText}
+                          alt={w.title}
+                          className="w-full bg-black"
+                          style={{ imageRendering: "pixelated" }}
+                        />
+                      ) : null}
                       <p className="font-bold text-sm group-hover:underline leading-tight">{w.title}</p>
                     </Link>
                   );

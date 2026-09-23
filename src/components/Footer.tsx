@@ -1,19 +1,40 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
-const CONTRACTS = [
-  { name: "AssociationCore",     addr: CONTRACT_ADDRESSES.AssociationCore     },
-  { name: "ConstituentAssembly", addr: CONTRACT_ADDRESSES.ConstituentAssembly },
-  { name: "WorkRegistry",        addr: CONTRACT_ADDRESSES.WorkRegistry        },
-  { name: "FactoryRegistry",     addr: CONTRACT_ADDRESSES.FactoryRegistry     },
+// FactoryRegistry dropped (23/09 audit — confirmed dead, never read at
+// runtime, only ever written to by deploy scripts). ANAMemorials added in
+// its place — the contract that actually matters for quick Basescan access
+// now (celebrations/memorials). Its address isn't NEXT_PUBLIC_-prefixed
+// (Vercel rejected that name), so it's fetched client-side from
+// /api/memorials/list instead, same pattern used everywhere else this
+// address is needed in the browser.
+const STATIC_CONTRACTS = [
+  { name: "AssociationCore",      addr: CONTRACT_ADDRESSES.AssociationCore      },
+  { name: "ConstituentAssembly",  addr: CONTRACT_ADDRESSES.ConstituentAssembly  },
+  { name: "WorkRegistry",         addr: CONTRACT_ADDRESSES.WorkRegistry         },
+  { name: "ANACollectionFactory", addr: CONTRACT_ADDRESSES.ANACollectionFactory },
 ];
 
 export function Footer() {
   const t = useTranslations("footer");
+
+  const [memorialsAddr, setMemorialsAddr] = useState("");
+  useEffect(() => {
+    fetch("/api/memorials/list")
+      .then(r => r.json())
+      .then((d: { contractAddress?: string }) => setMemorialsAddr(d.contractAddress ?? ""))
+      .catch(() => setMemorialsAddr(""));
+  }, []);
+
+  const CONTRACTS = [
+    ...STATIC_CONTRACTS,
+    ...(memorialsAddr ? [{ name: "ANAMemorials", addr: memorialsAddr }] : []),
+  ].filter(c => c.addr);
 
   const NAV_GROUPS = [
     {
