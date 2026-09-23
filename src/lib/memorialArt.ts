@@ -178,6 +178,53 @@ async function groq(messages: Array<{ role: "system" | "user"; content: string }
   }
 }
 
+// Firm floor for a monument's shape count — matches the prompt's own "at
+// least 10" instruction. LLMs don't reliably obey numeric constraints, so
+// this is enforced with a second pass rather than trusted on the first try.
+const MIN_MONUMENT_SHAPES = 10;
+
+/**
+ * One bounded extra Groq call, ONLY reached when a monument's first pass
+ * under-delivered on MIN_MONUMENT_SHAPES — never for ordinary memorials, and
+ * never a second call just because one happened to succeed. Shows the model
+ * its own composition and asks it to expand (not restart) it. Kept separate
+ * from createMemorialArtwork so the "when do we even attempt this" gating
+ * stays visible at the call site, not buried in here.
+ */
+async function densifyComposition(
+  current: { cartel: string; shapes: unknown[] },
+  proposer: NormiePersona,
+  otherMembers: NormiePersona[],
+): Promise<{ cartel: string; shapes: unknown[] } | null> {
+  const prompt = `Your last composition for this monument only used ${current.shapes.length} shapes, but a monument this significant needs at least ${MIN_MONUMENT_SHAPES} to read as elaborate. Here is what you made:
+
+{"cartel":${JSON.stringify(current.cartel)},"shapes":${JSON.stringify(current.shapes)}}
+
+Expand it: ADD more shapes (keep the ones above, don't remove or replace them) until you reach at least ${MIN_MONUMENT_SHAPES}, using the same primitives (rect/circle/line/dots, max ${MAX_SHAPES} total) and the same ${MEMORIAL_CANVAS_W}x${MEMORIAL_CANVAS_H} canvas. Keep the cartel as-is unless you genuinely want to refine its wording. Return the full, expanded composition, not just the new shapes.
+
+JSON only:
+{"cartel":"your artist statement","shapes":[...]}`;
+
+  const raw = await groq(
+    [
+      { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers)) },
+      { role: "user", content: prompt },
+    ],
+    2200,
+  );
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as { cartel?: string; shapes?: unknown };
+    if (!Array.isArray(parsed.shapes) || parsed.shapes.length === 0) return null;
+    const cartel = (parsed.cartel ?? current.cartel).trim().slice(0, 500) || current.cartel;
+    return { cartel, shapes: parsed.shapes };
+  } catch (e) {
+    console.error("[memorialArt] densifyComposition JSON parse failed:", e);
+    return null;
+  }
+}
+
 /** Fallback used only if the LLM call itself fails outright — never the intended path. */
 function fallbackArtwork(): MemorialArtwork {
   return {
@@ -282,9 +329,19 @@ JSON only:
 
   try {
     const parsed = JSON.parse(raw) as { cartel?: string; shapes?: unknown };
-    const cartel = (parsed.cartel ?? "").trim().slice(0, 500);
-    if (!cartel || !Array.isArray(parsed.shapes) || parsed.shapes.length === 0) return fallbackArtwork();
-    return { pixels: rasterize(parsed.shapes), cartel };
+    let cartel = (parsed.cartel ?? "").trim().slice(0, 500);
+    let shapes = parsed.shapes;
+    if (!cartel || !Array.isArray(shapes) || shapes.length === 0) return fallbackArtwork();
+
+    // Bounded to ONE extra Groq call, only for monuments, only when the
+    // firm minimum wasn't met — doesn't touch Groq's hourly volume for the
+    // vastly more common ordinary (non-milestone) memorial.
+    if (maximalComplexity && shapes.length < MIN_MONUMENT_SHAPES) {
+      const densified = await densifyComposition({ cartel, shapes }, proposer, otherMembers);
+      if (densified) { cartel = densified.cartel; shapes = densified.shapes; }
+    }
+
+    return { pixels: rasterize(shapes), cartel };
   } catch (e) {
     console.error("[memorialArt] JSON parse failed:", e);
     return fallbackArtwork();
