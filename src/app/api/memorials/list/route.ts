@@ -44,11 +44,16 @@ export async function GET() {
   if (!addr) return NextResponse.json({ contractAddress: "", items: [] satisfies MemorialListItem[] });
 
   try {
-    const count = await client.readContract({
-      address: addr, abi: ANA_MEMORIALS_ABI, functionName: "getSeriesCount",
-    }) as bigint;
+    const [count, milestoneStepRaw] = await Promise.all([
+      client.readContract({ address: addr, abi: ANA_MEMORIALS_ABI, functionName: "getSeriesCount" }) as Promise<bigint>,
+      // Read straight from the contract, not hard-coded anywhere client-side —
+      // this exact number went stale in the admin UI once already (displayed
+      // "1000" after the contract was redeployed with MILESTONE_STEP=100).
+      client.readContract({ address: addr, abi: ANA_MEMORIALS_ABI, functionName: "MILESTONE_STEP" }) as Promise<bigint>,
+    ]);
     const total = Number(count);
-    if (total === 0) return NextResponse.json({ contractAddress: addr, items: [] satisfies MemorialListItem[] });
+    const milestoneStep = Number(milestoneStepRaw);
+    if (total === 0) return NextResponse.json({ contractAddress: addr, milestoneStep, items: [] satisfies MemorialListItem[] });
 
     const works = await listWorks();
 
@@ -98,7 +103,7 @@ export async function GET() {
       }),
     );
 
-    return NextResponse.json({ contractAddress: addr, items: items.reverse() }); // newest first
+    return NextResponse.json({ contractAddress: addr, milestoneStep, items: items.reverse() }); // newest first
   } catch (e) {
     console.error("[memorials/list] error:", e);
     return NextResponse.json({ error: "Failed to load memorials" }, { status: 500 });

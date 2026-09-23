@@ -37,6 +37,16 @@ export const ANAMemorialsAbi = [
   },
   {
     "inputs": [],
+    "name": "CanvasAlreadyRegistered",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "CanvasNotRegistered",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "ClaimWindowClosed",
     "type": "error"
   },
@@ -144,6 +154,11 @@ export const ANAMemorialsAbi = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "EmptyArtwork",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -161,7 +176,38 @@ export const ANAMemorialsAbi = [
   },
   {
     "inputs": [],
+    "name": "InvalidCanvasLength",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "honoredBurnCount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "step",
+        "type": "uint256"
+      }
+    ],
+    "name": "InvalidMilestoneCount",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidPixelIndex",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidReservedArrays",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MismatchedEditArrays",
     "type": "error"
   },
   {
@@ -204,6 +250,17 @@ export const ANAMemorialsAbi = [
       }
     ],
     "name": "OwnableUnauthorizedAccount",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "PixelLocked",
     "type": "error"
   },
   {
@@ -292,6 +349,31 @@ export const ANAMemorialsAbi = [
     "inputs": [
       {
         "indexed": true,
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "updater",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "editCount",
+        "type": "uint256"
+      }
+    ],
+    "name": "ArtworkUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "address",
         "name": "addr",
         "type": "address"
@@ -304,6 +386,44 @@ export const ANAMemorialsAbi = [
       }
     ],
     "name": "AuthorizationUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "editor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "pixelsChanged",
+        "type": "uint256"
+      }
+    ],
+    "name": "CanvasEdited",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      }
+    ],
+    "name": "CanvasRegistered",
     "type": "event"
   },
   {
@@ -497,6 +617,25 @@ export const ANAMemorialsAbi = [
     "inputs": [
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "addr",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "status",
+        "type": "bool"
+      }
+    ],
+    "name": "RevealAuthorizationUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
         "internalType": "uint256",
         "name": "memorialId",
         "type": "uint256"
@@ -631,6 +770,19 @@ export const ANAMemorialsAbi = [
     "type": "event"
   },
   {
+    "inputs": [],
+    "name": "MILESTONE_STEP",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -737,6 +889,25 @@ export const ANAMemorialsAbi = [
     "inputs": [
       {
         "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "canvasPixels",
+    "outputs": [
+      {
+        "internalType": "bytes",
+        "name": "",
+        "type": "bytes"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
         "name": "memorialId",
         "type": "uint256"
       },
@@ -768,6 +939,29 @@ export const ANAMemorialsAbi = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "indices",
+        "type": "uint256[]"
+      },
+      {
+        "internalType": "bool[]",
+        "name": "newValues",
+        "type": "bool[]"
+      }
+    ],
+    "name": "editPixels",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -914,6 +1108,11 @@ export const ANAMemorialsAbi = [
             "internalType": "bool",
             "name": "initialized",
             "type": "bool"
+          },
+          {
+            "internalType": "uint256",
+            "name": "editCount",
+            "type": "uint256"
           }
         ],
         "internalType": "struct ANAMemorials.MemorialSeries",
@@ -932,6 +1131,25 @@ export const ANAMemorialsAbi = [
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "hasCanvas",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
       }
     ],
     "stateMutability": "view",
@@ -975,6 +1193,30 @@ export const ANAMemorialsAbi = [
       }
     ],
     "name": "isFreeClaimable",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "isPixelLocked",
     "outputs": [
       {
         "internalType": "bool",
@@ -1098,6 +1340,29 @@ export const ANAMemorialsAbi = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes",
+        "name": "target",
+        "type": "bytes"
+      },
+      {
+        "internalType": "bytes",
+        "name": "initialCanvas",
+        "type": "bytes"
+      }
+    ],
+    "name": "registerCanvas",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1258,6 +1523,25 @@ export const ANAMemorialsAbi = [
     "inputs": [
       {
         "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "revealAuthorized",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "from",
         "type": "address"
       },
@@ -1409,6 +1693,11 @@ export const ANAMemorialsAbi = [
         "internalType": "bool",
         "name": "initialized",
         "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "editCount",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1485,6 +1774,24 @@ export const ANAMemorialsAbi = [
   {
     "inputs": [
       {
+        "internalType": "address",
+        "name": "addr",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "status",
+        "type": "bool"
+      }
+    ],
+    "name": "setRevealAuthorized",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint256",
         "name": "memorialId",
         "type": "uint256"
@@ -1540,6 +1847,25 @@ export const ANAMemorialsAbi = [
         "internalType": "string",
         "name": "",
         "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "targetPixels",
+    "outputs": [
+      {
+        "internalType": "bytes",
+        "name": "",
+        "type": "bytes"
       }
     ],
     "stateMutability": "view",
@@ -1604,6 +1930,30 @@ export const ANAMemorialsAbi = [
     ],
     "name": "transferOwnership",
     "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "memorialId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "newArtworkContent",
+        "type": "string"
+      }
+    ],
+    "name": "updateArtwork",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "editCount",
+        "type": "uint256"
+      }
+    ],
     "stateMutability": "nonpayable",
     "type": "function"
   },

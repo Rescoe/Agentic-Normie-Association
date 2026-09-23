@@ -33,7 +33,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http, formatEther } from "viem";
 import { base } from "viem/chains";
-import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { ASSOCIATION_CORE_ABI, ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
@@ -42,8 +42,8 @@ import { createSalon, addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
 import { getMemorialPricing } from "@/lib/memorialPricing";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { getHistoryStats, getBurnedTokens } from "@/lib/normiesApi";
+import { kvGet, kvSet } from "@/lib/db";
 
-const MILESTONE_STEP            = 1000;
 const SAMPLE_SIZE               = 6;  // representative burns fetched for persona flavor — not exhaustive
 const MILESTONE_PUBLIC_SUPPLY   = 10; // fixed, small — this endpoint is about rendering, not distributing thousands of editions
 
@@ -63,6 +63,41 @@ async function getMemberIds(): Promise<number[]> {
   } catch { return []; }
 }
 
+/**
+ * Reads MILESTONE_STEP directly from the deployed contract instead of
+ * hard-coding it here — this route used to have its own `const
+ * MILESTONE_STEP = 1000`, silently disconnected from the contract's own
+ * (now 100) value. Since 1000 is itself a multiple of 100 the on-chain check
+ * never reverted, it just silently produced far fewer milestones than
+ * intended — the exact bug that shipped a "Monument — 2,000 Normies" on a
+ * contract meant to milestone every 100. Never hard-code this a third time.
+ */
+async function getContractMilestoneStep(): Promise<number> {
+  const addr = process.env.ANA_MEMORIALS_ADDRESS as `0x${string}` | undefined;
+  if (!addr) throw new Error("ANA_MEMORIALS_ADDRESS not set");
+  const step = await baseClient.readContract({
+    address: addr, abi: ANA_MEMORIALS_ABI, functionName: "MILESTONE_STEP",
+  }) as bigint;
+  return Number(step);
+}
+
+// ─── Burn-count baseline ────────────────────────────────────────────────────
+// totalBurnedTokens (normies.art) is a fact about the real world — it never
+// resets just because WE redeploy ANAMemorials. Without this, a fresh
+// contract immediately "discovers" every milestone the whole collection's
+// burn history has ever crossed (2,000+ already, as of 23/09) instead of
+// starting the count over. The baseline is the real totalBurned value AT THE
+// MOMENT of a deliberate reset (resetMilestoneBaseline below) — every
+// milestone computation subtracts it, so "milestone 1" means "the first
+// MILESTONE_STEP burns since we chose to start counting," not "burns 1..100
+// of all time."
+const BASELINE_KEY = "milestone-burn-baseline";
+
+async function getMilestoneBaseline(): Promise<number> {
+  const raw = await kvGet(BASELINE_KEY);
+  return raw ? Number(raw) : 0;
+}
+
 export async function POST(req: NextRequest) {
   const isAdminCall = (await verifyAdminRequest(req)).ok;
   if (!isAdminCall) {
@@ -77,10 +112,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Impossible de lire le total des burns (api.normies.art)" }, { status: 502 });
   }
 
-  const highestAvailableMilestone = Math.floor(totalBurned / MILESTONE_STEP);
+  // ── Reset action — sets the baseline to the CURRENT real total, so the
+  //    next call counts milestones from zero. Does not create anything.
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  if ((body as { resetBaseline?: boolean }).resetBaseline) {
+    await kvSet(BASELINE_KEY, String(totalBurned));
+    return NextResponse.json({ ok: true, baselineSet: totalBurned, message: "Compteur de milestones remis à zéro — le prochain palier sera compté à partir de maintenant." });
+  }
+
+  let MILESTONE_STEP: number;
+  try {
+    MILESTONE_STEP = await getContractMilestoneStep();
+  } catch (e) {
+    return NextResponse.json({ error: `Impossible de lire MILESTONE_STEP sur le contrat : ${e instanceof Error ? e.message : String(e)}` }, { status: 502 });
+  }
+
+  const baseline = await getMilestoneBaseline();
+  const effectiveBurned = Math.max(0, totalBurned - baseline);
+
+  const highestAvailableMilestone = Math.floor(effectiveBurned / MILESTONE_STEP);
   if (highestAvailableMilestone === 0) {
     return NextResponse.json(
-      { error: `Aucun palier atteint — ${totalBurned}/${MILESTONE_STEP} burns` },
+      { error: `Aucun palier atteint — ${effectiveBurned}/${MILESTONE_STEP} burns depuis la remise à zéro (${totalBurned} au total, base ${baseline})` },
       { status: 409 },
     );
   }
@@ -93,7 +146,7 @@ export async function POST(req: NextRequest) {
   if (alreadyCreated >= highestAvailableMilestone) {
     return NextResponse.json(
       {
-        error: `Pas de nouveau palier disponible — ${totalBurned} burns au total, dernier monument créé pour ${alreadyCreated * MILESTONE_STEP}, prochain à ${(alreadyCreated + 1) * MILESTONE_STEP}`,
+        error: `Pas de nouveau palier disponible — ${effectiveBurned} burns depuis la remise à zéro (${totalBurned} au total, base ${baseline}), dernier monument créé pour ${alreadyCreated * MILESTONE_STEP}, prochain à ${(alreadyCreated + 1) * MILESTONE_STEP}`,
       },
       { status: 409 },
     );
@@ -190,8 +243,11 @@ export async function POST(req: NextRequest) {
     workId:                  work.id,
     workTitle:                work.title,
     milestoneNumber,
+    milestoneStep:           MILESTONE_STEP,
     totalBurnedHonored:      milestoneBurnCount,
     totalBurnedNow:          totalBurned,
+    burnBaseline:            baseline,
+    effectiveBurnedNow:      effectiveBurned,
     nextMilestoneAvailableAt: (milestoneNumber + 1) * MILESTONE_STEP,
   });
 }
