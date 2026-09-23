@@ -16,7 +16,7 @@
  * (GET /api/ana-art/feed only exposes pixels/canvasW/canvasH/title/agent).
  */
 
-import { groqFetch } from "@/lib/groq";
+import { groqFetch, extractJsonObject } from "@/lib/groq";
 import {
   buildPersona, buildSystemPrompt, personaToPromptBlock, sampleOtherMembers,
   type NormiePersona,
@@ -178,13 +178,17 @@ function rasterize(rawShapes: unknown): Uint8Array {
 
 // ─── LLM creative call ────────────────────────────────────────────────────────
 
+// No response_format: {type:"json_object"} on purpose -- confirmed live
+// (23/09): openai/gpt-oss-120b (a reasoning model) fails Groq's own
+// server-side validation for that mode outright (400 json_validate_failed).
+// Prompts ask for JSON directly; callers parse leniently with
+// extractJsonObject() instead of relying on that enforcement.
 async function groq(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens: number): Promise<string | null> {
   try {
     const res = await groqFetch({
       model: MODEL, messages, max_tokens: maxTokens, temperature: 0.85,
-      response_format: { type: "json_object" },
     });
-    if (!res.ok) { console.error(`[memorialArt] Groq ${res.status}`); return null; }
+    if (!res.ok) { console.error(`[memorialArt] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
     return data.choices[0]?.message?.content?.trim() ?? null;
   } catch (e) {
@@ -230,7 +234,7 @@ JSON only:
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as { cartel?: string; shapes?: unknown };
+    const parsed = extractJsonObject(raw) as { cartel?: string; shapes?: unknown };
     if (!Array.isArray(parsed.shapes) || parsed.shapes.length === 0) return null;
     const cartel = (parsed.cartel ?? current.cartel).trim().slice(0, 500) || current.cartel;
     return { cartel, shapes: parsed.shapes };
@@ -343,7 +347,7 @@ JSON only:
   if (!raw) return fallbackArtwork();
 
   try {
-    const parsed = JSON.parse(raw) as { cartel?: string; shapes?: unknown };
+    const parsed = extractJsonObject(raw) as { cartel?: string; shapes?: unknown };
     let cartel = (parsed.cartel ?? "").trim().slice(0, 500);
     let shapes = parsed.shapes;
     if (!cartel || !Array.isArray(shapes) || shapes.length === 0) return fallbackArtwork();

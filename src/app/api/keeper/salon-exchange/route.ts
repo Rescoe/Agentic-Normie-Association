@@ -21,7 +21,7 @@ import {
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
-import { groqFetch, trimIfTruncated } from "@/lib/groq";
+import { groqFetch, trimIfTruncated, extractJsonObject } from "@/lib/groq";
 import { readCache } from "@/lib/activityScanner";
 
 const MODEL = "openai/gpt-oss-120b";
@@ -474,21 +474,23 @@ Seed: ${Math.random().toString(36).slice(2, 8)}
 POSSIBLE FORMS (pick exactly one as "suggestedForm"): "haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl".
 If your idea is generative/visual/algorithmic/interactive, you MUST pick one of the html-* forms, not a text form.
 
-Reply with JSON only:
+Reply with ONLY the raw JSON object below — no reasoning, no explanation, no markdown code fences, nothing before or after it:
 {"feelsRight":true|false,"title":"Specific evocative title (3-6 words, NO generic blockchain tropes) — or, if feelsRight is false, your honest one-line reason for holding back","text":"2-3 sentences: concrete idea, form chosen, why THIS work from YOUR perspective (irrelevant if feelsRight is false)","suggestedForm":"haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"}`,
         },
       ],
-      // Was 220 — tight enough for the JSON structure + a "2-3 sentences" text field
-      // that Groq's own JSON-mode validation occasionally rejected outright (400
-      // json_validate_failed) when truncation landed mid-string instead of after it.
-      max_tokens:      350,
-      temperature:     0.97,
-      response_format: { type: "json_object" },
+      // No response_format: {type:"json_object"} -- confirmed live (23/09):
+      // openai/gpt-oss-120b (a reasoning model) fails Groq's own server-side
+      // validation for that mode outright (400 json_validate_failed) -- not a
+      // max_tokens/truncation issue as originally guessed here. Asking for
+      // JSON in the prompt instead and parsing leniently with
+      // extractJsonObject(), same fix as autoVote.ts's groqJson().
+      max_tokens:  350,
+      temperature: 0.97,
     });
 
     if (!res.ok) return null;
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    const raw  = JSON.parse(data.choices[0]?.message?.content ?? "{}") as Record<string, string | boolean>;
+    const raw  = extractJsonObject(data.choices[0]?.message?.content ?? "") as Record<string, string | boolean>;
 
     // The character's own call, not just a dice roll — an in-character "not right
     // now" is a legitimate outcome, not a failure to route around.

@@ -18,6 +18,7 @@ import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROL
 import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { baseRpcTransport } from "@/lib/baseRpc";
+import { extractJsonObject } from "@/lib/groq";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -113,11 +114,15 @@ export async function runProposeWork(forcedProposerId: number | null): Promise<P
       Authorization:  `Bearer ${process.env.GROQ_API_KEY}`,
       "Content-Type": "application/json",
     },
+    // No response_format: {type:"json_object"} -- confirmed live (23/09):
+    // openai/gpt-oss-120b (a reasoning model) fails Groq's own server-side
+    // validation for that mode outright (400 json_validate_failed). Asking
+    // for JSON in the prompt instead and parsing leniently with
+    // extractJsonObject() below, same fix as autoVote.ts's groqJson().
     body: JSON.stringify({
-      model:           "openai/gpt-oss-120b",
-      max_tokens:      350,
-      temperature:     0.97,
-      response_format: { type: "json_object" },
+      model:       "openai/gpt-oss-120b",
+      max_tokens:  350,
+      temperature: 0.97,
       messages: [
         { role: "system", content: buildSystemPrompt(proposer, others) },
         {
@@ -140,7 +145,7 @@ Random seed: ${Math.random().toString(36).slice(2, 8)}
 POSSIBLE FORMS (you must pick exactly one as "suggestedForm"): "haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl".
 If your idea is a generative/visual/algorithmic/interactive piece, you MUST pick one of the html-* forms, not a text form.
 
-Respond ONLY in JSON, always in English:
+Respond with ONLY the raw JSON object below, always in English — no reasoning, no explanation, no markdown code fences, nothing before or after it:
 {
   "title": "Specific title (3-6 words, NO blockchain cliché)",
   "proposal": "Proposal in 2-3 sentences: concrete idea, chosen form, why this work from YOUR point of view.",
@@ -151,17 +156,15 @@ Respond ONLY in JSON, always in English:
     }),
   }).catch(() => null);
 
-  if (!res?.ok) throw new Error("Groq API error");
+  if (!res) throw new Error("Groq request failed (network error)");
+  if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 500)}`);
 
   const data = await res.json() as { choices: Array<{ message: { content: string } }> };
   const raw  = data.choices[0]?.message?.content?.trim();
   if (!raw) throw new Error("LLM returned empty response");
 
-  let parsed: { title?: string; proposal?: string; suggestedForm?: string };
-  try { parsed = JSON.parse(raw); }
-  catch { throw new Error(`LLM response parse error: ${raw.slice(0, 200)}`); }
-
-  if (!parsed.title || !parsed.proposal) throw new Error("LLM response missing title or proposal");
+  const parsed = extractJsonObject(raw) as { title?: string; proposal?: string; suggestedForm?: string };
+  if (!parsed.title || !parsed.proposal) throw new Error(`LLM response missing title or proposal: ${raw.slice(0, 200)}`);
 
   const VALID_FORMS = new Set(["haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl"]);
   const suggestedForm = parsed.suggestedForm && VALID_FORMS.has(parsed.suggestedForm) ? parsed.suggestedForm : undefined;

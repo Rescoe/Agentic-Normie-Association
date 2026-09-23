@@ -16,7 +16,28 @@ export interface GroqBody {
   messages:         GroqMessage[];
   max_tokens?:      number;
   temperature?:     number;
+  // Confirmed live (23/09): openai/gpt-oss-120b (a reasoning model) fails
+  // Groq's own server-side validation for this outright -- 400
+  // json_validate_failed, request never even completes -- most likely because
+  // its reasoning content leaks into what gets checked. Don't set this for
+  // that model; ask for JSON in the prompt instead and parse the raw text
+  // leniently with extractJsonObject() below.
   response_format?: { type: string };
+}
+
+/** Lenient JSON extraction from raw LLM text: strips a leading <think>...</think>
+ * reasoning block if present, then tries a direct parse, falling back to the
+ * substring between the first "{" and the last "}". Returns {} if nothing
+ * parses -- callers already handle an empty object as "no usable data". */
+export function extractJsonObject(raw: string): Record<string, unknown> {
+  const stripped = raw.replace(/<think>[\s\S]*?<\/think>/i, "").trim();
+  try { return JSON.parse(stripped); } catch { /* fall through */ }
+  const start = stripped.indexOf("{");
+  const end   = stripped.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    try { return JSON.parse(stripped.slice(start, end + 1)); } catch { /* fall through */ }
+  }
+  return {};
 }
 
 /**

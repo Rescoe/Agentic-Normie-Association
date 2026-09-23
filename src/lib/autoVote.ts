@@ -26,6 +26,7 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 import { runProposeWork } from "@/lib/proposeWork";
 import { baseRpcTransport } from "@/lib/baseRpc";
+import { extractJsonObject } from "@/lib/groq";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
@@ -138,21 +139,6 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
   const d = await r.json() as { choices: Array<{ message: { content: string } }> };
   const raw = d.choices[0]?.message?.content?.trim() ?? "";
   return extractJsonObject(raw);
-}
-
-/** Lenient JSON extraction from raw LLM text: strips a leading <think>...</think>
- * reasoning block if present, then tries a direct parse, falling back to the
- * substring between the first "{" and the last "}". Returns {} if nothing
- * parses -- callers already handle an empty object as "no usable data". */
-function extractJsonObject(raw: string): Record<string, unknown> {
-  const stripped = raw.replace(/<think>[\s\S]*?<\/think>/i, "").trim();
-  try { return JSON.parse(stripped); } catch { /* fall through */ }
-  const start = stripped.indexOf("{");
-  const end   = stripped.lastIndexOf("}");
-  if (start !== -1 && end !== -1 && end > start) {
-    try { return JSON.parse(stripped.slice(start, end + 1)); } catch { /* fall through */ }
-  }
-  return {};
 }
 
 // ─── Candidacy ────────────────────────────────────────────────────────────────

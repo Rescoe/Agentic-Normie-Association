@@ -26,7 +26,7 @@ import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
 import { registerMemorialOnChain, addReservedClaimsOnChain, addHonoredTokenIdsOnChain, deliverRequesterEditionOnChain } from "@/server/relayer/memorialPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
-import { groqFetch } from "@/lib/groq";
+import { groqFetch, extractJsonObject } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
@@ -149,19 +149,23 @@ async function getMemberIds(): Promise<number[]> {
 
 // ─── LLM helpers ──────────────────────────────────────────────────────────────
 
+// No response_format: {type:"json_object"} option here on purpose (there used
+// to be a `json` opt that set it) -- confirmed live (23/09): openai/gpt-oss-120b
+// (a reasoning model) fails Groq's own server-side validation for that mode
+// outright (400 json_validate_failed). Callers ask for JSON in the prompt
+// instead and parse the raw text leniently with extractJsonObject().
 async function groq(
   messages: Array<{ role: "system" | "user"; content: string }>,
-  opts: { model?: string; maxTokens?: number; temp?: number; json?: boolean } = {}
+  opts: { model?: string; maxTokens?: number; temp?: number } = {}
 ): Promise<string | null> {
   try {
     const res = await groqFetch({
-      model:          opts.model      ?? MODEL,
+      model:       opts.model     ?? MODEL,
       messages,
-      max_tokens:     opts.maxTokens  ?? 300,
-      temperature:    opts.temp       ?? 0.7,
-      ...(opts.json ? { response_format: { type: "json_object" } } : {}),
+      max_tokens:  opts.maxTokens ?? 300,
+      temperature: opts.temp      ?? 0.7,
     });
-    if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}`); return null; }
+    if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
     const data = await res.json() as { choices: Array<{ message: { content: string } }> };
     return data.choices[0]?.message?.content?.trim() ?? null;
   } catch (e) {
@@ -294,12 +298,12 @@ If vote "yes": which role suits you in this creation? ("author" = create, "curat
       { role: "system", content: buildSystemPrompt(persona) },
       { role: "user", content: userContent },
     ],
-    { model: MODEL_FAST, maxTokens: 120, temp: 0.75, json: true }
+    { model: MODEL_FAST, maxTokens: 120, temp: 0.75 }
   );
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as { vote?: string; reason?: string; interestedIn?: string };
+    const parsed = extractJsonObject(raw) as { vote?: string; reason?: string; interestedIn?: string };
     return {
       tokenId:      persona.tokenId,
       name:         persona.name,
@@ -649,7 +653,7 @@ Respond in JSON:
     ],
     work.isFoundingWork
       ? { maxTokens: 350, temp: 0.8 }
-      : { maxTokens: 600, temp: 0.8, json: true }
+      : { maxTokens: 600, temp: 0.8 }
   );
 
   if (!rawBrief) return false;
@@ -662,7 +666,7 @@ Respond in JSON:
 
   if (!work.isFoundingWork) {
     try {
-      const parsed = JSON.parse(rawBrief) as {
+      const parsed = extractJsonObject(rawBrief) as {
         artForm?: string; ambitionLevel?: string; editionPrice?: string; editionSupply?: number;
         priceReasoning?: string; brief?: string;
       };
@@ -1030,12 +1034,12 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
 }}`,
       },
     ],
-    { model: MODEL_FAST, maxTokens: 180, temp: 0.5, json: true }
+    { model: MODEL_FAST, maxTokens: 180, temp: 0.5 }
   );
 
   if (!raw) return false;
 
-  const parsed = JSON.parse(raw) as {
+  const parsed = extractJsonObject(raw) as {
     approved?: boolean; note?: string; reclassifyAs?: string; tooSimilarToExisting?: boolean;
   };
   const approved     = !!parsed.approved;
