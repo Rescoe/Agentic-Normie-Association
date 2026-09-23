@@ -25,17 +25,21 @@ import {
 import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 import { runProposeWork } from "@/lib/proposeWork";
+import { baseRpcTransport } from "@/lib/baseRpc";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
 const MODEL_F  = "openai/gpt-oss-120b";
 
-const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
-const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
-  ? (process.env.BASE_RPC_URL        ?? "https://mainnet.base.org")
-  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
+const IS_MAINNET = process.env.NEXT_PUBLIC_CHAIN === "base";
+const CHAIN      = IS_MAINNET ? base : baseSepolia;
+// Base sepolia (testnet, no real usage) stays on a single plain endpoint —
+// the failover is only worth the complexity where real traffic hits it.
+const TRANSPORT  = IS_MAINNET
+  ? baseRpcTransport(30_000)
+  : http(process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org", { timeout: 30_000 });
 
-const pub  = createPublicClient({ chain: CHAIN, transport: http(RPC_URL, { timeout: 30_000 }) });
+const pub  = createPublicClient({ chain: CHAIN, transport: TRANSPORT });
 const CORE = CONTRACT_ADDRESSES.AssociationCore     as `0x${string}`;
 const CA   = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
 
@@ -236,7 +240,7 @@ async function executeVotes(decisions: VoteDecision[]): Promise<{ ok: number; fa
   const wallet  = createWalletClient({
     account,
     chain:     CHAIN,
-    transport: http(RPC_URL, { timeout: 30_000 }),
+    transport: TRANSPORT,
   });
 
   let ok = 0;
@@ -325,7 +329,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
     const wallet = createWalletClient({
       account:   privateKeyToAccount(key),
       chain:     CHAIN,
-      transport: http(RPC_URL),
+      transport: TRANSPORT,
     });
     const hash = await wallet.writeContract({
       address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "triggerClose", args: [],

@@ -7,9 +7,10 @@
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http } from "viem";
+import { createPublicClient } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { baseRpcTransport } from "@/lib/baseRpc";
 import {
   listSalons, getSalon, addMessage, checkRateLimit, setTopic, registerNames,
   isSynthesisDue, storeSynthesis, markSynthesisDone, getSynthesisInfo,
@@ -41,7 +42,7 @@ const ANA_TOPICS = [
 
 const client = createPublicClient({
   chain:     base,
-  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
+  transport: baseRpcTransport(),
 });
 
 async function getMemberIds(): Promise<number[]> {

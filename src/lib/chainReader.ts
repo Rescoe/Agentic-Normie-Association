@@ -10,6 +10,7 @@
 
 import { createPublicClient, http, parseAbi } from "viem";
 import { base, baseSepolia } from "viem/chains";
+import { baseRpcTransport } from "@/lib/baseRpc";
 
 // ─── Client ───────────────────────────────────────────────────────────────────
 
@@ -17,13 +18,13 @@ const isMainnet = process.env.NEXT_PUBLIC_CHAIN === "base";
 
 const targetChain = isMainnet ? base : baseSepolia;
 
-const rpcUrl = isMainnet
-  ? (process.env.BASE_RPC_URL         ?? "https://mainnet.base.org")
-  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
+const transport = isMainnet
+  ? baseRpcTransport(8_000)
+  : http(process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org", { timeout: 8_000 });
 
 export const publicClient = createPublicClient({
   chain: targetChain,
-  transport: http(rpcUrl, { timeout: 8_000 }),
+  transport,
 });
 
 // ─── Addresses ────────────────────────────────────────────────────────────────

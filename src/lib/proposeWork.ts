@@ -12,17 +12,18 @@
  *                                                project_ana_election_cycle_self_fetch_bug
  *                                                memory for why the direct call matters).
  */
-import { createPublicClient, http } from "viem";
+import { createPublicClient } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROLES } from "@/lib/contracts";
 import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
+import { baseRpcTransport } from "@/lib/baseRpc";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const client = createPublicClient({
   chain:     base,
-  transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org"),
+  transport: baseRpcTransport(),
 });
 
 /** Tries to read the elected Auteur tokenId from ConstituentAssembly.getLeader(AUTHOR). */

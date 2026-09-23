@@ -31,11 +31,13 @@ import { CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { kvGet, kvSet } from "@/lib/db";
 import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
 import { runAutoVotePhase, type AutoVoteBody } from "@/lib/autoVote";
+import { baseRpcTransport } from "@/lib/baseRpc";
 
-const CHAIN   = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
-const RPC_URL = process.env.NEXT_PUBLIC_CHAIN === "base"
-  ? (process.env.BASE_RPC_URL        ?? "https://mainnet.base.org")
-  : (process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org");
+const IS_MAINNET = process.env.NEXT_PUBLIC_CHAIN === "base";
+const CHAIN      = IS_MAINNET ? base : baseSepolia;
+const TRANSPORT  = IS_MAINNET
+  ? baseRpcTransport(30_000)
+  : http(process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org", { timeout: 30_000 });
 
 const CA = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
 
@@ -79,7 +81,7 @@ export async function POST(req: NextRequest) {
   }
   if (!CA) return NextResponse.json({ error: "ConstituentAssembly not configured" }, { status: 500 });
 
-  const pub = createPublicClient({ chain: CHAIN, transport: http(RPC_URL, { timeout: 30_000 }) });
+  const pub = createPublicClient({ chain: CHAIN, transport: TRANSPORT });
 
   let session: { id: number; openedAt: number; closedAt: number; deadline: number; active: boolean; resolved: boolean };
   try {
@@ -115,7 +117,7 @@ export async function POST(req: NextRequest) {
     // in the redeployed ConstituentAssembly).  The relayer can now open sessions
     // autonomously; the owner retains all other Ownable powers (closeSession,
     // setElectableRoles, transferOwnership, etc.).
-    const wallet = createWalletClient({ account, chain: CHAIN, transport: http(RPC_URL) });
+    const wallet = createWalletClient({ account, chain: CHAIN, transport: TRANSPORT });
     try {
       const hash = await wallet.writeContract({
         address: CA, abi: CONSTITUENT_ASSEMBLY_ABI, functionName: "openSession", args: [BigInt(ELECTION_VOTE_WINDOW_SECONDS)],
