@@ -4,13 +4,15 @@
  * Admin-only, manually triggered (no cron — this is meant to be rare and
  * deliberate, unlike check-burns/batch-memorial's regular schedule). Creates
  * ONE collective "grand monument" honoring every burn ANA has seen up to the
- * next 1,000-burn threshold that doesn't already have one — e.g. the first
- * call after 2,347 total burns creates the milestone-1 monument (marking the
- * first 1,000); a second call creates milestone-2 (the first 2,000); a third
- * would be refused until burn #3,000 is reached. One call = one milestone,
- * even when several are already available — lets the admin pace them through
- * the normal vote/publish pipeline instead of flooding it with several at
- * once.
+ * next threshold that doesn't already have one — the step size is
+ * MILESTONE_STEP, read directly from the deployed contract (100, hard-coded
+ * there, not owner-adjustable — see ANAMemorials.sol). E.g. at 2,739 total
+ * burns, milestone 1 (the first 100) through milestone 27 are all "available"
+ * — but one call still only ever creates the NEXT one not yet actually
+ * registered on-chain, however many are technically available. One call =
+ * one milestone, even when several are already available — lets the admin
+ * pace them through the normal vote/publish pipeline instead of flooding it
+ * with several at once.
  *
  * Same creative/pipeline shape as batch-memorial (LLM persona creates the
  * piece instantly, straight into VOTE_OPEN, member vote moderates it after
@@ -42,7 +44,6 @@ import { createSalon, addMessage, AGORA_SALON_ID } from "@/lib/salonStore";
 import { getMemorialPricing } from "@/lib/memorialPricing";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { getHistoryStats, getBurnedTokens } from "@/lib/normiesApi";
-import { kvGet, kvSet } from "@/lib/db";
 
 const SAMPLE_SIZE               = 6;  // representative burns fetched for persona flavor — not exhaustive
 const MILESTONE_PUBLIC_SUPPLY   = 10; // fixed, small — this endpoint is about rendering, not distributing thousands of editions
@@ -51,6 +52,12 @@ const baseClient = createPublicClient({
   chain:     base,
   transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org", { timeout: 15_000 }),
 });
+
+function memorialsAddr(): `0x${string}` {
+  const addr = process.env.ANA_MEMORIALS_ADDRESS as `0x${string}` | undefined;
+  if (!addr) throw new Error("ANA_MEMORIALS_ADDRESS not set");
+  return addr;
+}
 
 async function getMemberIds(): Promise<number[]> {
   try {
@@ -72,30 +79,40 @@ async function getMemberIds(): Promise<number[]> {
  * intended — the exact bug that shipped a "Monument — 2,000 Normies" on a
  * contract meant to milestone every 100. Never hard-code this a third time.
  */
-async function getContractMilestoneStep(): Promise<number> {
-  const addr = process.env.ANA_MEMORIALS_ADDRESS as `0x${string}` | undefined;
-  if (!addr) throw new Error("ANA_MEMORIALS_ADDRESS not set");
+async function getContractMilestoneStep(addr: `0x${string}`): Promise<number> {
   const step = await baseClient.readContract({
     address: addr, abi: ANA_MEMORIALS_ABI, functionName: "MILESTONE_STEP",
   }) as bigint;
   return Number(step);
 }
 
-// ─── Burn-count baseline ────────────────────────────────────────────────────
-// totalBurnedTokens (normies.art) is a fact about the real world — it never
-// resets just because WE redeploy ANAMemorials. Without this, a fresh
-// contract immediately "discovers" every milestone the whole collection's
-// burn history has ever crossed (2,000+ already, as of 23/09) instead of
-// starting the count over. The baseline is the real totalBurned value AT THE
-// MOMENT of a deliberate reset (resetMilestoneBaseline below) — every
-// milestone computation subtracts it, so "milestone 1" means "the first
-// MILESTONE_STEP burns since we chose to start counting," not "burns 1..100
-// of all time."
-const BASELINE_KEY = "milestone-burn-baseline";
+/**
+ * How many milestones already exist, read from the CONTRACT itself rather
+ * than from an off-chain counter — a fresh ANAMemorials deployment has zero
+ * series, period, so this naturally reads "0 already created" on a new
+ * contract with no separate reset step needed. (A first attempt at "make
+ * this reset on redeploy" tried an off-chain burn-count baseline instead —
+ * wrong fix: it subtracted from the REAL total burn count, which blocked
+ * every milestone until that many MORE real-world burns happened, instead of
+ * just asking the contract how many monuments it has actually registered.)
+ * Scans every series once — fine at today's series counts; would want a
+ * cheaper query if this contract ever accumulates thousands of them.
+ */
+async function getOnChainMilestonesCreated(addr: `0x${string}`, step: number): Promise<number> {
+  const count = await baseClient.readContract({
+    address: addr, abi: ANA_MEMORIALS_ABI, functionName: "getSeriesCount",
+  }) as bigint;
 
-async function getMilestoneBaseline(): Promise<number> {
-  const raw = await kvGet(BASELINE_KEY);
-  return raw ? Number(raw) : 0;
+  let highest = 0;
+  for (let i = 0; i < Number(count); i++) {
+    const series = await baseClient.readContract({
+      address: addr, abi: ANA_MEMORIALS_ABI, functionName: "getSeries", args: [BigInt(i)],
+    }) as { kind: string; honoredBurnCount: bigint };
+    if (series.kind === "milestone") {
+      highest = Math.max(highest, Math.floor(Number(series.honoredBurnCount) / step));
+    }
+  }
+  return highest;
 }
 
 export async function POST(req: NextRequest) {
@@ -112,41 +129,37 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Impossible de lire le total des burns (api.normies.art)" }, { status: 502 });
   }
 
-  // ── Reset action — sets the baseline to the CURRENT real total, so the
-  //    next call counts milestones from zero. Does not create anything.
-  const body = await req.json().catch(() => ({} as Record<string, unknown>));
-  if ((body as { resetBaseline?: boolean }).resetBaseline) {
-    await kvSet(BASELINE_KEY, String(totalBurned));
-    return NextResponse.json({ ok: true, baselineSet: totalBurned, message: "Compteur de milestones remis à zéro — le prochain palier sera compté à partir de maintenant." });
-  }
-
+  const addr = memorialsAddr();
   let MILESTONE_STEP: number;
   try {
-    MILESTONE_STEP = await getContractMilestoneStep();
+    MILESTONE_STEP = await getContractMilestoneStep(addr);
   } catch (e) {
     return NextResponse.json({ error: `Impossible de lire MILESTONE_STEP sur le contrat : ${e instanceof Error ? e.message : String(e)}` }, { status: 502 });
   }
 
-  const baseline = await getMilestoneBaseline();
-  const effectiveBurned = Math.max(0, totalBurned - baseline);
-
-  const highestAvailableMilestone = Math.floor(effectiveBurned / MILESTONE_STEP);
+  const highestAvailableMilestone = Math.floor(totalBurned / MILESTONE_STEP);
   if (highestAvailableMilestone === 0) {
     return NextResponse.json(
-      { error: `Aucun palier atteint — ${effectiveBurned}/${MILESTONE_STEP} burns depuis la remise à zéro (${totalBurned} au total, base ${baseline})` },
+      { error: `Aucun palier atteint — ${totalBurned}/${MILESTONE_STEP} burns` },
       { status: 409 },
     );
   }
 
-  const existingMilestoneNumbers = (await listWorks())
+  // Real state of the contract itself, PLUS anything already mid-pipeline
+  // off-chain (proposed but not yet published on-chain) — takes the higher
+  // of the two so a work still sitting in VOTE_OPEN for milestone N doesn't
+  // get silently duplicated by a second call before it's had a chance to publish.
+  const onChainCreated = await getOnChainMilestonesCreated(addr, MILESTONE_STEP);
+  const pendingNumbers = (await listWorks())
     .filter(w => w.memorialKind === "milestone" && w.state !== "REJECTED")
     .map(w => w.memorialMilestoneNumber ?? 0);
-  const alreadyCreated = existingMilestoneNumbers.length > 0 ? Math.max(...existingMilestoneNumbers) : 0;
+  const pendingCreated = pendingNumbers.length > 0 ? Math.max(...pendingNumbers) : 0;
+  const alreadyCreated = Math.max(onChainCreated, pendingCreated);
 
   if (alreadyCreated >= highestAvailableMilestone) {
     return NextResponse.json(
       {
-        error: `Pas de nouveau palier disponible — ${effectiveBurned} burns depuis la remise à zéro (${totalBurned} au total, base ${baseline}), dernier monument créé pour ${alreadyCreated * MILESTONE_STEP}, prochain à ${(alreadyCreated + 1) * MILESTONE_STEP}`,
+        error: `Pas de nouveau palier disponible — ${totalBurned} burns au total, dernier monument créé pour ${alreadyCreated * MILESTONE_STEP}, prochain à ${(alreadyCreated + 1) * MILESTONE_STEP}`,
       },
       { status: 409 },
     );
@@ -246,8 +259,7 @@ export async function POST(req: NextRequest) {
     milestoneStep:           MILESTONE_STEP,
     totalBurnedHonored:      milestoneBurnCount,
     totalBurnedNow:          totalBurned,
-    burnBaseline:            baseline,
-    effectiveBurnedNow:      effectiveBurned,
+    onChainMilestonesCreated: onChainCreated,
     nextMilestoneAvailableAt: (milestoneNumber + 1) * MILESTONE_STEP,
   });
 }

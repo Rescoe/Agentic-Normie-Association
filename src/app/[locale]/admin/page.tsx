@@ -2162,9 +2162,6 @@ function MilestoneMemorialSection({ getAdminHeaders }: { getAdminHeaders: GetAdm
       .catch(() => setMilestoneStep(null));
   }, []);
 
-  const [resetting, setResetting] = useState(false);
-  const [resetMsg,  setResetMsg]  = useState<string | null>(null);
-
   const run = async () => {
     setRunning(true); setResult(null); setError(null);
     try {
@@ -2180,46 +2177,15 @@ function MilestoneMemorialSection({ getAdminHeaders }: { getAdminHeaders: GetAdm
     } finally { setRunning(false); }
   };
 
-  // totalBurnedTokens (normies.art) never resets on its own — this stores the
-  // real total AT THIS MOMENT as a baseline, so the next monument counts from
-  // milestone 1 again instead of jumping straight to wherever the whole
-  // collection's real burn history already is (2,000+ as of 23/09).
-  const resetBaseline = async () => {
-    setResetting(true); setResetMsg(null); setError(null);
-    try {
-      const r = await fetch("/api/keeper/milestone-memorial", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
-        body: JSON.stringify({ resetBaseline: true }),
-      });
-      const d = await r.json() as { message?: string; error?: string };
-      if (!r.ok) setError(d.error ?? `HTTP ${r.status}`);
-      else setResetMsg(d.message ?? "Compteur remis à zéro.");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setResetting(false); }
-  };
-
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={run}
-          disabled={running}
-          className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
-        >
-          {running ? "Création…" : `🗿 Créer le prochain monument (palier ${milestoneStep ?? "…"})`}
-        </button>
-        <button
-          onClick={resetBaseline}
-          disabled={resetting}
-          title="Fait repartir le compte des paliers de zéro à partir de maintenant, sans toucher au total réel de burns de la collection."
-          className="font-mono text-xs border border-orange-400 text-orange-600 px-5 py-2.5 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-wait"
-        >
-          {resetting ? "…" : "↺ Remettre le compteur de paliers à zéro"}
-        </button>
-      </div>
-      {resetMsg && <p className="font-mono text-xs text-orange-600">{resetMsg}</p>}
+      <button
+        onClick={run}
+        disabled={running}
+        className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 disabled:cursor-wait"
+      >
+        {running ? "Création…" : `🗿 Créer le prochain monument (palier ${milestoneStep ?? "…"})`}
+      </button>
       {error && <p className="font-mono text-xs text-red-600">{error}</p>}
       {result && (
         <div className="border border-[--border] bg-[--bg-card] px-4 py-3 space-y-1">
