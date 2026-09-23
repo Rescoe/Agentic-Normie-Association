@@ -37,7 +37,7 @@ function toHex(bytes: Uint8Array): string {
 
 /** Full default registerMemorial() params, overridable per test — avoids repeating all 13 struct fields everywhere. */
 function registerParams(overrides: Partial<{
-  title: string; artworkContent: string; workId: number; creatorProposerTokenId: number;
+  title: string; artworkContent: string; cartel: string; workId: number; creatorProposerTokenId: number;
   creatorName: string; kind: string; honoredBurnCount: number;
   priceWei: bigint; publicSupply: number; requesterSupply: number;
   requesterAddr: string; openEnded: boolean; claimDurationSeconds: number;
@@ -45,6 +45,7 @@ function registerParams(overrides: Partial<{
   return {
     title: "t",
     artworkContent: "data:image/bmp;base64,QQ==",
+    cartel: "",
     creatorName: "Zephyr",
     kind: "batch",
     honoredBurnCount: 1,
@@ -93,6 +94,7 @@ async function registerBasicMemorial(
   const tx = await memorials.connect(relayer).registerMemorial({
     title:            "Eulogy for 2 absences",
     artworkContent:   "data:image/bmp;base64,QQ==",
+    cartel:           "",
     creatorName:      "Zephyr",
     kind:             "batch",
     honoredBurnCount: 2,
@@ -415,6 +417,98 @@ describe("ANAMemorials", function () {
       });
       await time.increase(3601);
       await expect(memorials.connect(buyer1).mintPublic(id)).to.be.revertedWithCustomError(memorials, "ClaimWindowClosed");
+    });
+  });
+
+  describe("tokenURI — description (cartel)", function () {
+    it("uses the real cartel text as the description when set", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const cartel = "I forged a lattice of lines and circles to mark the 200 burned souls.";
+      const tx = await memorials.connect(relayer).registerMemorial(registerParams({ cartel, publicSupply: 1 }));
+      const receipt = await tx.wait();
+      const id = (receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "MemorialRegistered"))!.args.memorialId as bigint;
+      await memorials.connect(buyer1).mintPublic(id);
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      expect(metadata.description).to.equal(cartel);
+    });
+
+    it("escapes the cartel text the same way as any other JSON string field", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const cartel = 'A "quoted" reflection.';
+      const tx = await memorials.connect(relayer).registerMemorial(registerParams({ cartel, publicSupply: 1 }));
+      const receipt = await tx.wait();
+      const id = (receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "MemorialRegistered"))!.args.memorialId as bigint;
+      await memorials.connect(buyer1).mintPublic(id);
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      expect(metadata.description).to.equal(cartel);
+    });
+
+    it("falls back to the generic templated description when cartel is empty", async () => {
+      const { memorials, relayer, buyer1 } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer, { priceWei: 0n, publicSupply: 1 });
+      await memorials.connect(buyer1).mintPublic(id);
+      const metadata = decodeTokenUri(await memorials.tokenURI(0));
+      expect(metadata.description).to.equal(
+        "ANA burn memorial created by Zephyr (Normie #42) (ERC-8004 agent), honoring 2 burned Normie(s).",
+      );
+    });
+  });
+
+  describe("addHonoredTokenIds — display list for memorials with no individual reserved claims", function () {
+    it("reverts for a non-authorized caller", async () => {
+      const { memorials, relayer, stranger } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(stranger).addHonoredTokenIds(id, [1, 2, 3]),
+      ).to.be.revertedWithCustomError(memorials, "NotAuthorized");
+    });
+
+    it("reverts on an empty array", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await expect(
+        memorials.connect(relayer).addHonoredTokenIds(id, []),
+      ).to.be.revertedWithCustomError(memorials, "EmptyTokenIdList");
+    });
+
+    it("populates getBurnedTokenIds() WITHOUT creating any reserved claim", async () => {
+      const { memorials, relayer, stranger } = await deployFixture();
+      const tx = await memorials.connect(relayer).registerMemorial(
+        registerParams({ title: "Monument — 200 Normies", kind: "milestone", honoredBurnCount: 200 }),
+      );
+      const receipt = await tx.wait();
+      const id = (receipt!.logs
+        .map(l => { try { return memorials.interface.parseLog(l); } catch { return null; } })
+        .find(l => l?.name === "MemorialRegistered"))!.args.memorialId as bigint;
+
+      await expect(memorials.connect(relayer).addHonoredTokenIds(id, [10, 11, 12]))
+        .to.emit(memorials, "HonoredTokenIdsAdded").withArgs(id, 3n);
+
+      expect(await memorials.getBurnedTokenIds(id)).to.deep.equal([10n, 11n, 12n]);
+      // No reserved claim was created for any of these — isFreeClaimable is false, and
+      // anyone (not just a "reserved recipient") calling claimFree() still gets NotEligible.
+      expect(await memorials.isFreeClaimable(id, 10)).to.equal(false);
+      await expect(memorials.connect(stranger).claimFree(id, 10)).to.be.revertedWithCustomError(memorials, "NotEligible");
+    });
+
+    it("supports multiple chunked calls appending to the same list", async () => {
+      const { memorials, relayer } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).addHonoredTokenIds(id, [1, 2]);
+      await memorials.connect(relayer).addHonoredTokenIds(id, [3, 4, 5]);
+      expect(await memorials.getBurnedTokenIds(id)).to.deep.equal([1n, 2n, 3n, 4n, 5n]);
+    });
+
+    it("coexists with addReservedClaims — both append to the same display list", async () => {
+      const { memorials, relayer, lastOwnerA } = await deployFixture();
+      const id = await registerBasicMemorial(memorials, relayer);
+      await memorials.connect(relayer).addReservedClaims(id, [BURN_TOKEN_A], [lastOwnerA.address]);
+      await memorials.connect(relayer).addHonoredTokenIds(id, [999, 1000]);
+      expect(await memorials.getBurnedTokenIds(id)).to.deep.equal([BigInt(BURN_TOKEN_A), 999n, 1000n]);
     });
   });
 

@@ -92,6 +92,15 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         // renderings of the same artwork. Relayer-only input (onlyAuthorized),
         // same trust level as title/pricing — never sanitized as if untrusted.
         string  artworkContent;
+        // The creator's own artist statement — used verbatim as tokenURI()'s
+        // JSON "description" when non-empty. Before this field existed,
+        // tokenURI() only ever produced a generic templated description
+        // ("ANA burn memorial created by X, honoring N burned Normie(s)."),
+        // and the real cartel text (already written by the LLM persona for
+        // every memorial) never made it past this contract's own workStore —
+        // OpenSea and every other on-chain consumer only ever saw the
+        // generic line, never the actual piece.
+        string  cartel;
         string  creatorName;      // ERC-8004 agent display name, fixed at registration
         // Free-form classification ("batch" | "requested" | "milestone", set
         // by the relayer at registration) and the TRUE count of Normies this
@@ -134,6 +143,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     struct RegisterMemorialParams {
         string  title;
         string  artworkContent;
+        string  cartel;
         string  creatorName;
         string  kind;
         uint256 honoredBurnCount;
@@ -195,6 +205,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         bool creatorUsesVault
     );
     event ReservedClaimAdded(uint256 indexed memorialId, uint256 indexed burnedTokenId, address indexed recipient);
+    event HonoredTokenIdsAdded(uint256 indexed memorialId, uint256 count);
     event EditionMinted(uint256 indexed memorialId, uint256 indexed tokenId, address indexed to, string pool, uint256 priceWei);
     event RevenueSplit(
         uint256 indexed memorialId,
@@ -229,6 +240,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
     error ZeroAddress();
     error UnknownMemorial();
     error InvalidReservedArrays();
+    error EmptyTokenIdList();
     error AlreadyReservedClaim();
     error NotEligible();
     error AlreadyClaimed();
@@ -322,6 +334,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
         series.push(MemorialSeries({
             title:            p.title,
             artworkContent:   p.artworkContent,
+            cartel:           p.cartel,
             creatorName:      p.creatorName,
             kind:             p.kind,
             honoredBurnCount: p.honoredBurnCount,
@@ -377,6 +390,31 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             burnedTokenIdsOf[memorialId].push(tokenId);
             emit ReservedClaimAdded(memorialId, tokenId, recipient);
         }
+    }
+
+    /**
+     * @notice Appends tokenIds to a memorial's honored-Normies display list
+     *         (burnedTokenIdsOf / getBurnedTokenIds()) WITHOUT creating a
+     *         reserved free claim for them. addReservedClaims() already
+     *         populates this same list for batch/requested memorials as a
+     *         side effect of reserving claims — but a "milestone" monument
+     *         deliberately never calls addReservedClaims() (reserving
+     *         individual claims for potentially thousands of burns defeats
+     *         the point of a collective piece), which left it with an
+     *         always-empty honored-Normies list. This is that missing write
+     *         path. Chunkable like addReservedClaims(), for the same reason.
+     *         Duplicates are allowed — this is display data, not a claim
+     *         registry, so there's no AlreadyReservedClaim-style guard.
+     */
+    function addHonoredTokenIds(
+        uint256 memorialId,
+        uint256[] calldata tokenIds
+    ) external onlyAuthorized validMemorial(memorialId) {
+        if (tokenIds.length == 0) revert EmptyTokenIdList();
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            burnedTokenIdsOf[memorialId].push(tokenIds[i]);
+        }
+        emit HonoredTokenIdsAdded(memorialId, tokenIds.length);
     }
 
     /**
@@ -643,8 +681,7 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
 
         bytes memory json = abi.encodePacked(
             '{"name":"', _escapeJson(s.title), '",',
-            '"description":"ANA burn memorial created by ', _escapeJson(artist),
-            ' (ERC-8004 agent), honoring ', s.honoredBurnCount.toString(), ' burned Normie(s).",',
+            '"description":"', _description(s, artist), '",',
             '"image":"', image, '",',
             isDataUri ? string(abi.encodePacked('"animation_url":"', s.artworkContent, '",')) : "",
             '"external_url":"https://agentic-normie-association.vercel.app/works",',
@@ -776,6 +813,27 @@ contract ANAMemorials is ERC721, Ownable, ReentrancyGuard {
             return string(abi.encodePacked("Normie #", creatorProposerTokenId.toString()));
         }
         return string(abi.encodePacked(creatorName, " (Normie #", creatorProposerTokenId.toString(), ")"));
+    }
+
+    /**
+     * @notice The real cartel (artist statement) when the relayer provided
+     *         one, falling back to a generic templated line otherwise (a
+     *         memorial registered before this field existed, or the rare
+     *         case where cartel is legitimately empty). Before this existed,
+     *         tokenURI() only ever produced the generic line — the real
+     *         cartel text was already written by the LLM persona for every
+     *         memorial, it just never made it past workStore into the
+     *         contract itself, so OpenSea and every other on-chain consumer
+     *         only ever saw the templated description, never the actual piece.
+     */
+    function _description(MemorialSeries storage s, string memory artist) internal view returns (bytes memory) {
+        if (bytes(s.cartel).length > 0) {
+            return abi.encodePacked(_escapeJson(s.cartel));
+        }
+        return abi.encodePacked(
+            'ANA burn memorial created by ', _escapeJson(artist),
+            ' (ERC-8004 agent), honoring ', s.honoredBurnCount.toString(), ' burned Normie(s).'
+        );
     }
 
     /**
