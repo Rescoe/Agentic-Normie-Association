@@ -108,7 +108,7 @@ async function groqText(prompt: string, fast = false): Promise<string> {
       temperature: 0.7,
     }),
   });
-  if (!r.ok) throw new Error(`Groq ${r.status}`);
+  if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
   const d = await r.json() as { choices: Array<{ message: { content: string } }> };
   return d.choices[0]?.message?.content?.trim() ?? "";
 }
@@ -127,7 +127,7 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
       response_format: { type: "json_object" },
     }),
   });
-  if (!r.ok) throw new Error(`Groq ${r.status}`);
+  if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
   const d = await r.json() as { choices: Array<{ message: { content: string } }> };
   const raw = d.choices[0]?.message?.content?.trim() ?? "{}";
   try { return JSON.parse(raw); } catch { return {}; }
