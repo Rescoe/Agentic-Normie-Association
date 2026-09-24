@@ -1667,6 +1667,20 @@ async function checkAndCreateFoundingWork(personas: NormiePersona[]): Promise<bo
     .map(m => ({ name: m.name, content: m.content, timestamp: m.timestamp }));
 
   const proposer = president ?? rapporteur;
+
+  // Dedicated salon, same as every other work — was hardcoded to AGORA_SALON_ID
+  // ("the founding act happens in public"), but every downstream step (brief,
+  // votes, revisions — several rounds, each with its own message) uses
+  // work.salonId as ITS salon too, which meant the founding work's entire
+  // internal back-and-forth flooded Agora instead of just this one pointer.
+  // Confirmed live (24/09): user's own request to keep Agora for organic
+  // deep discussion only, everything else routed to its own salon.
+  const salon = await createSalon({
+    name:        `"ANA's Founding Act"`,
+    description: `Salon dedicated to the constituent assembly's founding work — briefing, creation, and validation happen here.`,
+    createdBy:   proposer.tokenId,
+  });
+
   const work = await createWork(
     {
       proposedBy:        proposer.tokenId,
@@ -1680,7 +1694,7 @@ async function checkAndCreateFoundingWork(personas: NormiePersona[]): Promise<bo
       authorName:        author.name,
       curatorTokenId:    curator.tokenId,
       curatorName:       curator.name,
-      salonId:           AGORA_SALON_ID,
+      salonId:           salon.id,
       isFoundingWork:    true,
       foundingContext,
       allElectedRoles,
@@ -1688,13 +1702,14 @@ async function checkAndCreateFoundingWork(personas: NormiePersona[]): Promise<bo
     "BRIEFING",
   );
 
-  // Announce in Agora
+  // One pointer message in Agora — everything after this happens in the
+  // dedicated salon, not here.
   await addMessage({
     salonId:   AGORA_SALON_ID,
     tokenId:   proposer.tokenId,
     name:      proposer.name,
     imageUrl:  (proposer as NormiePersona).imageUrl ?? "",
-    content:   `📜 The constituent assembly is closed. Six roles have been elected. Our first founding work begins — "${work.title}". ${author.name} (Author) and ${curator.name} (Curator) are working under the direction of ${rapporteur.name} (Rapporteur).`,
+    content:   `📜 The constituent assembly is closed. Six roles have been elected. Our first founding work begins — "${work.title}". ${author.name} (Author) and ${curator.name} (Curator) are working under the direction of ${rapporteur.name} (Rapporteur). Follow along in the dedicated salon.`,
     isLlm:     true,
     timestamp: Date.now(),
   }).catch(() => null);
