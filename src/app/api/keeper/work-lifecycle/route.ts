@@ -201,9 +201,16 @@ async function announceInSalon(
       const passed = work.voteResult === "passed";
       const yes    = work.yesCount ?? 0;
       const no     = work.noCount  ?? 0;
+      const abs    = work.absCount ?? 0;
+      // Was "(N yes / N no)" only -- when every voter abstains (a real,
+      // legitimate outcome the vote prompt explicitly invites: "dissent is
+      // respectable"), that read as "0 yes / 0 no" with zero indication 4
+      // people actually voted, which looked exactly like lost/uncounted
+      // votes instead of a unanimous abstention. Confirmed live (24/09).
+      const tally = `${yes} yes / ${no} no${abs > 0 ? ` / ${abs} abstain` : ""}`;
       content = passed
-        ? `✅ The work "${work.title}" is approved (${yes} yes / ${no} no). Creation begins.`
-        : `❌ The work "${work.title}" did not reach a majority (${yes} yes / ${no} no). Archived.`;
+        ? `✅ The work "${work.title}" is approved (${tally}). Creation begins.`
+        : `❌ The work "${work.title}" did not reach a majority (${tally}). Archived.`;
     } else if (event === "published") {
       content = `🔗 The work "${work.title}" is published on-chain on Base. Tx: ${work.txHash?.slice(0, 20)}…`;
     } else if (event === "rejected") {
