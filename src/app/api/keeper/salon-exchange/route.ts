@@ -22,6 +22,7 @@ import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
 import { groqFetch, trimIfTruncated, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { oneMinAiChat } from "@/lib/oneMinAi";
 import { readCache } from "@/lib/activityScanner";
 
 const MODEL = "openai/gpt-oss-120b";
@@ -194,10 +195,21 @@ async function generateSpeech(
       // few genuinely got cut off mid-word and published anyway ("...thereby anch").
       max_tokens: 400, temperature: 0.92,
     });
-    if (!res.ok) { console.error(`[salon-exchange] Groq ${res.status}`); return null; }
-    const data = await res.json() as GroqChatResponse;
-    const raw  = extractContent(data);
-    return raw ? trimIfTruncated(raw, data.choices[0]?.finish_reason) : null;
+
+    if (res.ok) {
+      const data = await res.json() as GroqChatResponse;
+      const raw  = extractContent(data);
+      const trimmed = raw ? trimIfTruncated(raw, data.choices[0]?.finish_reason) : null;
+      if (trimmed) return trimmed;
+      console.warn("[salon-exchange] Groq returned no usable content, trying 1min.ai fallback");
+    } else {
+      console.warn(`[salon-exchange] Groq ${res.status} (retries exhausted), trying 1min.ai fallback`);
+    }
+
+    // Groq fallback: only fires once groqFetch's own 429 retries are exhausted
+    // (a real, persistent failure) or Groq returned nothing usable. No-op
+    // (returns null) if ONE_MIN_AI_API_KEY isn't configured.
+    return await oneMinAiChat(sysPrompt, userPrompt, { maxTokens: 400 });
   } catch (e) {
     console.error("[salon-exchange] generateSpeech error:", e);
     return null;
