@@ -136,7 +136,13 @@ async function generateSpeech(
   recentMsgs:   SalonMessage[],
   role:         "initiator" | "responder",
   topic:        string,
-  lastMsg:      SalonMessage | null
+  lastMsg:      SalonMessage | null,
+  // Deliberate, not just failover: initiator and responder are given
+  // different providers (see runExchange) so a two-message exchange actually
+  // has two distinct "voices" in conversation, not the same model replying to
+  // itself. Each provider still falls back to the other on failure, so this
+  // doesn't trade away the reliability the fallback was originally for.
+  provider:     "groq" | "1minai" = "groq",
 ): Promise<string | null> {
   try {
     const sysPrompt     = buildSystemPrompt(persona, otherMembers);
@@ -186,30 +192,31 @@ async function generateSpeech(
       salon.description ?? null, "", contextBlock, "", instruction,
     ].filter(Boolean).join("\n");
 
-    const res = await groqFetch({
-      model: MODEL,
-      messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
-      // 250 was too tight for the "2-3 sentences" ask given these personas' elaborate
-      // style (philosophical tangents, measured rhythm) — Groq logs showed output
-      // routinely landing right at 250, and finish_reason wasn't even checked, so a
-      // few genuinely got cut off mid-word and published anyway ("...thereby anch").
-      max_tokens: 400, temperature: 0.92,
-    });
-
-    if (res.ok) {
+    const tryGroq = async (): Promise<string | null> => {
+      const res = await groqFetch({
+        model: MODEL,
+        messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
+        // 250 was too tight for the "2-3 sentences" ask given these personas' elaborate
+        // style (philosophical tangents, measured rhythm) — Groq logs showed output
+        // routinely landing right at 250, and finish_reason wasn't even checked, so a
+        // few genuinely got cut off mid-word and published anyway ("...thereby anch").
+        max_tokens: 400, temperature: 0.92,
+      });
+      if (!res.ok) { console.warn(`[salon-exchange] Groq ${res.status} (retries exhausted)`); return null; }
       const data = await res.json() as GroqChatResponse;
       const raw  = extractContent(data);
-      const trimmed = raw ? trimIfTruncated(raw, data.choices[0]?.finish_reason) : null;
-      if (trimmed) return trimmed;
-      console.warn("[salon-exchange] Groq returned no usable content, trying 1min.ai fallback");
-    } else {
-      console.warn(`[salon-exchange] Groq ${res.status} (retries exhausted), trying 1min.ai fallback`);
-    }
+      return raw ? trimIfTruncated(raw, data.choices[0]?.finish_reason) : null;
+    };
 
-    // Groq fallback: only fires once groqFetch's own 429 retries are exhausted
-    // (a real, persistent failure) or Groq returned nothing usable. No-op
-    // (returns null) if ONE_MIN_AI_API_KEY isn't configured.
-    return await oneMinAiChat(sysPrompt, userPrompt, { maxTokens: 400 });
+    // oneMinAiChat() is a no-op (returns null) if ONE_MIN_AI_API_KEY isn't
+    // configured, so this degrades to Groq-only automatically either way.
+    const tryOneMinAi = () => oneMinAiChat(sysPrompt, userPrompt, { maxTokens: 400 });
+
+    const [primary, secondary] = provider === "1minai" ? [tryOneMinAi, tryGroq] : [tryGroq, tryOneMinAi];
+    const result = await primary();
+    if (result) return result;
+    console.warn(`[salon-exchange] ${provider} produced nothing usable, trying the other provider`);
+    return await secondary();
   } catch (e) {
     console.error("[salon-exchange] generateSpeech error:", e);
     return null;
@@ -314,7 +321,7 @@ async function runExchange(
   // ── Initiator ──
   const initiator    = pickInitiator(eligible, freshSalon);
   const otherForInit = sampleOtherMembers(allPersonas.filter(p => p.tokenId !== initiator.tokenId));
-  const initContent  = await generateSpeech(initiator, otherForInit, freshSalon, recentMsgs, "initiator", topic, lastLlmMsg);
+  const initContent  = await generateSpeech(initiator, otherForInit, freshSalon, recentMsgs, "initiator", topic, lastLlmMsg, "groq");
 
   if (!initContent) {
     skipped.push(`#${initiator.tokenId} (LLM failed)`);
@@ -335,7 +342,7 @@ async function runExchange(
     } else {
       const otherForResp = sampleOtherMembers(allPersonas.filter(p => p.tokenId !== responder.tokenId));
       const freshRecent  = [...recentMsgs, initMsg];
-      const respContent  = await generateSpeech(responder, otherForResp, freshSalon, freshRecent, "responder", topic, initMsg);
+      const respContent  = await generateSpeech(responder, otherForResp, freshSalon, freshRecent, "responder", topic, initMsg, "1minai");
       if (!respContent) {
         skipped.push(`#${responder.tokenId} (LLM failed)`);
       } else {
