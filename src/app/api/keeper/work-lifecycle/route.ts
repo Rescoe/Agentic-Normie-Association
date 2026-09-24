@@ -296,9 +296,7 @@ JSON only:
 Archetype: ${persona.archetype ?? "unknown"}
 Traits: ${(persona.traits ?? []).join(", ") || "—"}
 
-Vote on this artwork proposal. Vote HONESTLY based on your character.
-If the proposal doesn't resonate with your values, vote "no" or "abstain" — dissent is respectable.
-Universal "yes" votes in a small group ring false; real deliberation means divergence.
+Vote on this artwork proposal purely based on your own character, values, and taste — react as yourself, not as what you think the group expects from you.
 
 Title: "${work.title}"
 Proposal: ${work.proposal}
