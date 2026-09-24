@@ -9,9 +9,24 @@
  * is deliberately not used here: this app already builds full context into the
  * prompt text itself (recent messages, summaries — see salon-exchange.ts), the
  * same stateless-per-call shape Groq is already used with.
+ *
+ * No max-tokens control: confirmed live (24/09) — a single reply cost ~21,000
+ * of 1min.ai's own credits (billed in their own unit, not raw LLM tokens; see
+ * their pricing page's "$/M credits"), which at a 2M/month allotment is only
+ * ~95 messages before the whole budget is gone. Their documented
+ * promptObject fields (prompt, conversationId, settings, attachments) have no
+ * length/token-cap parameter at all -- there used to be a maxTokens option
+ * here that silently did nothing, since nothing in the request body ever used
+ * it. Removed; the only lever available is prompt-level enforcement (below)
+ * plus choosing a cheap model via ONE_MIN_AI_CHAT_MODEL.
  */
 
 const CHAT_URL = "https://api.1min.ai/api/chat-with-ai";
+
+// Appended to every request regardless of the caller's own prompt, since
+// there's no API-level way to cap output length. Not a hard guarantee (still
+// prompt-based, not enforced by the API), but it's the only lever available.
+const LENGTH_GUARD = "\n\n(Hard limit: your entire reply must be under 60 words. Do not exceed this, no exceptions.)";
 
 interface OneMinAiResponse {
   aiRecord?: {
@@ -29,7 +44,7 @@ interface OneMinAiResponse {
 export async function oneMinAiChat(
   systemPrompt: string,
   userPrompt:   string,
-  opts: { model?: string; maxTokens?: number } = {},
+  opts: { model?: string } = {},
 ): Promise<string | null> {
   const key = process.env.ONE_MIN_AI_API_KEY;
   if (!key) return null;
@@ -45,7 +60,7 @@ export async function oneMinAiChat(
         model,
         promptObject: {
           // No system/user split in this API -- concatenated into one prompt.
-          prompt: `${systemPrompt}\n\n${userPrompt}`,
+          prompt: `${systemPrompt}\n\n${userPrompt}${LENGTH_GUARD}`,
         },
       }),
     });

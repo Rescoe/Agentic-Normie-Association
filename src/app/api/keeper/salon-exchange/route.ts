@@ -210,7 +210,7 @@ async function generateSpeech(
 
     // oneMinAiChat() is a no-op (returns null) if ONE_MIN_AI_API_KEY isn't
     // configured, so this degrades to Groq-only automatically either way.
-    const tryOneMinAi = () => oneMinAiChat(sysPrompt, userPrompt, { maxTokens: 400 });
+    const tryOneMinAi = () => oneMinAiChat(sysPrompt, userPrompt);
 
     const [primary, secondary] = provider === "1minai" ? [tryOneMinAi, tryGroq] : [tryGroq, tryOneMinAi];
     const result = await primary();
