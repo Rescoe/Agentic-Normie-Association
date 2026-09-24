@@ -18,7 +18,7 @@ import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROL
 import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { baseRpcTransport } from "@/lib/baseRpc";
-import { extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
+import { extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -124,7 +124,7 @@ export async function runProposeWork(forcedProposerId: number | null): Promise<P
       // Was 350 -- confirmed live (23/09): this call billed 350 real output
       // tokens on Groq's dashboard yet came back with empty content, because
       // this model can spend the whole budget on internal reasoning before
-      // ever emitting the final JSON. Bumped for headroom; extractContent()
+      // ever emitting the final JSON. Bumped for headroom; extractContentOrReasoning()
       // below also falls back to the reasoning field if content is still empty.
       max_tokens:  900,
       temperature: 0.97,
@@ -165,7 +165,7 @@ Respond with ONLY the raw JSON object below, always in English — no reasoning,
   if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 500)}`);
 
   const data = await res.json() as GroqChatResponse;
-  const raw  = extractContent(data);
+  const raw  = extractContentOrReasoning(data);
   if (!raw) throw new Error(`LLM returned empty response (finish_reason=${data.choices[0]?.finish_reason ?? "?"})`);
 
   const parsed = extractJsonObject(raw) as { title?: string; proposal?: string; suggestedForm?: string };

@@ -50,15 +50,35 @@ export interface GroqChatResponse {
 }
 
 /**
- * Reasoning models (openai/gpt-oss-*) can spend the whole max_tokens budget on
- * internal deliberation and leave `message.content` empty -- confirmed live
- * (23/09): a propose-work call billed 350 real output tokens on Groq's own
- * dashboard yet came back with an empty `content`, because the tokens went
- * into reasoning instead. Groq exposes that reasoning separately (the field
- * name isn't consistent across model versions: reasoning / reasoning_content)
- * -- fall back to it instead of treating an empty content as a hard failure.
+ * Reads message.content only. Safe default for free-form conversational text
+ * (salon speech, summaries, candidacy reasoning) where there's no structural
+ * way to tell a real answer apart from raw chain-of-thought. Returns "" if
+ * content is empty -- callers already treat that as "skip this turn".
  */
 export function extractContent(data: GroqChatResponse): string {
+  return data.choices[0]?.message?.content?.trim() ?? "";
+}
+
+/**
+ * Same as extractContent(), but falls back to the model's raw reasoning field
+ * when content is empty. ONLY safe for callers that immediately run the
+ * result through extractJsonObject() (or an equally strict structural
+ * filter): reasoning models (openai/gpt-oss-*) can spend the whole max_tokens
+ * budget on internal deliberation and leave message.content empty -- Groq
+ * exposes that deliberation separately (field name inconsistent across model
+ * versions: reasoning / reasoning_content) -- confirmed live (23/09) on a
+ * propose-work call that billed real output tokens yet came back with empty
+ * content.
+ *
+ * Do NOT use this for plain free-text generation: confirmed live (24/09), a
+ * salon message went out reading "We need to respond as Kori, following all
+ * constraints... Let's craft: ..." -- the model's raw internal deliberation,
+ * published verbatim, because generateSpeech() was calling this instead of
+ * extractContent(). JSON extraction naturally discards non-JSON noise; free
+ * text has no equivalent filter, so raw reasoning leaking through is a
+ * regression, not a rare edge case.
+ */
+export function extractContentOrReasoning(data: GroqChatResponse): string {
   const msg = data.choices[0]?.message;
   return (msg?.content?.trim()) || (msg?.reasoning ?? msg?.reasoning_content ?? "").trim();
 }

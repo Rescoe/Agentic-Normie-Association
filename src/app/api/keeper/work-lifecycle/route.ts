@@ -26,7 +26,7 @@ import { linkCelebrationWork } from "@/server/relayer/celebrationPublisher";
 import { registerMemorialOnChain, addReservedClaimsOnChain, addHonoredTokenIdsOnChain, deliverRequesterEditionOnChain } from "@/server/relayer/memorialPublisher";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
-import { groqFetch, extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
+import { groqFetch, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
@@ -156,7 +156,14 @@ async function getMemberIds(): Promise<number[]> {
 // instead and parse the raw text leniently with extractJsonObject().
 async function groq(
   messages: Array<{ role: "system" | "user"; content: string }>,
-  opts: { model?: string; maxTokens?: number; temp?: number } = {}
+  // expectJson: this helper serves both JSON-decision callers (vote, curator
+  // approval) and plain free-text callers (the founding-work brief, used
+  // verbatim). The reasoning-fallback below is only safe for the former --
+  // extractJsonObject() downstream discards non-JSON noise, a plain-text
+  // caller has no equivalent filter. Confirmed live (24/09): a raw
+  // chain-of-thought block ("We need to respond as Kori...") got published to
+  // a salon because a free-text call was using the reasoning fallback.
+  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean } = {}
 ): Promise<string | null> {
   try {
     const res = await groqFetch({
@@ -167,7 +174,8 @@ async function groq(
     });
     if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
     const data = await res.json() as GroqChatResponse;
-    return extractContent(data) || null;
+    const raw  = opts.expectJson ? extractContentOrReasoning(data) : extractContent(data);
+    return raw || null;
   } catch (e) {
     console.error("[work-lifecycle] groq error:", e);
     return null;
@@ -298,7 +306,7 @@ If vote "yes": which role suits you in this creation? ("author" = create, "curat
       { role: "system", content: buildSystemPrompt(persona) },
       { role: "user", content: userContent },
     ],
-    { model: MODEL_FAST, maxTokens: 120, temp: 0.75 }
+    { model: MODEL_FAST, maxTokens: 120, temp: 0.75, expectJson: true }
   );
   if (!raw) return null;
 
@@ -652,8 +660,8 @@ Respond in JSON:
       { role: "user",   content: userPrompt },
     ],
     work.isFoundingWork
-      ? { maxTokens: 350, temp: 0.8 }
-      : { maxTokens: 600, temp: 0.8 }
+      ? { maxTokens: 350, temp: 0.8 } // plain text, used verbatim as brief -- no JSON, no reasoning fallback
+      : { maxTokens: 600, temp: 0.8, expectJson: true }
   );
 
   if (!rawBrief) return false;
@@ -1034,7 +1042,7 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
 }}`,
       },
     ],
-    { model: MODEL_FAST, maxTokens: 180, temp: 0.5 }
+    { model: MODEL_FAST, maxTokens: 180, temp: 0.5, expectJson: true }
   );
 
   if (!raw) return false;

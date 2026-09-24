@@ -21,7 +21,7 @@ import {
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
-import { groqFetch, trimIfTruncated, extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
+import { groqFetch, trimIfTruncated, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
 import { readCache } from "@/lib/activityScanner";
 
 const MODEL = "openai/gpt-oss-120b";
@@ -494,7 +494,7 @@ Reply with ONLY the raw JSON object below — no reasoning, no explanation, no m
 
     if (!res.ok) return null;
     const data = await res.json() as GroqChatResponse;
-    const raw  = extractJsonObject(extractContent(data)) as Record<string, string | boolean>;
+    const raw  = extractJsonObject(extractContentOrReasoning(data)) as Record<string, string | boolean>;
 
     // The character's own call, not just a dice roll — an in-character "not right
     // now" is a legitimate outcome, not a failure to route around.

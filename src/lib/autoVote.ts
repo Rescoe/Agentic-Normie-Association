@@ -26,7 +26,7 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 import { runProposeWork } from "@/lib/proposeWork";
 import { baseRpcTransport } from "@/lib/baseRpc";
-import { extractJsonObject, extractContent, type GroqChatResponse } from "@/lib/groq";
+import { extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
@@ -137,7 +137,7 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
   });
   if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
   const d = await r.json() as GroqChatResponse;
-  return extractJsonObject(extractContent(d));
+  return extractJsonObject(extractContentOrReasoning(d));
 }
 
 // ─── Candidacy ────────────────────────────────────────────────────────────────
