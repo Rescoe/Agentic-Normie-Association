@@ -39,6 +39,15 @@ declare global {
   var __anaDrawStore: DrawStore | undefined;
 }
 
+// ─── In-process read cache (Neon mode only) ───────────────────────────────────
+// Same fix as workStore.ts (24/09): getStore() had zero caching, fetching the
+// full blob fresh on every call including every /api/ana-art/feed poll. This
+// store is small today (no drawings submitted yet) but grows unbounded with
+// base64 pixel data, so caching now avoids repeating the exact Neon-quota
+// blowout workStore.ts caused once this one has real content.
+const CACHE_TTL_MS = 15_000;
+let _neonCache: { store: DrawStore; at: number } | null = null;
+
 async function neonLoad(): Promise<DrawStore | null> {
   try {
     const { kvGet, USE_NEON } = await import("./db");
@@ -91,9 +100,13 @@ async function useNeon(): Promise<boolean> {
 
 async function getStore(): Promise<DrawStore> {
   if (await useNeon()) {
+    if (_neonCache && Date.now() - _neonCache.at < CACHE_TTL_MS) {
+      return _neonCache.store;
+    }
     const fromNeon = await neonLoad();
     const s = fromNeon ?? { drawings: {} };
     if (!s.drawings) s.drawings = {};
+    _neonCache = { store: s, at: Date.now() };
     return s;
   }
   if (!global.__anaDrawStore) global.__anaDrawStore = fileLoad();
@@ -102,9 +115,12 @@ async function getStore(): Promise<DrawStore> {
 
 // Same race-safety as workStore.ts's mutate(): re-read immediately before
 // saving and merge back anything written by a concurrent request, so a
-// read-modify-write never silently drops another submission.
+// read-modify-write never silently drops another submission. Bypasses the
+// cache above for the same reason as workStore.ts: this base read needs to
+// be guaranteed-fresh, not up to CACHE_TTL_MS stale.
 async function mutate(fn: (s: DrawStore) => void): Promise<void> {
-  const store = await getStore();
+  const store = (await useNeon()) ? ((await neonLoad()) ?? { drawings: {} }) : await getStore();
+  if (!store.drawings) store.drawings = {};
   fn(store);
 
   if (await useNeon()) {
@@ -115,6 +131,7 @@ async function mutate(fn: (s: DrawStore) => void): Promise<void> {
       }
     }
     await neonSave(store);
+    _neonCache = { store, at: Date.now() };
   } else {
     global.__anaDrawStore = store;
     fileSave(store);

@@ -227,6 +227,21 @@ declare global {
   var __anaWorkStore: WorkStore | undefined;
 }
 
+// ─── In-process read cache (Neon mode only) ───────────────────────────────────
+// This store's payload is ~1.4MB and getStore() was fetching it fresh from
+// Neon on every single call, with zero caching -- confirmed live (24/09) as
+// the direct cause of exhausting a 5GB/month Neon transfer quota in 8 days:
+// /api/status alone polls every ~30-60s, and several routes independently
+// call into workStore multiple times per request (a page load's burst of
+// /api/works/certificate/[id] calls, each a separate 1.4MB fetch). Mirrors
+// the same pattern already in salonStore.ts, just never ported here even
+// though this store's payload is by far the larger of the two. Bypassed by
+// mutate()'s own base read (always goes straight to neonLoad()) so its
+// existing anti-shrink concurrent-writer check keeps working against
+// genuinely fresh data, not a stale cached copy.
+const CACHE_TTL_MS = 15_000;
+let _neonCache: { store: WorkStore; at: number } | null = null;
+
 // ─── Neon I/O ─────────────────────────────────────────────────────────────────
 
 async function neonLoad(): Promise<WorkStore | null> {
@@ -326,9 +341,15 @@ async function useNeon(): Promise<boolean> {
 // Neon reads are fast and this app's traffic is low, so always-fresh is cheap.
 async function getStore(): Promise<WorkStore> {
   if (await useNeon()) {
+    // Serve from in-process cache when fresh — avoids one ~1.4MB Neon read
+    // per sub-call within the same request burst or warm Lambda invocation.
+    if (_neonCache && Date.now() - _neonCache.at < CACHE_TTL_MS) {
+      return _neonCache.store;
+    }
     const fromNeon = await neonLoad();
     const s = fromNeon ?? { works: {} };
     if (!s.works) s.works = {};
+    _neonCache = { store: s, at: Date.now() };
     return s;
   }
   // Local dev fallback only (no NEON_DB_ANA configured)
@@ -339,7 +360,12 @@ async function getStore(): Promise<WorkStore> {
 }
 
 async function mutate(fn: (s: WorkStore) => void): Promise<void> {
-  const store = await getStore();
+  // Bypasses the cache above on purpose: goes straight to neonLoad() for a
+  // guaranteed-fresh base, since the anti-shrink merge below only works
+  // against real current state, not a copy that could be up to CACHE_TTL_MS
+  // stale relative to another writer.
+  const store = (await useNeon()) ? ((await neonLoad()) ?? { works: {} }) : await getStore();
+  if (!store.works) store.works = {};
   const beforeCount = Object.keys(store.works).length;
   fn(store);
 
@@ -364,6 +390,9 @@ async function mutate(fn: (s: WorkStore) => void): Promise<void> {
       console.error(`[workStore] mutate() write would shrink work count ${beforeCount} → ${afterCount} even after merge — saving anyway, but this is unexpected.`);
     }
     await neonSave(store);
+    // Keep the cache fresh so reads within the TTL window see this write
+    // immediately instead of waiting for the next natural expiry.
+    _neonCache = { store, at: Date.now() };
   } else {
     global.__anaWorkStore = store;
     fileSave(store);
