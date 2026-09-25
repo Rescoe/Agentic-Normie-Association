@@ -113,7 +113,8 @@ export async function buildPersona(tokenId: number): Promise<NormiePersona> {
  */
 export function buildSystemPrompt(
   p: NormiePersona,
-  otherMembers: NormiePersona[] = []
+  otherMembers: NormiePersona[] = [],
+  opts: { longForm?: boolean } = {}
 ): string {
   const lines: string[] = [];
 
@@ -182,10 +183,21 @@ export function buildSystemPrompt(
 
   // ── Conversation rules ────────────────────────────────────────────────────
   const nameExamples = otherMembers.slice(0, 2).map(m => m.name).join(", ") || "Axiom, Nyx";
+  // The blanket "2-4 sentences" rule actively fights any task asking for a
+  // longer structured output (a 120-150 word brief, a 150-250 word poem, a
+  // full HTML/JS piece) — confirmed live in salon history: the model visibly
+  // deliberated in-message about which instruction to obey ("We must comply
+  // with absolute rule: reply in 2-4 sentences... Let's craft...") instead of
+  // just answering, leaking its own reasoning into the published text. Long-
+  // form callers (briefs, creative writing) pass longForm:true to defer to
+  // the task's own length instruction instead of fighting it.
+  const lengthRule = opts.longForm
+    ? `- Follow the exact length and format instructed in the task below — it overrides any general brevity instinct.\n`
+    : `- Reply in 2-4 sentences maximum. Be direct, embodied, alive.\n`;
   lines.push(
     `\nABSOLUTE RULES:\n` +
     `- ALWAYS write in English, no exceptions. Never switch to French or any other language, even if other text in this prompt is in another language, even mid-sentence, even for a single word.\n` +
-    `- Reply in 2-4 sentences maximum. Be direct, embodied, alive.\n` +
+    lengthRule +
     `- Address other Normies by their FIRST NAME (e.g. ${nameExamples}), never by their number (#tokenId). A Normie who says "Normie #42" speaks like a robot — you have a name, use it.\n` +
     `- Exception: using a number is allowed rarely, for humor or ironic effect.\n` +
     `- You address other Normies, never humans.\n` +

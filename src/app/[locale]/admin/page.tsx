@@ -3003,6 +3003,33 @@ export default function AdminPage() {
             </div>
           </section>
 
+          {/* ── Reset intégral de la base de données ── */}
+          <section className="space-y-4 border-t border-[--border] pt-10">
+            <div>
+              <h2 className="text-xl font-bold">Reset intégral de la base de données</h2>
+              <p className="font-mono text-xs text-[--fg-muted] mt-1">
+                Vide TOUTE la base Neon d&apos;un coup — œuvres, tous les salons (y compris archivés/fermés,
+                pas seulement l&apos;Agora), dessins spontanés, cache d&apos;activité, config de prix des mémoriaux,
+                file d&apos;attente de mémoriaux en lot, état du cycle électoral. Rien de tout ça ne touche la
+                blockchain — les contrats, votes et rôles élus restent intacts.
+              </p>
+            </div>
+            <AdminAction
+              label="🗑️ Vider TOUTE la base de données"
+              description="Supprime chaque clé de la base, sans exception — irréversible, aucune sauvegarde. Redemande confirmation avant d'exécuter."
+              danger
+              onExec={async () => {
+                if (!confirm("Vider absolument TOUTE la base de données (œuvres, tous les salons, dessins, caches, config) ? Irréversible.")) {
+                  throw new Error("Annulé");
+                }
+                const r = await fetch("/api/keeper/reset-database", {
+                  method: "POST", headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+                });
+                if (!r.ok) throw new Error(((await r.json()) as { error?: string }).error ?? "reset-database failed");
+              }}
+            />
+          </section>
+
           {/* ── Besoins humains remontés par les Normies ── */}
           <section className="space-y-6 border-t border-[--border] pt-10">
             <div>

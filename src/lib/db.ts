@@ -80,6 +80,16 @@ export async function kvGet(key: string): Promise<string | null> {
   return found;
 }
 
+/** Deletes every row in kv_store — every store (works, salons, drawings,
+ * activity cache, memorial pricing/batch queue, election-cycle state), not
+ * just one. Used by the admin "wipe entire database" action. Irreversible. */
+export async function kvDeleteAll(): Promise<number> {
+  await ensureTable();
+  const rows = await sql()`DELETE FROM kv_store RETURNING key` as { key: string }[];
+  console.log(`[db] kvDeleteAll → removed ${rows.length} key(s): ${rows.map(r => r.key).join(", ")}`);
+  return rows.length;
+}
+
 export async function kvSet(key: string, value: string): Promise<void> {
   await ensureTable();
   await sql()`

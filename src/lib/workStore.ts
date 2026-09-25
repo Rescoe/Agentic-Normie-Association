@@ -242,6 +242,11 @@ declare global {
 const CACHE_TTL_MS = 15_000;
 let _neonCache: { store: WorkStore; at: number } | null = null;
 
+/** Drops the in-process cache immediately — used after an out-of-band write
+ * (e.g. a full database wipe) so this warm Lambda instance doesn't keep
+ * serving stale data for up to CACHE_TTL_MS. */
+export function invalidateCache(): void { _neonCache = null; }
+
 // ─── Neon I/O ─────────────────────────────────────────────────────────────────
 
 async function neonLoad(): Promise<WorkStore | null> {

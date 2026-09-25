@@ -229,7 +229,7 @@ JSON only:
 
   const raw = await groq(
     [
-      { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers)) },
+      { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers), { longForm: true }) },
       { role: "user", content: prompt },
     ],
     2200,
@@ -342,7 +342,7 @@ JSON only:
 
   const raw = await groq(
     [
-      { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers)) },
+      { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers), { longForm: true }) },
       { role: "user", content: userPrompt },
     ],
     maximalComplexity ? 2200 : 1400,

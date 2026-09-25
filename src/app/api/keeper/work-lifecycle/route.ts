@@ -661,7 +661,7 @@ Respond in JSON:
 
   const rawBrief = await groq(
     [
-      { role: "system", content: buildSystemPrompt(rapporteur, others) },
+      { role: "system", content: buildSystemPrompt(rapporteur, others, { longForm: true }) },
       { role: "user",   content: userPrompt },
     ],
     work.isFoundingWork
@@ -788,7 +788,7 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
 
     artworkText = await groq(
       [
-        { role: "system", content: buildSystemPrompt(author, others) },
+        { role: "system", content: buildSystemPrompt(author, others, { longForm: true }) },
         {
           role: "user",
           content: `You are the Author of the work "${work.title}" (Normie #${author.tokenId}).
@@ -887,7 +887,7 @@ Generate ONLY the complete HTML, no explanations before or after.`,
 
     artworkText = await groq(
       [
-        { role: "system", content: buildSystemPrompt(author, others) },
+        { role: "system", content: buildSystemPrompt(author, others, { longForm: true }) },
         {
           role: "user",
           content: `You are the Author of the work "${work.title}".
