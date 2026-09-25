@@ -2,12 +2,13 @@ name: ANA — Activity Feed Catchup
 
 on:
   schedule:
-    # Every 5 minutes. Re-enabled 2026-09-16 after a manual catch-up (run with this
-    # schedule paused, to avoid racing it — see project_ana_activity_feed_bugs memory)
-    # brought the cursor from LAUNCH_FLOOR_BLOCK up past current. Steady-state scans are
-    # small (one WINDOW's worth of new blocks per tick), which is much less exposed to
-    # the free-RPC silent-empty-result issue than the marathon historical sweep was.
-    - cron: '*/5 * * * *'
+    # Was every 5 minutes (288 Neon touches/day) -- porteur's explicit cost call
+    # (25/09): this is by far the most frequent trigger in the whole app, more
+    # than salon-exchange (30min) or check-burns (was 15min). 20 minutes still
+    # keeps the cursor comfortably ahead of ever needing the expensive
+    # historical-sweep fallback (see project_ana_activity_feed_bugs memory)
+    # -- nothing here has a budget tighter than hours, not minutes.
+    - cron: '*/20 * * * *'
   workflow_dispatch:
 
 jobs:

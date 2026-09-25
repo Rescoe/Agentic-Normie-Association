@@ -2,12 +2,11 @@ name: ANA — Check Burns
 
 on:
   schedule:
-    # Every 15 min — detection itself is part of the ~4h burn -> vote ->
-    # display budget (see work-lifecycle's cascade for the rest), so it can't
-    # sit on a once-a-day cadence. The check itself is a single cheap
-    # totalSupply() read + a Neon comparison — no LLM call unless a burn is
-    # actually found, so frequent polling costs almost nothing.
-    - cron: '*/15 * * * *'
+    # Was every 15 min (96 Neon touches/day). Porteur's explicit cost call
+    # (25/09): 60 min still leaves ~3h of the ~4h burn -> vote -> display
+    # budget for the rest of the cascade (work-lifecycle), comfortably —
+    # nothing else in this pipeline runs on minute-level granularity anyway.
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
