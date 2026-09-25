@@ -27,6 +27,7 @@ import { registerMemorialOnChain, addReservedClaimsOnChain, addHonoredTokenIdsOn
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { oneMinAiCode } from "@/lib/oneMinAi";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
@@ -786,8 +787,7 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
     const authorTraits  = (author.traits ?? []).join(", ") || "—";
     const authorArch    = author.archetype ?? "Normie";
 
-    artworkText = await groq(
-      [
+    const htmlMessages: Array<{ role: "system" | "user"; content: string }> = [
         { role: "system", content: buildSystemPrompt(author, others, { longForm: true }) },
         {
           role: "user",
@@ -859,9 +859,18 @@ const CREATED_AT = ${Date.now()};
 ${selfCritiqueLine}
 Generate ONLY the complete HTML, no explanations before or after.`,
         },
-      ],
-      { maxTokens: scaledTokens(2500, work.ambitionLevel), temp: 0.95 }
-    );
+    ];
+
+    // DeepSeek V4.1 Flash via 1min.ai is the primary code model (see
+    // src/lib/oneMinAi.ts) -- falls back to the Groq reasoning model if
+    // ONE_MIN_AI_API_KEY isn't set yet, or the call fails for any reason, so
+    // a missing/misconfigured key degrades gracefully instead of stalling
+    // the whole pipeline.
+    artworkText = await oneMinAiCode(htmlMessages);
+    if (!artworkText) {
+      console.warn(`[work-lifecycle] CREATING: 1min.ai unavailable for "${work.title}" — falling back to Groq`);
+      artworkText = await groq(htmlMessages, { maxTokens: scaledTokens(2500, work.ambitionLevel), temp: 0.95 });
+    }
 
     if (artworkText) {
       const check = validateGenerativeHtml(artworkText, work.artForm);
