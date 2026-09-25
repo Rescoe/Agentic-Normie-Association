@@ -82,8 +82,21 @@ export function LiveEventsBanner() {
     // dominant driver of Neon compute cost. Member count / active works /
     // session deadline change on the order of minutes to hours in practice,
     // not seconds -- 3 minutes is still "live" for a passive banner.
-    const t = setInterval(fetchStatus, 180_000);
-    return () => clearInterval(t);
+    //
+    // Also stop polling entirely while the tab is hidden/backgrounded --
+    // real push (WebSockets/SSE) would need infrastructure this serverless
+    // setup doesn't have, but a tab nobody is looking at doesn't need to keep
+    // Neon awake at all. Catches up immediately on refocus.
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!interval) interval = setInterval(fetchStatus, 180_000); };
+    const stop  = () => { if (interval) { clearInterval(interval); interval = null; } };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") { fetchStatus(); start(); }
+      else stop();
+    };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
   }, [fetchStatus]);
 
   if (!status || !status.deployed) return null;

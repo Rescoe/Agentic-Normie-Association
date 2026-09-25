@@ -118,8 +118,24 @@ export async function groqFetch(
       return res;
     }
 
-    const retryAfter = parseFloat(res.headers.get("retry-after") ?? "0");
-    const waitMs     = retryAfter > 0 ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 30_000);
+    // Confirmed live (25/09): Groq's 429 doesn't reliably carry a
+    // Retry-After header for TPM (tokens-per-minute) limits -- the real wait
+    // time is in the error body's message text instead ("Please try again in
+    // 11.7s"). Without this, exponential backoff started at 1s, far short of
+    // the ~12s actually needed, so the very next retry hit the same 429
+    // again and burned the whole retry budget without ever recovering --
+    // visible as a second request failing right after the first succeeded.
+    // res.clone() so the body is still readable by the caller afterwards.
+    let waitMs = parseFloat(res.headers.get("retry-after") ?? "0") * 1000;
+    if (!waitMs) {
+      try {
+        const bodyText = await res.clone().text();
+        const match = bodyText.match(/try again in ([\d.]+)s/i);
+        if (match) waitMs = parseFloat(match[1]) * 1000;
+      } catch { /* fall through to exponential backoff below */ }
+    }
+    if (!waitMs) waitMs = Math.min(1000 * 2 ** attempt, 30_000);
+
     console.warn(`[groq] 429 rate limit — waiting ${Math.round(waitMs)}ms before retry ${attempt + 1}/${maxRetries}`);
     await new Promise(r => setTimeout(r, waitMs));
     attempt++;
