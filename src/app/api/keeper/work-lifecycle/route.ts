@@ -810,6 +810,11 @@ rendered inside a sandboxed iframe (sandbox="allow-scripts" — no same-origin, 
 Do NOT write any <meta http-equiv="Content-Security-Policy"> tag yourself — the server computes
 and serves a strict CSP for you (hash-based, no 'unsafe-inline'). Just write plain HTML/CSS/JS.
 
+CRITICAL SYNTAX RULE — check this before anything else: every HTML tag must include its opening
+"<" character (e.g. "<style>", "<script>", "<html>") and every JavaScript comparison must keep its
+operator (e.g. "i < 6", never "i 6"). Never drop a "<" character anywhere in your output, in HTML
+tags or in code. Before finishing, re-scan your entire output specifically for this.
+
 STRICT TECHNICAL CONSTRAINTS (on-chain security):
 - Start with <!DOCTYPE html> and <html lang="en">, end with </html>
 - Inline styles in <style>, inline JS in <script> — no inline event-handler attributes
