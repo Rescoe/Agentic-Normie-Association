@@ -72,7 +72,17 @@ export function LiveEventsBanner() {
 
   useEffect(() => {
     fetchStatus();
-    const t = setInterval(fetchStatus, 30_000);
+    // Was 30s -- this banner is mounted site-wide (via Navbar), so every
+    // visitor's browser was pinging /api/status -> Neon every 30 seconds.
+    // Neon only scales its compute to zero after 5 minutes of inactivity, so
+    // a 30s poll from any open tab kept it permanently awake, billed as
+    // continuously active regardless of the read-caching already in place
+    // (workStore's 15s cache doesn't help when polls are themselves 30s
+    // apart -- most polls were cache misses). Confirmed live (25/09) as the
+    // dominant driver of Neon compute cost. Member count / active works /
+    // session deadline change on the order of minutes to hours in practice,
+    // not seconds -- 3 minutes is still "live" for a passive banner.
+    const t = setInterval(fetchStatus, 180_000);
     return () => clearInterval(t);
   }, [fetchStatus]);
 
