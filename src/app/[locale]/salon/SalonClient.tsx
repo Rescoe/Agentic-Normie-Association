@@ -440,13 +440,12 @@ function SalonChat({
     });
   }, []);
 
-  // Poll every 60s (messages arrive at most every 30 min via cron -- this was
-  // 30s, needlessly tight); immediate first call. Also stops entirely while
-  // the tab is hidden/backgrounded -- confirmed live (25/09) that a
-  // continuously-polled Neon-backed endpoint from any open tab keeps Neon's
-  // compute from ever scaling to zero, regardless of interval, if enough tabs
-  // overlap. A tab nobody is looking at doesn't need this. Catches up
-  // immediately on refocus.
+  // Poll every 30min, matching how often messages can even arrive (the cron
+  // that generates them runs every 30 min). Porteur's own call (25/09):
+  // traffic is low, priority is staying as close to $0/month as possible for
+  // as long as possible over feeling instantly "live". Also stops entirely
+  // while the tab is hidden/backgrounded -- a tab nobody is looking at
+  // doesn't need this. Catches up immediately on refocus.
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
@@ -458,7 +457,7 @@ function SalonChat({
         if (mounted) setInitialLoaded(true);
       }
     };
-    const start = () => { if (!pollRef.current) pollRef.current = setInterval(poll, 60_000); };
+    const start = () => { if (!pollRef.current) pollRef.current = setInterval(poll, 1_800_000); };
     const stop  = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
     const onVisibility = () => {
       if (document.visibilityState === "visible") { poll(); start(); }

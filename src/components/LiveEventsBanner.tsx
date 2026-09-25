@@ -72,23 +72,19 @@ export function LiveEventsBanner() {
 
   useEffect(() => {
     fetchStatus();
-    // Was 30s -- this banner is mounted site-wide (via Navbar), so every
-    // visitor's browser was pinging /api/status -> Neon every 30 seconds.
-    // Neon only scales its compute to zero after 5 minutes of inactivity, so
-    // a 30s poll from any open tab kept it permanently awake, billed as
-    // continuously active regardless of the read-caching already in place
-    // (workStore's 15s cache doesn't help when polls are themselves 30s
-    // apart -- most polls were cache misses). Confirmed live (25/09) as the
-    // dominant driver of Neon compute cost. Member count / active works /
-    // session deadline change on the order of minutes to hours in practice,
-    // not seconds -- 3 minutes is still "live" for a passive banner.
+    // Was 30s, then 3min -- this banner is mounted site-wide (via Navbar), so
+    // every visitor's browser was pinging /api/status -> Neon. Porteur's own
+    // call (25/09): traffic is low enough, and this data changes slowly
+    // enough (member count / active works / session deadline), that the
+    // priority is staying as close to $0/month as possible over feeling
+    // "live" -- 30 minutes.
     //
     // Also stop polling entirely while the tab is hidden/backgrounded --
     // real push (WebSockets/SSE) would need infrastructure this serverless
     // setup doesn't have, but a tab nobody is looking at doesn't need to keep
     // Neon awake at all. Catches up immediately on refocus.
     let interval: ReturnType<typeof setInterval> | null = null;
-    const start = () => { if (!interval) interval = setInterval(fetchStatus, 180_000); };
+    const start = () => { if (!interval) interval = setInterval(fetchStatus, 1_800_000); };
     const stop  = () => { if (interval) { clearInterval(interval); interval = null; } };
     const onVisibility = () => {
       if (document.visibilityState === "visible") { fetchStatus(); start(); }
