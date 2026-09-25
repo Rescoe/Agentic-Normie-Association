@@ -742,6 +742,32 @@ function scaledTokens(base: number, ambitionLevel?: ANAWork["ambitionLevel"]): n
   return Math.round(base * AMBITION_TOKEN_SCALE[ambitionLevel ?? "standard"]);
 }
 
+// A deliberately varied set of structural starting points for generative
+// HTML/JS works -- added 25/09/2026 after real tests of the primary code
+// model (DeepSeek V4.1 Flash) showed it converging on the same "particles
+// orbiting/colliding around a center" scaffold by default, regardless of the
+// brief. One is picked deterministically per work (hash of work.id) so the
+// same work always gets the same suggestion on retry/revision, but different
+// works land on different structures without needing new stored state.
+const COMPOSITION_APPROACHES = [
+  "a flow-field: motion driven by a noise/vector field rather than orbits or springs",
+  "growth/branching: a recursive or L-system-like structure that grows over time (roots, cracks, veins, coral)",
+  "a deforming grid/lattice: a regular grid of cells whose size, color or rotation ripples across it over time",
+  "typography as material: letters or glyphs ARE the visual substance -- scattering, reforming, distorting (never printed as a plain caption)",
+  "a cellular automaton or reaction-diffusion rule evolving the canvas frame by frame",
+  "a wave or heightfield surface rippling/oscillating, 2D or pseudo-3D",
+  "flocking/agent behavior: many small independent agents with local steering rules (separation/alignment/cohesion), not a single shared orbit",
+  "fractal recursion: a shape recursively redrawn at shrinking scales, rotating or zooming",
+  "radial/kaleidoscope symmetry: mirrored or rotated repetition around a center, mandala-like",
+  "orbiting or colliding shapes around a shared center",
+];
+
+function pickCompositionApproach(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return COMPOSITION_APPROACHES[hash % COMPOSITION_APPROACHES.length];
+}
+
 /**
  * Lists this Author's own past published works (title, form, ambition, and any
  * community critique) so they don't just see ANA's history in general — they
@@ -804,6 +830,12 @@ Ambition level for this piece: ${work.ambitionLevel ?? "standard"}${
   : work.ambitionLevel === "quick" ? " — keep it small and intimate, a quick precise gesture is the goal here."
   : ""
 }
+
+SUGGESTED STRUCTURAL DIRECTION (not mandatory — ignore it if the brief or your own instinct clearly
+calls for something else, but if you don't have a strong idea of your own, start here rather than
+reaching for "particles orbiting/colliding around a center" out of habit): ${pickCompositionApproach(work.id)}.
+ANA's gallery should read as genuinely varied — different structural logic piece to piece, not the
+same swarm pattern re-skinned with a new palette each time.
 
 Generate a COMPLETE, STANDALONE HTML page. It will be stored immutably on-chain on Base and
 rendered inside a sandboxed iframe (sandbox="allow-scripts" — no same-origin, no network).
