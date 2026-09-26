@@ -1,7 +1,7 @@
 /**
  * db.ts — Neon Postgres key-value store (replaces Vercel Blob).
  *
- * Table schema (auto-created on first use):
+ * Table schema (created once via migrations.ts, see 0005_kv_store_and_tx_log):
  *   kv_store(key TEXT PK, value TEXT, updated_at TIMESTAMPTZ)
  *
  * Env var: NEON_DB_ANA (connection string from Neon dashboard).
@@ -57,23 +57,13 @@ export function sql() {
   return _sql;
 }
 
-let _tableReady = false;
-
-async function ensureTable() {
-  if (_tableReady) return;
-  await sql()`
-    CREATE TABLE IF NOT EXISTS kv_store (
-      key        TEXT PRIMARY KEY,
-      value      TEXT NOT NULL,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `;
-  _tableReady = true;
-  console.log("[db] kv_store table ready");
-}
+// Schema for kv_store lives in migrations.ts (0005_kv_store_and_tx_log), run
+// once via `npm run db:migrate` -- NOT here. Re-issuing CREATE TABLE IF NOT
+// EXISTS on every call was flagged in the Sept 2026 Neon cost audit as 435
+// wasted DDL round trips in 12h (one per cold Lambda instance, since the old
+// _tableReady guard only lived for that one instance's lifetime).
 
 export async function kvGet(key: string): Promise<string | null> {
-  await ensureTable();
   const rows = await sql()`SELECT value FROM kv_store WHERE key = ${key}` as { value: string }[];
   const found = rows[0]?.value ?? null;
   console.log(`[db] kvGet(${key}) → ${found ? `${found.length} chars` : "null"}`);
@@ -84,14 +74,12 @@ export async function kvGet(key: string): Promise<string | null> {
  * activity cache, memorial pricing/batch queue, election-cycle state), not
  * just one. Used by the admin "wipe entire database" action. Irreversible. */
 export async function kvDeleteAll(): Promise<number> {
-  await ensureTable();
   const rows = await sql()`DELETE FROM kv_store RETURNING key` as { key: string }[];
   console.log(`[db] kvDeleteAll → removed ${rows.length} key(s): ${rows.map(r => r.key).join(", ")}`);
   return rows.length;
 }
 
 export async function kvSet(key: string, value: string): Promise<void> {
-  await ensureTable();
   await sql()`
     INSERT INTO kv_store (key, value, updated_at)
     VALUES (${key}, ${value}, NOW())
@@ -111,14 +99,12 @@ export async function kvSet(key: string, value: string): Promise<void> {
  * store has (any change to any one record rewrites everything).
  */
 export async function kvListByPrefix(prefix: string): Promise<Array<{ key: string; value: string }>> {
-  await ensureTable();
   const rows = await sql()`SELECT key, value FROM kv_store WHERE key LIKE ${prefix + "%"}` as { key: string; value: string }[];
   return rows;
 }
 
 /** Deletes every row whose key starts with `prefix`. Returns the count removed. */
 export async function kvDeleteByPrefix(prefix: string): Promise<number> {
-  await ensureTable();
   const rows = await sql()`DELETE FROM kv_store WHERE key LIKE ${prefix + "%"} RETURNING key` as { key: string }[];
   return rows.length;
 }

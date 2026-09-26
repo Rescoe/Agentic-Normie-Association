@@ -47,14 +47,12 @@ interface SalonMessage {
   id: string; tokenId: number; name: string; imageUrl: string;
   content: string; timestamp: number; isLlm: boolean;
 }
-// GET /api/salon (list) is now compact and carries no message history — see
-// salonStore.ts's Salon type — so this widget fetches the Agora's own detail
-// endpoint (GET /api/salon/[id]) directly instead, which still returns full
-// messages for that one salon.
-interface SalonDetail { id: string; name: string; messages: SalonMessage[] }
 interface RecentBurn { tokenId: number; imageUrl: string; burnedAt: string }
-
-const AGORA_SALON_ID = "salon_agora_ana";
+// Single cached snapshot (GET /api/home-snapshot, s-maxage=120) instead of
+// three separate live fetches -- one of which (GET /api/salon/[id]) used to
+// hit Neon 5+ times per homepage visit with no cache at all. See that
+// route's own comment for the Sept 2026 cost-audit context.
+interface HomeSnapshot { works: ANAWork[]; agoraMessages: SalonMessage[]; recentBurns: RecentBurn[] }
 
 export function HomeLiveActivity() {
   const [works, setWorks] = useState<ANAWork[] | null>(null);
@@ -64,17 +62,11 @@ export function HomeLiveActivity() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.allSettled([
-      fetch("/api/works").then(r => r.json()) as Promise<ANAWork[]>,
-      fetch(`/api/salon/${AGORA_SALON_ID}`).then(r => r.json()) as Promise<{ salon?: SalonDetail }>,
-      fetch("/api/burns/stats").then(r => r.json()) as Promise<{ recentBurns: RecentBurn[] }>,
-    ]).then(([worksRes, salonRes, burnsRes]) => {
+    fetch("/api/home-snapshot").then(r => r.json() as Promise<HomeSnapshot>).then(snapshot => {
       if (cancelled) return;
-      if (worksRes.status === "fulfilled") setWorks(worksRes.value);
-      if (salonRes.status === "fulfilled") {
-        setAgoraMessages((salonRes.value.salon?.messages ?? []).slice(-5).reverse());
-      }
-      if (burnsRes.status === "fulfilled") setRecentBurns((burnsRes.value.recentBurns ?? []).slice(0, 8));
+      setWorks(snapshot.works ?? []);
+      setAgoraMessages((snapshot.agoraMessages ?? []).slice(0, 5));
+      setRecentBurns((snapshot.recentBurns ?? []).slice(0, 8));
       setLoaded(true);
     }).catch(() => setLoaded(true));
     return () => { cancelled = true; };

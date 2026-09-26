@@ -191,13 +191,23 @@ export async function listSalons(): Promise<Salon[]> {
   return [...s.salons.values()].sort((a, b) => b.createdAt - a.createdAt).map(localRowToCompact);
 }
 
+// The Agora row is created once, ever -- ON CONFLICT DO NOTHING made this
+// safe to call repeatedly, but it was still re-issuing a write query on
+// EVERY getSalon(AGORA_SALON_ID) call (including every homepage visit and
+// every 30-min poll of an open salon tab) long after the row existed. This
+// per-instance flag skips it once it's confirmed present; a fresh Lambda
+// instance re-checks once and skips forever after that.
+let _agoraReady = false;
+
 async function ensureAgoraNeon(): Promise<void> {
+  if (_agoraReady) return;
   await query(
     `INSERT INTO salons (id, name, description, created_by, created_at, members, excluded, is_open, current_topic)
      VALUES ($1,$2,$3,0,$4,'[]','[]',TRUE,NULL)
      ON CONFLICT (id) DO NOTHING`,
     [AGORA_SALON_ID, "Agora ANA", "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.", Date.now()],
   );
+  _agoraReady = true;
 }
 
 export async function getSalon(id: string): Promise<SalonDetail | null> {

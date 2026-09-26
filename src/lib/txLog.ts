@@ -26,42 +26,16 @@ export interface TxLogEntry {
   resultData?:    Record<string, unknown>;
 }
 
-let _tableReady = false;
-
-async function ensureTable() {
-  if (_tableReady || !USE_NEON) return;
-  await sql()`
-    CREATE TABLE IF NOT EXISTS tx_log (
-      tx_hash       TEXT PRIMARY KEY,
-      type          TEXT NOT NULL,
-      initiator     TEXT NOT NULL,
-      contract_name TEXT NOT NULL,
-      function_name TEXT NOT NULL,
-      from_address  TEXT,
-      work_id       TEXT,
-      status        TEXT NOT NULL DEFAULT 'pending',
-      block_number  BIGINT,
-      error         TEXT,
-      result_data   JSONB,
-      created_at    TIMESTAMPTZ DEFAULT NOW(),
-      confirmed_at  TIMESTAMPTZ
-    )
-  `;
-  // Added after the table already existed in prod — ALTER ... ADD COLUMN IF NOT EXISTS
-  // backfills it on existing deployments without a separate migration step.
-  await sql()`ALTER TABLE tx_log ADD COLUMN IF NOT EXISTS target_address TEXT`;
-  await sql()`ALTER TABLE tx_log ADD COLUMN IF NOT EXISTS related_token_id INTEGER`;
-  await sql()`ALTER TABLE tx_log ADD COLUMN IF NOT EXISTS label TEXT`;
-  await sql()`CREATE INDEX IF NOT EXISTS tx_log_created_at_idx ON tx_log (created_at DESC)`;
-  await sql()`CREATE INDEX IF NOT EXISTS tx_log_work_id_idx ON tx_log (work_id)`;
-  _tableReady = true;
-}
+// Schema lives in migrations.ts (0005_kv_store_and_tx_log), run once via
+// `npm run db:migrate` -- NOT here. This used to replay CREATE TABLE + 3
+// ALTER TABLE + 2 CREATE INDEX on every cold Lambda instance (Sept 2026 Neon
+// cost audit found 24 full replays in 12h), gated only by a per-instance
+// boolean that never survived a new instance.
 
 /** Call right after a tx hash comes back from the wallet/relayer, before waiting for the receipt. */
 export async function logTxSubmitted(entry: TxLogEntry): Promise<void> {
   if (!USE_NEON) return;
   try {
-    await ensureTable();
     await sql()`
       INSERT INTO tx_log (tx_hash, type, initiator, contract_name, function_name, from_address, target_address, work_id, related_token_id, label, status)
       VALUES (${entry.txHash}, ${entry.type}, ${entry.initiator}, ${entry.contractName}, ${entry.functionName},
@@ -82,7 +56,6 @@ export async function logTxConfirmed(
 ): Promise<void> {
   if (!USE_NEON) return;
   try {
-    await ensureTable();
     await sql()`
       UPDATE tx_log
       SET status = 'confirmed', block_number = ${blockNumber ? Number(blockNumber) : null},
@@ -98,7 +71,6 @@ export async function logTxConfirmed(
 export async function logTxFailed(txHash: string, error: string): Promise<void> {
   if (!USE_NEON) return;
   try {
-    await ensureTable();
     await sql()`
       UPDATE tx_log SET status = 'failed', error = ${error.slice(0, 500)}, confirmed_at = NOW()
       WHERE tx_hash = ${txHash}
@@ -118,7 +90,6 @@ export async function updateTxLabel(
 ): Promise<void> {
   if (!USE_NEON || (label === undefined && relatedTokenId === undefined)) return;
   try {
-    await ensureTable();
     await sql()`
       UPDATE tx_log
       SET label = COALESCE(label, ${label ?? null}),
@@ -133,7 +104,6 @@ export async function updateTxLabel(
 /** Rows missing a label or related_token_id — candidates for the re-decode backfill. */
 export async function listIncompleteTxLog(limit = 500): Promise<TxLogRow[]> {
   if (!USE_NEON) return [];
-  await ensureTable();
   const rows = await sql()`
     SELECT * FROM tx_log WHERE label IS NULL OR related_token_id IS NULL
     ORDER BY created_at DESC LIMIT ${limit}
@@ -162,7 +132,6 @@ export interface TxLogRow {
 
 export async function listTxLog(limit = 100): Promise<TxLogRow[]> {
   if (!USE_NEON) return [];
-  await ensureTable();
   const rows = await sql()`
     SELECT * FROM tx_log ORDER BY created_at DESC LIMIT ${limit}
   ` as TxLogRow[];

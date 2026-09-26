@@ -237,6 +237,47 @@ export const MIGRATIONS: Migration[] = [
       )`,
     ],
   },
+  {
+    // Sept 2026 Neon cost audit found kv_store and tx_log were the only two
+    // tables still being schema-created at REQUEST TIME (db.ts's and
+    // txLog.ts's own ensureTable(), gated by a per-Lambda-instance boolean
+    // that resets on every cold start) -- 435 CREATE TABLE + 24 full
+    // ALTER/INDEX replays in 12h of Query Performance stats, on top of being
+    // pure waste after the very first instance ever created them. Both
+    // tables already exist in every deployed environment (created by that
+    // runtime DDL previously), so this migration is a no-op there; it only
+    // matters for a genuinely fresh Neon branch. Column set mirrors tx_log's
+    // final shape (base CREATE + the 3 ALTER TABLE ADD COLUMNs it used to
+    // replay every cold start) so a fresh branch gets the end state directly.
+    id: "0005_kv_store_and_tx_log",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS kv_store (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE TABLE IF NOT EXISTS tx_log (
+        tx_hash           TEXT PRIMARY KEY,
+        type              TEXT NOT NULL,
+        initiator         TEXT NOT NULL,
+        contract_name     TEXT NOT NULL,
+        function_name     TEXT NOT NULL,
+        from_address      TEXT,
+        target_address    TEXT,
+        work_id           TEXT,
+        related_token_id  INTEGER,
+        label             TEXT,
+        status            TEXT NOT NULL DEFAULT 'pending',
+        block_number      BIGINT,
+        error             TEXT,
+        result_data       JSONB,
+        created_at        TIMESTAMPTZ DEFAULT NOW(),
+        confirmed_at      TIMESTAMPTZ
+      )`,
+      `CREATE INDEX IF NOT EXISTS tx_log_created_at_idx ON tx_log (created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS tx_log_work_id_idx ON tx_log (work_id)`,
+    ],
+  },
 ];
 
 async function ensureMigrationsTable(): Promise<void> {
