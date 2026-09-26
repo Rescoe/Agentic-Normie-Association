@@ -1434,10 +1434,23 @@ export function WorksClient() {
         .then((works: ANAWork[]) => setAllWorks(works))
         .catch(() => null);
     };
+    // Was 20s -- this page pinged /api/works -> Neon often enough (same as
+    // WorkInProgress's homepage widget) that a single tab left open on /works
+    // kept resetting Neon's 5-minute scale-to-zero timer indefinitely (Sept
+    // 2026 cost audit). Same fix as LiveEventsBanner/WorkInProgress: 30
+    // minutes, paused while the tab is hidden, refetches immediately on
+    // refocus so a tab left open still catches up once looked at again.
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!interval) interval = setInterval(load, 1_800_000); };
+    const stop  = () => { if (interval) { clearInterval(interval); interval = null; } };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") { load(); start(); }
+      else stop();
+    };
     load();
-    // Without polling, a tab left open never sees works progress past their state at load time.
-    const id = setInterval(load, 20_000);
-    return () => clearInterval(id);
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
   }, []);
 
   // Batch-resolve real Normie names (stored names may be stale "Normie #XXXX")

@@ -82,9 +82,26 @@ export function WorkInProgress() {
       } catch { /* ignore */ }
       finally { if (mounted) setLoading(false); }
     };
+    // Was 15s -- this component is mounted on the homepage, so every visitor
+    // (or a tab left open, per Neon's Sept 2026 cost audit) pinged /api/works
+    // -> Neon often enough to keep the compute's 5-minute scale-to-zero timer
+    // from ever completing, same root cause as LiveEventsBanner's. Same fix:
+    // 30 minutes, paused entirely while the tab is hidden/backgrounded.
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!interval) interval = setInterval(load, 1_800_000); };
+    const stop  = () => { if (interval) { clearInterval(interval); interval = null; } };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") { load(); start(); }
+      else stop();
+    };
     load();
-    const id = setInterval(load, 15_000);
-    return () => { mounted = false; clearInterval(id); };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      mounted = false;
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   // Batch-resolve real Normie names for everyone involved across all active works
