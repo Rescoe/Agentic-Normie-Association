@@ -5,7 +5,11 @@ import { getActiveWorks } from "@/lib/workStore";
 
 // Cached at the edge (Sept 2026 cost audit) -- backs LiveEventsBanner, which
 // is mounted site-wide via Navbar, so this was the single most-hit route.
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120" };
+// Was 30s; extended to 30 minutes (26/09 follow-up audit, explicitly
+// approved) -- the banner already only polls every 30 min client-side, so a
+// 30s edge cache was only ever protecting against concurrent-visitor bursts,
+// not the polling itself. Matching the two windows removes the redundancy.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
 
 export async function GET() {
   const [stats, activeWorks] = await Promise.all([

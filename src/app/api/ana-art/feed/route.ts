@@ -5,6 +5,16 @@ import { listDrawings } from "@/lib/drawStore";
 
 const FEED_SECRET = process.env.ANA_ART_FEED_SECRET ?? "";
 
+// proof-of-draw already debounces its own caller (maybeCheckAnaFeed) to at
+// most one real fetch per ANA_FEED_CHECK_DEBOUNCE_SEC (default 60s) via a
+// shared Redis lock on ITS side -- but this route itself had no caching at
+// all on ANA's side, meaning a shorter debounce there, a manual
+// checkAnaFeedNow() trigger, or any other future caller would hit the full
+// workStore/drawStore blobs uncached. Matching cache window as a backstop
+// (found while auditing whether proof-of-draw adds to ANA's Neon load,
+// 26/09).
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
+
 export interface AnaArtFeedItem {
   id:             string;
   kind:           "celebration" | "spontaneous";
@@ -68,5 +78,5 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.publishedAt - a.publishedAt)
     .slice(0, limit);
 
-  return NextResponse.json({ items });
+  return NextResponse.json({ items }, { headers: CACHE_HEADERS });
 }
