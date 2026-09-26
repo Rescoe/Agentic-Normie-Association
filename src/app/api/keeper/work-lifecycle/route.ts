@@ -312,18 +312,30 @@ If vote "yes": which role suits you in this creation? ("author" = create, "curat
       { role: "system", content: buildSystemPrompt(persona) },
       { role: "user", content: userContent },
     ],
-    { model: MODEL_FAST, maxTokens: 120, temp: 0.75, expectJson: true }
+    // Was 120 -- MODEL_FAST is Groq's reasoning model (openai/gpt-oss-120b),
+    // which spends tokens on hidden reasoning before writing the final JSON.
+    // At 120 tokens it routinely ran out before reaching {"vote":...}, and
+    // the fallback below used to silently record that as "abstain" -- which
+    // is why every vote kept coming back 0 yes / 0 no and no work could ever
+    // pass (tallyVotes() requires yes > no). Same root cause already fixed
+    // for proposeWork.ts/salon-exchange's JSON calls (350->900); missed here.
+    { model: MODEL_FAST, maxTokens: 500, temp: 0.75, expectJson: true }
   );
   if (!raw) return null;
 
   try {
     const parsed = extractJsonObject(raw) as { vote?: string; reason?: string; interestedIn?: string };
+    // A genuinely malformed/missing vote field is a failed attempt, not a
+    // real abstention -- return null so stepVoteOpen() leaves this persona
+    // in notVoted and retries them next tick, instead of permanently
+    // recording an abstain that was never actually decided. The vote
+    // window's own timeout (stepVoteOpen) is the backstop if a persona
+    // never manages to produce a valid vote before it closes.
+    if (!(["yes", "no", "abstain"] as const).includes(parsed.vote as "yes")) return null;
     return {
       tokenId:      persona.tokenId,
       name:         persona.name,
-      vote:         (["yes", "no", "abstain"] as const).includes(parsed.vote as "yes")
-        ? (parsed.vote as WorkVote["vote"])
-        : "abstain",
+      vote:         parsed.vote as WorkVote["vote"],
       reason:       parsed.reason?.slice(0, 300) ?? "",
       votedAt:      Date.now(),
       interestedIn: (["author", "curator", "none"] as const).includes(parsed.interestedIn as "author")
@@ -1093,7 +1105,10 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
 }}`,
       },
     ],
-    { model: MODEL_FAST, maxTokens: 180, temp: 0.5, expectJson: true }
+    // Was 180 -- same reasoning-model truncation risk as castVote() above,
+    // silently defaulting to "not approved" (an extra unneeded revision
+    // cycle) whenever the model ran out of budget before writing the JSON.
+    { model: MODEL_FAST, maxTokens: 500, temp: 0.5, expectJson: true }
   );
 
   if (!raw) return false;
