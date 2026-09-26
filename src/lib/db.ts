@@ -100,3 +100,25 @@ export async function kvSet(key: string, value: string): Promise<void> {
   `;
   console.log(`[db] kvSet(${key}) → ${value.length} chars written`);
 }
+
+/**
+ * Reads every row whose key starts with `prefix` in ONE query — the basis
+ * for "one row per record" stores (workStore.ts) instead of one giant blob
+ * per store. A single query still returns every matching row in one round
+ * trip (same shape as reading one big JSON blob), but each individual
+ * record can then be read/written on its own via kvGet/kvSet without ever
+ * touching the others -- eliminating the write-amplification a single-blob
+ * store has (any change to any one record rewrites everything).
+ */
+export async function kvListByPrefix(prefix: string): Promise<Array<{ key: string; value: string }>> {
+  await ensureTable();
+  const rows = await sql()`SELECT key, value FROM kv_store WHERE key LIKE ${prefix + "%"}` as { key: string; value: string }[];
+  return rows;
+}
+
+/** Deletes every row whose key starts with `prefix`. Returns the count removed. */
+export async function kvDeleteByPrefix(prefix: string): Promise<number> {
+  await ensureTable();
+  const rows = await sql()`DELETE FROM kv_store WHERE key LIKE ${prefix + "%"} RETURNING key` as { key: string }[];
+  return rows.length;
+}

@@ -195,14 +195,6 @@ interface DispatchRotation {
   reviewer:   number;
 }
 
-interface WorkStore {
-  works:             Record<string, ANAWork>;
-  // lastNormieSupply used to live here -- moved to its own Neon row, see
-  // "Burn tracking" below. Old blobs may still carry a stale copy of this
-  // field; it's simply ignored now, not worth a data migration to strip it.
-  dispatchRotation?: DispatchRotation;
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
@@ -219,70 +211,55 @@ export const VOTE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h max for voting
 // (src/app/api/keeper/salon-exchange/route.ts) is enough for that.
 export const CELEBRATION_VOTE_WINDOW_MS = 20 * 60 * 1000;
 
-const NEON_KEY    = "work-store";
-const DATA_FILE   = path.join(process.cwd(), "data", "works.json");
+// One Neon row per work ("work:<id>"), not one giant blob for the whole
+// list. Rebuilt from scratch (Sept 2026 cost audit, 2nd pass) rather than
+// migrated -- the project was already about to wipe every work as part of a
+// full contract redeploy, so there was no existing data worth preserving
+// through a migration. The old single-blob model meant ANY change to ANY
+// one work (a single vote, a state advance) rewrote the ENTIRE list back to
+// Neon -- with the list at ~1.4MB for just 15 works, that's the single
+// biggest cost driver this audit found. Per-row storage means a write's cost
+// is proportional to that one work's own size, never the whole list's.
+//
+// listWorks() (and everything built on it: getActiveWorks, getFoundingWork,
+// getWorkBySalonId, getSalonWorkOutcomes) still needs every work's full
+// data, so it still costs one query returning N rows -- same as reading one
+// blob, no worse. What's gone is the WRITE amplification: updateWork(),
+// advanceState(), addVote() now each touch exactly one row.
+const WORK_KEY_PREFIX = "work:";
+const DISPATCH_KEY    = "dispatch-rotation";
+const DATA_FILE       = path.join(process.cwd(), "data", "works.json");
 
-// ─── Global cache ─────────────────────────────────────────────────────────────
+// Local dev fallback (no NEON_DB_ANA configured) keeps the old single-file
+// shape -- there's no Neon cost to optimize against on a local disk, so
+// splitting local dev storage into one file per work would only add
+// complexity for zero benefit.
+interface LocalWorkStore {
+  works:             Record<string, ANAWork>;
+  dispatchRotation?: DispatchRotation;
+}
 
 declare global {
   // eslint-disable-next-line no-var
-  var __anaWorkStore: WorkStore | undefined;
+  var __anaWorkStore: LocalWorkStore | undefined;
 }
 
-// ─── In-process read cache (Neon mode only) ───────────────────────────────────
-// This store's payload is ~1.4MB and getStore() was fetching it fresh from
-// Neon on every single call, with zero caching -- confirmed live (24/09) as
-// the direct cause of exhausting a 5GB/month Neon transfer quota in 8 days:
-// /api/status alone polls every ~30-60s, and several routes independently
-// call into workStore multiple times per request (a page load's burst of
-// /api/works/certificate/[id] calls, each a separate 1.4MB fetch). Mirrors
-// the same pattern already in salonStore.ts, just never ported here even
-// though this store's payload is by far the larger of the two. Bypassed by
-// mutate()'s own base read (always goes straight to neonLoad()) so its
-// existing anti-shrink concurrent-writer check keeps working against
-// genuinely fresh data, not a stale cached copy.
-const CACHE_TTL_MS = 15_000;
-let _neonCache: { store: WorkStore; at: number } | null = null;
-
-/** Drops the in-process cache immediately — used after an out-of-band write
- * (e.g. a full database wipe) so this warm Lambda instance doesn't keep
- * serving stale data for up to CACHE_TTL_MS. */
-export function invalidateCache(): void { _neonCache = null; }
-
-// ─── Neon I/O ─────────────────────────────────────────────────────────────────
-
-async function neonLoad(): Promise<WorkStore | null> {
-  try {
-    const { kvGet, USE_NEON } = await import("./db");
-    if (!USE_NEON) return null;
-    const raw = await kvGet(NEON_KEY);
-    if (!raw) return null;
-    const s = JSON.parse(raw) as WorkStore;
-    if (!s.works) s.works = {};
-    return s;
-  } catch (e) {
-    console.error("[workStore] neonLoad error:", e);
-    return null;
-  }
+async function useNeon(): Promise<boolean> {
+  const { USE_NEON } = await import("./db");
+  return USE_NEON;
 }
 
 // Once a work reaches one of these states it is done changing, and its full
 // on-chain record already exists (the certificate built in stepPublishing
 // bakes in every vote reason and the whole state history permanently — see
-// buildWorkHtml below). Unlike salon-store, this store has never pruned
-// anything, so every terminal work's bulkiest free-text fields keep getting
-// re-transferred to Neon on every single write to a completely different,
-// currently-active work.
+// buildWorkHtml below).
 const TERMINAL_STATES: WorkState[] = ["PUBLISHED", "REJECTED"];
 
 /**
  * Trims the bulkiest free-text fields (vote reasons, state-history notes) on
- * terminal-state works before they're written to Neon. Mirrors the principle
- * already applied to salon-store (see salonStore.ts's neonSave): prune only
- * what's persisted, never the in-memory copy, and only once a work is no
- * longer being actively worked on. artworkText (the actual creative output)
- * and every summary field the gallery displays (yesCount, title, artForm...)
- * are left untouched.
+ * terminal-state works before they're written to Neon. artworkText (the
+ * actual creative output) and every summary field the gallery displays
+ * (yesCount, title, artForm...) are left untouched.
  */
 function pruneWorkForStorage(w: ANAWork): ANAWork {
   if (!TERMINAL_STATES.includes(w.state)) return w;
@@ -295,29 +272,55 @@ function pruneWorkForStorage(w: ANAWork): ANAWork {
   };
 }
 
-async function neonSave(store: WorkStore): Promise<void> {
+// ─── In-process read cache (Neon mode only) ───────────────────────────────────
+// Caches the full "list every work" query for a short window -- avoids
+// repeating that one query for every sub-call within the same request burst
+// or warm Lambda invocation. A single work's read/write (getWork, updateWork,
+// advanceState, addVote) never goes through this cache: it targets its own
+// row directly, which is now cheap enough not to need caching at all.
+const CACHE_TTL_MS = 15_000;
+let _listCache: { works: Record<string, ANAWork>; at: number } | null = null;
+
+/** Drops the in-process list cache immediately — used after an out-of-band
+ * write (e.g. a full database wipe) so this warm Lambda instance doesn't
+ * keep serving stale data for up to CACHE_TTL_MS. */
+export function invalidateCache(): void { _listCache = null; }
+
+async function neonListAllWorks(): Promise<Record<string, ANAWork>> {
+  const works: Record<string, ANAWork> = {};
   try {
-    const { kvSet, USE_NEON } = await import("./db");
-    if (!USE_NEON) return;
-    const pruned: WorkStore = {
-      ...store,
-      works: Object.fromEntries(
-        Object.entries(store.works).map(([id, w]) => [id, pruneWorkForStorage(w)])
-      ),
-    };
-    await kvSet(NEON_KEY, JSON.stringify(pruned));
-    console.log(`[workStore] saved to Neon — ${Object.keys(store.works).length} works`);
+    const { kvListByPrefix } = await import("./db");
+    const rows = await kvListByPrefix(WORK_KEY_PREFIX);
+    for (const { key, value } of rows) {
+      try {
+        works[key.slice(WORK_KEY_PREFIX.length)] = JSON.parse(value) as ANAWork;
+      } catch (e) {
+        console.error(`[workStore] failed to parse ${key}:`, e);
+      }
+    }
   } catch (e) {
-    console.error("[workStore] neonSave error:", e);
+    console.error("[workStore] neonListAllWorks error:", e);
   }
+  return works;
+}
+
+async function getAllWorks(): Promise<Record<string, ANAWork>> {
+  if (await useNeon()) {
+    if (_listCache && Date.now() - _listCache.at < CACHE_TTL_MS) return _listCache.works;
+    const works = await neonListAllWorks();
+    _listCache = { works, at: Date.now() };
+    return works;
+  }
+  if (!global.__anaWorkStore) global.__anaWorkStore = fileLoad();
+  return global.__anaWorkStore.works;
 }
 
 // ─── Local file I/O (dev fallback when NEON_DB_ANA is not set) ───────────────
 
-function fileLoad(): WorkStore {
+function fileLoad(): LocalWorkStore {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      const s = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as WorkStore;
+      const s = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as LocalWorkStore;
       if (!s.works) s.works = {};
       return s;
     }
@@ -325,7 +328,7 @@ function fileLoad(): WorkStore {
   return { works: {} };
 }
 
-function fileSave(store: WorkStore): void {
+function fileSave(store: LocalWorkStore): void {
   try {
     fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
     const tmp = DATA_FILE + ".tmp";
@@ -334,87 +337,69 @@ function fileSave(store: WorkStore): void {
   } catch (e) { console.error("[workStore] fileSave error:", e); }
 }
 
-// ─── Store access ─────────────────────────────────────────────────────────────
-
-async function useNeon(): Promise<boolean> {
-  const { USE_NEON } = await import("./db");
-  return USE_NEON;
-}
-
-// Stale note (kept as a warning, not a fix): this comment used to say Neon
-// was read fresh on every call with no caching -- that stopped being true
-// once the in-process cache below was added (Sept 2026 cost audit) and this
-// comment was simply never updated. Found during a follow-up cost audit
-// precisely because it misdescribed the code beneath it -- a reminder to
-// keep comments like this one honest, since they get taken at face value.
-async function getStore(): Promise<WorkStore> {
+// Single-work read: always a direct, targeted fetch -- cheaper than pulling
+// every work just to find one, unlike the old single-blob model where there
+// was no other option.
+async function readOneWork(id: string): Promise<ANAWork | null> {
   if (await useNeon()) {
-    // Serve from in-process cache when fresh — avoids one ~1.4MB Neon read
-    // per sub-call within the same request burst or warm Lambda invocation.
-    if (_neonCache && Date.now() - _neonCache.at < CACHE_TTL_MS) {
-      return _neonCache.store;
+    try {
+      const { kvGet } = await import("./db");
+      const raw = await kvGet(WORK_KEY_PREFIX + id);
+      return raw ? (JSON.parse(raw) as ANAWork) : null;
+    } catch (e) {
+      console.error(`[workStore] readOneWork(${id}) error:`, e);
+      return null;
     }
-    const fromNeon = await neonLoad();
-    const s = fromNeon ?? { works: {} };
-    if (!s.works) s.works = {};
-    _neonCache = { store: s, at: Date.now() };
-    return s;
   }
-  // Local dev fallback only (no NEON_DB_ANA configured)
-  if (!global.__anaWorkStore) {
-    global.__anaWorkStore = fileLoad();
-  }
-  return global.__anaWorkStore;
+  return (await getAllWorks())[id] ?? null;
 }
 
-async function mutate(fn: (s: WorkStore) => void): Promise<void> {
-  // Bypasses the cache above on purpose: goes straight to neonLoad() for a
-  // guaranteed-fresh base, since the anti-shrink merge below only works
-  // against real current state, not a copy that could be up to CACHE_TTL_MS
-  // stale relative to another writer.
-  const store = (await useNeon()) ? ((await neonLoad()) ?? { works: {} }) : await getStore();
-  if (!store.works) store.works = {};
-  const beforeCount = Object.keys(store.works).length;
-  fn(store);
-
+// Single-work write: touches only this one row/entry, never the rest of the
+// list. `merge`, when given, re-reads the row immediately before writing and
+// lets the caller reconcile against whatever is there right now -- the same
+// spirit as the old blob-level anti-shrink check, just scoped down to one
+// work instead of the entire list, and cheap enough to always do rather than
+// being a special-cased safety net.
+async function writeOneWork(
+  id: string,
+  fn: (w: ANAWork) => void,
+  opts: { merge?: (fresh: ANAWork, working: ANAWork) => void } = {},
+): Promise<ANAWork | null> {
   if (await useNeon()) {
-    // Read-modify-write on a single JSON blob is unsafe under concurrent
-    // writers: a Lambda holding a stale snapshot (e.g. from before a long
-    // gap between its own read and write) can overwrite newer work added by
-    // someone else in the meantime, silently destroying it. Re-read Neon
-    // immediately before saving and merge back in any work that exists
-    // there but not in our local copy — never let a write shrink the store.
-    const latest = await neonLoad();
-    if (latest?.works) {
-      for (const [id, w] of Object.entries(latest.works)) {
-        if (!(id in store.works)) {
-          console.warn(`[workStore] mutate() would have dropped "${w.title}" (${id}) — merged back in. This means two writers raced; investigate if it recurs.`);
-          store.works[id] = w;
-        }
+    try {
+      const { kvGet, kvSet } = await import("./db");
+      const raw = await kvGet(WORK_KEY_PREFIX + id);
+      if (!raw) return null;
+      const work = JSON.parse(raw) as ANAWork;
+      fn(work);
+      if (opts.merge) {
+        const freshRaw = await kvGet(WORK_KEY_PREFIX + id);
+        if (freshRaw) opts.merge(JSON.parse(freshRaw) as ANAWork, work);
       }
+      await kvSet(WORK_KEY_PREFIX + id, JSON.stringify(pruneWorkForStorage(work)));
+      if (_listCache) _listCache.works[id] = work;
+      return work;
+    } catch (e) {
+      console.error(`[workStore] writeOneWork(${id}) error:`, e);
+      return null;
     }
-    const afterCount = Object.keys(store.works).length;
-    if (afterCount < beforeCount) {
-      console.error(`[workStore] mutate() write would shrink work count ${beforeCount} → ${afterCount} even after merge — saving anyway, but this is unexpected.`);
-    }
-    await neonSave(store);
-    // Keep the cache fresh so reads within the TTL window see this write
-    // immediately instead of waiting for the next natural expiry.
-    _neonCache = { store, at: Date.now() };
-  } else {
-    global.__anaWorkStore = store;
-    fileSave(store);
   }
+  const store = await (async () => { if (!global.__anaWorkStore) global.__anaWorkStore = fileLoad(); return global.__anaWorkStore; })();
+  const work = store.works[id];
+  if (!work) return null;
+  fn(work);
+  fileSave(store);
+  return work;
 }
 
 // ─── Work CRUD ────────────────────────────────────────────────────────────────
 
 export async function listWorks(): Promise<ANAWork[]> {
-  return Object.values((await getStore()).works).sort((a, b) => b.proposedAt - a.proposedAt);
+  return Object.values(await getAllWorks()).sort((a, b) => b.proposedAt - a.proposedAt);
 }
 
 export async function getWork(id: string): Promise<ANAWork | null> {
-  return (await getStore()).works[id] ?? null;
+  return readOneWork(id);
 }
 
 export async function getActiveWorks(opts?: { excludeMemorials?: boolean }): Promise<ANAWork[]> {
@@ -434,7 +419,21 @@ export async function createWork(
     votes: [],
     stateHistory: [{ state: initialState, at: Date.now() }],
   };
-  await mutate(s => { s.works[id] = work; });
+  // A fresh row under a fresh id -- no read-modify-write needed, unlike the
+  // old model where creating one work meant rewriting the entire list.
+  if (await useNeon()) {
+    try {
+      const { kvSet } = await import("./db");
+      await kvSet(WORK_KEY_PREFIX + id, JSON.stringify(work));
+      if (_listCache) _listCache.works[id] = work;
+    } catch (e) {
+      console.error(`[workStore] createWork(${id}) error:`, e);
+    }
+  } else {
+    if (!global.__anaWorkStore) global.__anaWorkStore = fileLoad();
+    global.__anaWorkStore.works[id] = work;
+    fileSave(global.__anaWorkStore);
+  }
   console.log(`[workStore] created "${work.title}" (${id}) @ ${initialState}`);
   return work;
 }
@@ -464,25 +463,31 @@ export async function getSalonWorkOutcomes(): Promise<Record<string, SalonWorkOu
 }
 
 export async function updateWork(id: string, updates: Partial<ANAWork>): Promise<void> {
-  await mutate(s => { if (s.works[id]) Object.assign(s.works[id], updates); });
+  await writeOneWork(id, w => Object.assign(w, updates));
 }
 
 export async function advanceState(id: string, newState: WorkState, note?: string): Promise<void> {
-  await mutate(s => {
-    const w = s.works[id];
-    if (!w) return;
+  const updated = await writeOneWork(id, w => {
     w.state = newState;
     w.stateHistory.push({ state: newState, at: Date.now(), note });
   });
-  console.log(`[workStore] ${id} → ${newState}${note ? ` (${note})` : ""}`);
+  if (updated) console.log(`[workStore] ${id} → ${newState}${note ? ` (${note})` : ""}`);
 }
 
 export async function addVote(id: string, vote: WorkVote): Promise<void> {
-  await mutate(s => {
-    const w = s.works[id];
-    if (!w) return;
+  await writeOneWork(id, w => {
     w.votes = w.votes.filter(v => v.tokenId !== vote.tokenId);
     w.votes.push(vote);
+  }, {
+    // Two votes for DIFFERENT personas can plausibly land close together
+    // (overlapping keeper runs) -- fold in any vote the fresh row has that
+    // our working copy doesn't, so a near-simultaneous second vote never
+    // gets clobbered by the first one's write.
+    merge: (fresh, working) => {
+      for (const v of fresh.votes) {
+        if (!working.votes.some(wv => wv.tokenId === v.tokenId)) working.votes.push(v);
+      }
+    },
   });
 }
 
@@ -503,9 +508,14 @@ let _supplyCache: number | null = null;
 
 export async function getLastNormieSupply(): Promise<number | null> {
   if (await useNeon()) {
-    const { kvGet } = await import("./db");
-    const raw = await kvGet("burn-supply-tracker");
-    return raw ? Number(raw) : null;
+    try {
+      const { kvGet } = await import("./db");
+      const raw = await kvGet("burn-supply-tracker");
+      return raw ? Number(raw) : null;
+    } catch (e) {
+      console.error("[workStore] getLastNormieSupply error:", e);
+      return null;
+    }
   }
   if (_supplyCache !== null) return _supplyCache;
   try {
@@ -521,8 +531,12 @@ export async function updateNormieSupply(supply: number): Promise<void> {
   // hourly tick where no burn happened.
   if (await getLastNormieSupply() === supply) return;
   if (await useNeon()) {
-    const { kvSet } = await import("./db");
-    await kvSet("burn-supply-tracker", String(supply));
+    try {
+      const { kvSet } = await import("./db");
+      await kvSet("burn-supply-tracker", String(supply));
+    } catch (e) {
+      console.error("[workStore] updateNormieSupply error:", e);
+    }
     return;
   }
   _supplyCache = supply;
@@ -553,6 +567,38 @@ export type DispatchRole = "author" | "curator" | "rapporteur" | "reviewer";
  * by tokenId for determinism), skipping any tokenId in `exclude`, and persists
  * the advanced rotation cursor.
  */
+const DEFAULT_ROTATION: DispatchRotation = { author: 0, curator: 0, rapporteur: 0, reviewer: 0 };
+
+async function readDispatchRotation(): Promise<DispatchRotation> {
+  if (await useNeon()) {
+    try {
+      const { kvGet } = await import("./db");
+      const raw = await kvGet(DISPATCH_KEY);
+      return raw ? (JSON.parse(raw) as DispatchRotation) : DEFAULT_ROTATION;
+    } catch (e) {
+      console.error("[workStore] readDispatchRotation error:", e);
+      return DEFAULT_ROTATION;
+    }
+  }
+  if (!global.__anaWorkStore) global.__anaWorkStore = fileLoad();
+  return global.__anaWorkStore.dispatchRotation ?? DEFAULT_ROTATION;
+}
+
+async function writeDispatchRotation(rotation: DispatchRotation): Promise<void> {
+  if (await useNeon()) {
+    try {
+      const { kvSet } = await import("./db");
+      await kvSet(DISPATCH_KEY, JSON.stringify(rotation));
+    } catch (e) {
+      console.error("[workStore] writeDispatchRotation error:", e);
+    }
+    return;
+  }
+  if (!global.__anaWorkStore) global.__anaWorkStore = fileLoad();
+  global.__anaWorkStore.dispatchRotation = rotation;
+  fileSave(global.__anaWorkStore);
+}
+
 export async function nextInDispatchRotation(
   role: DispatchRole,
   candidates: number[],
@@ -561,8 +607,7 @@ export async function nextInDispatchRotation(
   const sorted = [...new Set(candidates)].sort((a, b) => a - b);
   if (sorted.length === 0) throw new Error("nextInDispatchRotation: no candidates");
 
-  const store = await getStore();
-  const rotation: DispatchRotation = store.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0, reviewer: 0 };
+  const rotation = await readDispatchRotation();
   const start = rotation[role] % sorted.length;
 
   let picked = sorted[start];
@@ -576,22 +621,26 @@ export async function nextInDispatchRotation(
     }
   }
 
-  await mutate(s => {
-    s.dispatchRotation = { ...(s.dispatchRotation ?? { author: 0, curator: 0, rapporteur: 0, reviewer: 0 }), [role]: nextCursor };
-  });
-
+  await writeDispatchRotation({ ...rotation, [role]: nextCursor });
   return picked;
 }
 
 export async function resetWorks(): Promise<void> {
-  const empty: WorkStore = { works: {} };
   if (await useNeon()) {
-    await neonSave(empty);
+    try {
+      const { kvDeleteByPrefix } = await import("./db");
+      const removed = await kvDeleteByPrefix(WORK_KEY_PREFIX);
+      console.log(`[workStore] reset — ${removed} work row(s) cleared`);
+    } catch (e) {
+      console.error("[workStore] resetWorks error:", e);
+    }
   } else {
-    fileSave(empty);
+    fileSave({ works: {} });
+    global.__anaWorkStore = { works: {} };
+    console.log("[workStore] reset — all works cleared");
   }
-  global.__anaWorkStore = empty;
-  console.log("[workStore] reset — all works cleared");
+  await writeDispatchRotation(DEFAULT_ROTATION);
+  invalidateCache();
 }
 
 // ─── Vote helpers ─────────────────────────────────────────────────────────────
