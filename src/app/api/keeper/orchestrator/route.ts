@@ -8,10 +8,24 @@
  * wake-ups across the hour instead of concentrating them.
  *
  * Sept 2026 pérennisation study's calendar (section 3):
- *   every tick (:00, :30)   → activity catchup, threshold-based synthesis
- *   every 2h at :00         → salon exchange, work lifecycle, burns
- *   every 6h at :00         → election cycle
- *   00:00 UTC               → daily synthesis catch-all + external signals + health ping
+ *   every tick   → activity catchup, threshold-based synthesis
+ *   every ~2h    → salon exchange, work lifecycle, burns
+ *   every ~6h    → election cycle
+ *   every ~24h   → daily synthesis catch-all + external signals + health ping
+ *
+ * "Every ~2h/6h/24h" is measured as elapsed wall-clock time since each
+ * group's own last run (tracked in kv_store), NOT calendar alignment (e.g.
+ * "hour % 2 === 0"). Originally this was calendar-based, tied to GitHub's
+ * own 30-minute cron schedule landing near an even hour's first 15 minutes.
+ * That schedule trigger turned out to be far less reliable than documented
+ * for this cadence (observed: 1 firing in a window where ~7 were expected),
+ * so a calendar-aligned check meant a delayed or skipped trigger could miss
+ * its entire window and silently wait another full interval.
+ * Elapsed-time-since-last-run instead runs a group on whichever tick
+ * actually happens to fire next, however irregular, as long as enough time
+ * has genuinely passed -- the porteur's own call: an unpredictable but
+ * eventually-running cron beats a precisely-scheduled one that often
+ * doesn't fire at all.
  *
  * Each due task runs through Promise.allSettled — one failing task never
  * blocks the others due in the same tick, but the response's overall `ok`
@@ -27,6 +41,25 @@
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { kvGet, kvSet } from "@/lib/db";
+
+const HOUR = 60 * 60 * 1000;
+const INTERVAL_2H  = 2 * HOUR;
+const INTERVAL_6H  = 6 * HOUR;
+const INTERVAL_24H = 24 * HOUR;
+
+/**
+ * Due = at least `intervalMs` since this group's last run, per kv_store
+ * (never run before → due immediately). Best-effort, not lock-protected: two
+ * genuinely concurrent orchestrator invocations could both read "due" before
+ * either writes -- acceptable here, an occasional extra run of a cheap,
+ * idempotent-ish task is far cheaper than the alternative of missing a
+ * window entirely (see file header comment).
+ */
+async function isGroupDue(key: string, intervalMs: number, now: number): Promise<boolean> {
+  const lastRun = await kvGet(key);
+  return now - (lastRun ? Number(lastRun) : 0) >= intervalMs;
+}
 
 interface TaskResult {
   task: string;
@@ -95,16 +128,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized — x-cron-secret required" }, { status: 401 });
   }
 
-  const now = new Date();
-  const hour = now.getUTCHours();
-  const minute = now.getUTCMinutes();
-  // GitHub Actions cron can drift a few minutes — treat anything in the
-  // first half of the hour as ":00" for the purposes of "once per matching
-  // hour" tasks, so a late trigger doesn't get silently skipped.
-  const isTopOfHour = minute < 15;
-  const isDueEvery2h  = isTopOfHour && hour % 2 === 0;
-  const isDueEvery6h  = isTopOfHour && hour % 6 === 0;
-  const isMidnight    = isTopOfHour && hour === 0;
+  const now = Date.now();
+  const [due2h, due6h, due24h] = await Promise.all([
+    isGroupDue("orchestrator:lastRun:2h", INTERVAL_2H, now),
+    isGroupDue("orchestrator:lastRun:6h", INTERVAL_6H, now),
+    isGroupDue("orchestrator:lastRun:24h", INTERVAL_24H, now),
+  ]);
+  // Mark due groups run BEFORE awaiting their tasks below, not after --
+  // narrows (doesn't eliminate) the race window against another concurrent
+  // invocation reading the same "due" state.
+  await Promise.all([
+    due2h  ? kvSet("orchestrator:lastRun:2h", String(now))  : Promise.resolve(),
+    due6h  ? kvSet("orchestrator:lastRun:6h", String(now))  : Promise.resolve(),
+    due24h ? kvSet("orchestrator:lastRun:24h", String(now)) : Promise.resolve(),
+  ]);
 
   const results: TaskResult[] = [];
 
@@ -113,17 +150,17 @@ export async function POST(req: NextRequest) {
     { name: "activity-catchup",   due: true, fn: () => callRoute(req, cronSecret, "/api/activity/events", "GET") },
     { name: "synthesis-threshold", due: true, fn: () => callRoute(req, cronSecret, "/api/keeper/synthesize", "POST", { mode: "threshold" }) },
 
-    // Every 2h at :00 (tolerant to :00-:15 due to Actions cron drift).
-    { name: "salon-exchange", due: isDueEvery2h, fn: () => callRoute(req, cronSecret, "/api/keeper/salon-exchange", "POST", {}) },
-    { name: "work-lifecycle", due: isDueEvery2h, fn: () => callRoute(req, cronSecret, "/api/keeper/work-lifecycle", "POST", {}) },
-    { name: "check-burns",    due: isDueEvery2h, fn: () => callRoute(req, cronSecret, "/api/keeper/check-burns", "POST", {}) },
+    // ~Every 2h since last run.
+    { name: "salon-exchange", due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/salon-exchange", "POST", {}) },
+    { name: "work-lifecycle", due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/work-lifecycle", "POST", {}) },
+    { name: "check-burns",    due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/check-burns", "POST", {}) },
 
-    // Every 6h at :00.
-    { name: "election-cycle", due: isDueEvery6h, fn: () => callRoute(req, cronSecret, "/api/keeper/election-cycle", "POST", {}) },
+    // ~Every 6h since last run.
+    { name: "election-cycle", due: due6h, fn: () => callRoute(req, cronSecret, "/api/keeper/election-cycle", "POST", {}) },
 
-    // Daily at 00:00 UTC: full synthesis catch-all + external signals + keepalive ping.
-    { name: "synthesis-daily", due: isMidnight, fn: () => callRoute(req, cronSecret, "/api/keeper/synthesize", "POST", { mode: "daily" }) },
-    { name: "health-ping",     due: isMidnight, fn: () => callRoute(req, cronSecret, "/api/health", "GET") },
+    // ~Every 24h since last run: full synthesis catch-all + external signals + keepalive ping.
+    { name: "synthesis-daily", due: due24h, fn: () => callRoute(req, cronSecret, "/api/keeper/synthesize", "POST", { mode: "daily" }) },
+    { name: "health-ping",     due: due24h, fn: () => callRoute(req, cronSecret, "/api/health", "GET") },
   ]);
 
   const ranTasks = results.filter(r => r.ran);
@@ -132,7 +169,7 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: allOk,
-    tickUtc: now.toISOString(),
+    tickUtc: new Date(now).toISOString(),
     ranCount: ranTasks.length,
     failedCount: failedTasks.length,
     results,
