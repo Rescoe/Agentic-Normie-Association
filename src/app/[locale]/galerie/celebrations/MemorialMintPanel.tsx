@@ -51,7 +51,18 @@ export function MemorialMintPanel() {
 
   return (
     <div className="border border-[--border] bg-[--bg-card] p-6 space-y-4">
-      <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Memorial editions</p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">Memorial editions</p>
+        {contractAddress && (
+          <a
+            href={`https://opensea.io/assets/base/${contractAddress}`}
+            target="_blank" rel="noopener noreferrer"
+            className="font-mono text-[10px] border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors shrink-0"
+          >
+            View on OpenSea ↗
+          </a>
+        )}
+      </div>
 
       {!address && (
         <div className="flex items-center gap-3">

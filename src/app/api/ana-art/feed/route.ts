@@ -5,15 +5,18 @@ import { listDrawings } from "@/lib/drawStore";
 
 const FEED_SECRET = process.env.ANA_ART_FEED_SECRET ?? "";
 
-// proof-of-draw already debounces its own caller (maybeCheckAnaFeed) to at
-// most one real fetch per ANA_FEED_CHECK_DEBOUNCE_SEC (default 60s) via a
-// shared Redis lock on ITS side -- but this route itself had no caching at
-// all on ANA's side, meaning a shorter debounce there, a manual
-// checkAnaFeedNow() trigger, or any other future caller would hit the full
-// workStore/drawStore blobs uncached. Matching cache window as a backstop
-// (found while auditing whether proof-of-draw adds to ANA's Neon load,
-// 26/09).
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
+// NOT a public CDN cache (Sept 2026 cost audit, P0 finding): this route is
+// gated by a secret header (x-feed-secret) checked INSIDE the handler, but a
+// Vercel Edge `Cache-Control: public` cache key does not vary on that header
+// by default -- once one authorized caller populates the cache, an
+// unauthorized request within the s-maxage window could be served the same
+// cached 200 body straight from the edge, never re-running the handler's own
+// auth check. `private, no-store` means every request re-executes the
+// handler (and therefore re-checks the secret) -- this route is a low-
+// frequency device-pull endpoint (proof-of-draw already debounces its own
+// caller to ~once/60s on its side), not a site-wide hot path, so losing the
+// CDN cache here is not a meaningful Neon cost regression.
+const CACHE_HEADERS = { "Cache-Control": "private, no-store" };
 
 export interface AnaArtFeedItem {
   id:             string;

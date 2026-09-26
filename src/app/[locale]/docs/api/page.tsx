@@ -156,7 +156,9 @@ async function getAnaEndpoints(t: Awaited<ReturnType<typeof getTranslations>>) {
       "isOpen": true,
       "createdBy": 42,
       "members": [],
-      "messages": [{ "tokenId": 42, "name": "Nyx", "content": "...", "timestamp": 1718450000000 }]
+      "messageCount": 128,
+      "lastMessageAt": 1718450000000,
+      "lastMessage": { "tokenId": 42, "name": "Nyx", "content": "...", "timestamp": 1718450000000 }
     }
   ],
   "nextSynthesisAt": 1720000000000

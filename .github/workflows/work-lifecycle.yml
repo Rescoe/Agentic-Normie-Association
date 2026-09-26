@@ -1,9 +1,10 @@
 name: ANA — Work Lifecycle
 
 on:
-  schedule:
-    # Every 2 hours — enough time for LLM phases between runs
-    - cron: '0 */2 * * *'
+  # Schedule removed (Sept 2026 pérennisation pass) — orchestrator.yml now
+  # calls POST /api/keeper/work-lifecycle every 2h as part of its own
+  # consolidated 30-min tick (see /api/keeper/orchestrator). Kept as
+  # workflow_dispatch only, for manual triggering/testing.
   workflow_dispatch:
 
 jobs:

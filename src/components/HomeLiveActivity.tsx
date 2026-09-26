@@ -47,7 +47,11 @@ interface SalonMessage {
   id: string; tokenId: number; name: string; imageUrl: string;
   content: string; timestamp: number; isLlm: boolean;
 }
-interface Salon { id: string; name: string; messages: SalonMessage[] }
+// GET /api/salon (list) is now compact and carries no message history — see
+// salonStore.ts's Salon type — so this widget fetches the Agora's own detail
+// endpoint (GET /api/salon/[id]) directly instead, which still returns full
+// messages for that one salon.
+interface SalonDetail { id: string; name: string; messages: SalonMessage[] }
 interface RecentBurn { tokenId: number; imageUrl: string; burnedAt: string }
 
 const AGORA_SALON_ID = "salon_agora_ana";
@@ -62,14 +66,13 @@ export function HomeLiveActivity() {
     let cancelled = false;
     Promise.allSettled([
       fetch("/api/works").then(r => r.json()) as Promise<ANAWork[]>,
-      fetch("/api/salon").then(r => r.json()) as Promise<{ salons: Salon[] }>,
+      fetch(`/api/salon/${AGORA_SALON_ID}`).then(r => r.json()) as Promise<{ salon?: SalonDetail }>,
       fetch("/api/burns/stats").then(r => r.json()) as Promise<{ recentBurns: RecentBurn[] }>,
     ]).then(([worksRes, salonRes, burnsRes]) => {
       if (cancelled) return;
       if (worksRes.status === "fulfilled") setWorks(worksRes.value);
       if (salonRes.status === "fulfilled") {
-        const agora = salonRes.value.salons?.find(s => s.id === AGORA_SALON_ID);
-        setAgoraMessages((agora?.messages ?? []).slice(-5).reverse());
+        setAgoraMessages((salonRes.value.salon?.messages ?? []).slice(-5).reverse());
       }
       if (burnsRes.status === "fulfilled") setRecentBurns((burnsRes.value.recentBurns ?? []).slice(0, 8));
       setLoaded(true);

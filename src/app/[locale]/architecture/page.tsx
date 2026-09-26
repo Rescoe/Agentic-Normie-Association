@@ -14,7 +14,7 @@ export const metadata = {
 // ─── Contracts ────────────────────────────────────────────────────────────────
 
 const DEPLOYED = {
-  AssociationCore:     process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS     ?? "0x218a2C38a16F81DcC944872264d79606b1DB1C40",
+  AssociationCore:     process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS     ?? "0xB70f699348A17BA8a21bE8A544092Cb3eC1bE488",
   ConstituentAssembly: process.env.NEXT_PUBLIC_CONSTITUENT_ASSEMBLY_ADDRESS ?? "0xF06079eb31cF11122C67DcD986354c3bbF0df8a2",
   WorkRegistry:        process.env.NEXT_PUBLIC_WORK_REGISTRY_ADDRESS        ?? "—",
   FactoryRegistry:     process.env.NEXT_PUBLIC_FACTORY_REGISTRY_ADDRESS     ?? "0xCB440879cb709aC4176B1e098B26fd350232e670",

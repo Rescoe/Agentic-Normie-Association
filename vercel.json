@@ -17,6 +17,12 @@
     },
     "src/app/api/memorials/list/route.ts": {
       "maxDuration": 30
+    },
+    "src/app/api/keeper/orchestrator/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/keeper/synthesize/route.ts": {
+      "maxDuration": 60
     }
   }
 }

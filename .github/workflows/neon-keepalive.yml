@@ -1,12 +1,13 @@
 name: ANA — Neon Keep-Alive
 
 on:
-  schedule:
-    # Every Monday at 07:00 UTC — well within the 28-day Neon archiving window.
-    # This workflow is intentionally independent of all app logic: it only
-    # calls GET /api/health which does SELECT 1 on Neon. Even if the election
-    # cron or the salon exchange are broken, this keeps the branch alive.
-    - cron: '0 7 * * 1'
+  # Schedule removed (Sept 2026 pérennisation pass) — orchestrator.yml now
+  # pings GET /api/health once a day at 00:00 UTC as part of its own
+  # consolidated schedule (see /api/keeper/orchestrator) — daily is far more
+  # than enough margin under Neon's 28-day archiving window, and it no longer
+  # needs its own independent trigger. Kept as workflow_dispatch only, for
+  # manual triggering/testing, and as a standalone fallback the porteur can
+  # re-enable a schedule on if the orchestrator itself is ever broken.
   workflow_dispatch:
 
 jobs:

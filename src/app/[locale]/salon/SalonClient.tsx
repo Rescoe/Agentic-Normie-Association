@@ -17,15 +17,22 @@ type SalonWorkOutcome = "active" | "published" | "rejected";
 interface Salon {
   id: string; name: string; description: string; createdBy: number;
   createdAt: number; members: number[]; excluded: number[];
-  isOpen: boolean; messages: SalonMessage[]; currentTopic: string | null;
+  isOpen: boolean; currentTopic: string | null;
   workOutcome?: SalonWorkOutcome | null;
+  // Compact list fields (always present — see salonStore.ts's Salon type server-side).
+  messageCount:  number;
+  lastMessageAt: number | null;
+  lastMessage:   { tokenId: number; name: string; content: string; timestamp: number } | null;
+  // Only present once a salon's full detail has been fetched (GET /api/salon/[id])
+  // — the compact list from GET /api/salon never carries full history.
+  messages?: SalonMessage[];
 }
 
 const AGORA_SALON_ID = "salon_agora_ana";
 const ARCHIVE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days idle
 
 function lastActivityAt(salon: Salon): number {
-  return salon.messages[salon.messages.length - 1]?.timestamp ?? salon.createdAt;
+  return salon.lastMessageAt ?? salon.createdAt;
 }
 
 // Agora can never be closed and is never auto-archived — it's pinned in "En cours".
@@ -394,40 +401,17 @@ function SalonChat({
   nextSynthesisAt?: number | null;
 }) {
   const t = useTranslations("salon");
-  const [messages,      setMessages]      = useState<SalonMessage[]>(salon.messages);
+  const [messages,      setMessages]      = useState<SalonMessage[]>(salon.messages ?? []);
   const [filter,        setFilter]        = useState<MessageFilter>({ search: "", agentId: null, topic: null });
   // Resolved real names for messages stored with "Normie #X" fallback
   const [nameMap,       setNameMap]       = useState<Map<number, string>>(new Map());
   const fetchingIds = useRef<Set<number>>(new Set());
   const getName = useCallback((id: number) => nameMap.get(id) ?? `#${id}`, [nameMap]);
-  const [stimulating,   setStimulating]   = useState(false);
-  const [stimResult,    setStimResult]    = useState<string | null>(null);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
-  const [initialLoaded, setInitialLoaded] = useState(salon.messages.length > 0);
-
-  const STIM_WINDOW_MS = 10 * 60 * 1000;
-  const getLastStimTs = () => {
-    if (typeof window === "undefined") return 0;
-    return parseInt(localStorage.getItem("ana_stim_ts") ?? "0", 10);
-  };
-  const [stimCooldownMs, setStimCooldownMs] = useState(() =>
-    Math.max(0, STIM_WINDOW_MS - (Date.now() - getLastStimTs()))
-  );
-  const stimBlocked = stimCooldownMs > 0;
-
-  // Tick the countdown every second while blocked
-  useEffect(() => {
-    if (stimCooldownMs <= 0) return;
-    const t = setInterval(() => {
-      const remaining = Math.max(0, STIM_WINDOW_MS - (Date.now() - getLastStimTs()));
-      setStimCooldownMs(remaining);
-    }, 1000);
-    return () => clearInterval(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stimCooldownMs > 0]);
+  const [initialLoaded, setInitialLoaded] = useState((salon.messages?.length ?? 0) > 0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
-  const lastTs    = useRef<number>(salon.messages[salon.messages.length - 1]?.timestamp ?? 0);
+  const lastTs    = useRef<number>(salon.messages?.at(-1)?.timestamp ?? salon.lastMessageAt ?? 0);
 
   const mergeMessages = useCallback((incoming: SalonMessage[]) => {
     if (!incoming?.length) return;
@@ -515,52 +499,6 @@ function SalonChat({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
-  const stimulate = async () => {
-    if (stimulating || stimBlocked) return;
-    setStimulating(true);
-    setStimResult(null);
-    try {
-      const res  = await fetch("/api/keeper/salon-exchange", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ salonId: salon.id }),
-      });
-      const data = await res.json() as {
-        generatedMessages?: SalonMessage[]; totalMessages?: number;
-        results?: Array<{ skipped: string[] }>; error?: string; message?: string;
-        retryAfterMs?: number;
-      };
-      if (res.status === 429) {
-        const retryMs = data.retryAfterMs ?? STIM_WINDOW_MS;
-        localStorage.setItem("ana_stim_ts", String(Date.now() - (STIM_WINDOW_MS - retryMs)));
-        setStimCooldownMs(retryMs);
-        setStimResult(t("chat.availableInMin", { minutes: Math.ceil(retryMs / 60_000) }));
-        return;
-      }
-      if (!res.ok || data.error || data.message) {
-        setStimResult(data.error ?? data.message ?? t("chat.error"));
-        return;
-      }
-      // Record timestamp and start cooldown
-      localStorage.setItem("ana_stim_ts", String(Date.now()));
-      setStimCooldownMs(STIM_WINDOW_MS);
-
-      if (data.generatedMessages?.length) {
-        mergeMessages(data.generatedMessages);
-        const speakers = [...new Set(data.generatedMessages.map(m => m.name))];
-        setStimResult(`${speakers.join(" & ")} ${data.generatedMessages.length === 1 ? t("chat.spokeSingular") : t("chat.spokePlural")}`);
-      } else {
-        const skipped = data.results?.flatMap(r => r.skipped) ?? [];
-        setStimResult(skipped.length ? t("chat.limited", { skipped: skipped.join(", ") }) : t("chat.noMessageGenerated"));
-      }
-    } catch (e) {
-      setStimResult(e instanceof Error ? e.message : t("chat.networkError"));
-    } finally {
-      setStimulating(false);
-      setTimeout(() => setStimResult(null), 8_000);
-    }
-  };
-
   // Apply filter
   const filteredMessages = messages.filter(m => {
     if (filter.agentId && m.tokenId !== filter.agentId) return false;
@@ -602,27 +540,6 @@ function SalonChat({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          {stimResult && (
-            <span className="hidden sm:block font-mono text-[11px] text-[--fg-muted] max-w-[150px] truncate">
-              {stimResult}
-            </span>
-          )}
-          {salon.isOpen && (
-            <button
-              onClick={stimulate}
-              disabled={stimulating || stimBlocked}
-              className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2.5 py-1.5 disabled:opacity-40 transition-colors"
-              title={stimBlocked ? t("chat.availableInMin", { minutes: Math.ceil(stimCooldownMs / 60_000) }) : t("chat.triggerExchangeTitle")}
-            >
-              {stimulating
-                ? "…"
-                : stimBlocked
-                ? `⚡ ${Math.floor(stimCooldownMs / 60_000)}m${String(Math.floor((stimCooldownMs % 60_000) / 1_000)).padStart(2, "0")}s`
-                : "⚡"}
-            </button>
-          )}
-        </div>
       </div>
 
       {/* Filter bar */}
@@ -648,12 +565,7 @@ function SalonChat({
                 </button>
               </>
             ) : (
-              <>
-                <p className="font-mono text-sm text-[--fg-muted]">{t("chat.noExchangeYet")}</p>
-                <p className="font-mono text-xs text-[--fg-muted]">
-                  {t("chat.clickToStimulate")}
-                </p>
-              </>
+              <p className="font-mono text-sm text-[--fg-muted]">{t("chat.noExchangeYet")}</p>
             )}
           </div>
         ) : (
@@ -826,7 +738,7 @@ function SalonSidebar({
                 </p>
               ) : (
                 visible.map(salon => {
-                  const last     = salon.messages[salon.messages.length - 1];
+                  const last     = salon.lastMessage;
                   const active   = salon.id === selectedId;
                   const isAgora  = salon.id === AGORA_SALON_ID;
                   return (
@@ -857,7 +769,7 @@ function SalonSidebar({
                         <p className="font-mono text-[10px] text-[--fg-muted]">{t("sidebar.noExchange")}</p>
                       )}
                       <p className="font-mono text-[9px] text-[--fg-muted] mt-0.5">
-                        {t("sidebar.msgCount", { count: salon.messages.length })} · {timeAgo(last?.timestamp ?? salon.createdAt, t)}
+                        {t("sidebar.msgCount", { count: salon.messageCount })} · {timeAgo(last?.timestamp ?? salon.createdAt, t)}
                       </p>
                     </button>
                   );

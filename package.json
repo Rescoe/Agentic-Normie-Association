@@ -11,6 +11,9 @@
     "test:contracts": "hardhat test",
     "test:contracts:coverage": "hardhat coverage",
     "typechain": "hardhat typechain",
+    "db:migrate": "ts-node --transpile-only scripts/db-migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
     "deploy:base": "hardhat run scripts/deploy.ts --network base",
     "redeploy:patch": "hardhat run scripts/redeploy-patched.ts --network base",
@@ -40,6 +43,7 @@
     "hardhat": "^2.22.18",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   }
 }

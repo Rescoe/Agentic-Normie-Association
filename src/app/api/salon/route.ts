@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { listSalons, createSalon, getActiveSalonByCreator, getSynthesisInfo } from "@/lib/salonStore";
+import { listSalons, createSalon, getActiveSalonByCreator } from "@/lib/salonStore";
 import { getSalonWorkOutcomes } from "@/lib/workStore";
 
 const client = createPublicClient({
@@ -24,16 +24,34 @@ async function getMemberIds(): Promise<number[]> {
 
 // GET is cached at the edge so read traffic no longer scales 1:1 with Neon
 // reads (Sept 2026 cost audit) -- POST below stays fully dynamic/uncached,
-// it's a write.
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120" };
+// it's a write. Was 30s; the compact-list rewrite (salonStore.ts, 26/09
+// pérennisation pass) means this no longer reads full message history per
+// salon, but the audit's own P0 finding was that even the OLD 30s window
+// could still burn ~120 Go/mois/region under sustained traffic — 30 minutes
+// matches /api/works and /api/status (see the 26/09 follow-up cost audit).
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
+
+// Synthesis is now per-salon (threshold-based, checked every 30-min orchestrator
+// tick) with a daily catch-all at 00:00 UTC for any backlog — see synthesis.ts.
+// There's no longer one single "next synthesis" timestamp shared by every
+// salon, so this reports the guaranteed daily catch-all only: worst case,
+// everything gets synthesized by then, even if a busy salon's own threshold
+// fires sooner. Kept for the existing UI footnote (SalonClient.tsx), which
+// already treats this field as optional.
+function nextMidnightUtc(): number {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  return next.getTime();
+}
 
 export async function GET() {
-  const [salons, synthInfo, outcomes] = await Promise.all([listSalons(), getSynthesisInfo(), getSalonWorkOutcomes()]);
+  const [salons, outcomes] = await Promise.all([listSalons(), getSalonWorkOutcomes()]);
   const enriched = salons.map(s => ({ ...s, workOutcome: outcomes[s.id] ?? null }));
+  const nextSynthesisAt = nextMidnightUtc();
   return NextResponse.json({
     salons: enriched,
-    nextSynthesisAt:   synthInfo.nextSynthesisAt,
-    nextSynthesisDate: new Date(synthInfo.nextSynthesisAt).toISOString(),
+    nextSynthesisAt,
+    nextSynthesisDate: new Date(nextSynthesisAt).toISOString(),
   }, { headers: CACHE_HEADERS });
 }
 

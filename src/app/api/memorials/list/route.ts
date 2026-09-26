@@ -23,8 +23,11 @@ const client = createPublicClient({
 
 // Cached at the edge (Sept 2026 cost audit) -- Footer.tsx fetches this on
 // every single page, site-wide, so uncached this was the single most-hit
-// route on the whole site, plus one on-chain read per memorial series.
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
+// route on the whole site, plus one on-chain read per memorial series. Was
+// 60s; bumped to 30 minutes (26/09 follow-up cost audit) to match
+// /api/works, /api/status and /api/salon -- a memorial list changes on the
+// order of days/weeks, not seconds.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
 
 export interface MemorialListItem {
   memorialId:       number;

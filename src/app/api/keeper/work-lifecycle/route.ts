@@ -15,7 +15,7 @@ import { base } from "viem/chains";
 import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, ANA_EDITIONS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
   getActiveWorks, listWorks, getWork, updateWork, advanceState, addVote,
-  hasVoted, tallyVotes, buildWorkHtml, createWork, getFoundingWork,
+  hasVoted, buildWorkHtml, createWork, getFoundingWork,
   VOTE_WINDOW_MS, CELEBRATION_VOTE_WINDOW_MS, nextInDispatchRotation,
   type ANAWork, type WorkVote,
 } from "@/lib/workStore";
@@ -31,6 +31,11 @@ import { oneMinAiCode } from "@/lib/oneMinAi";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
+import { formatTraitsForPrompt, parseVoteChoice, attemptVoteTwice, computeVoteMetrics, type ParsedVote } from "@/lib/voting";
+import { recordVoteMetrics } from "@/lib/voteMetricsStore";
+import { recordLlmCall } from "@/lib/llmLedger";
+import { findMostSimilarFingerprint, extractFingerprintFields, saveFingerprint, FINGERPRINT_SIMILARITY_THRESHOLD } from "@/lib/creativeFingerprint";
+import { jaccardSimilarity } from "@/lib/topicEngine";
 
 const MODEL        = "openai/gpt-oss-120b";
 // Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
@@ -164,15 +169,17 @@ async function groq(
   // caller has no equivalent filter. Confirmed live (24/09): a raw
   // chain-of-thought block ("We need to respond as Kori...") got published to
   // a salon because a free-text call was using the reasoning fallback.
-  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean } = {}
+  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; task?: import("@/lib/llmLedger").LlmTask } = {}
 ): Promise<string | null> {
   try {
+    const model = opts.model ?? MODEL;
     const res = await groqFetch({
-      model:       opts.model     ?? MODEL,
+      model,
       messages,
       max_tokens:  opts.maxTokens ?? 300,
       temperature: opts.temp      ?? 0.7,
     });
+    await recordLlmCall({ provider: "groq", model, task: opts.task ?? "other", success: res.ok });
     if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
     const data = await res.json() as GroqChatResponse;
     const raw  = opts.expectJson ? extractContentOrReasoning(data) : extractContent(data);
@@ -275,16 +282,18 @@ async function stepProposed(work: ANAWork, personas: NormiePersona[]): Promise<b
   return true;
 }
 
-async function castVote(persona: NormiePersona, work: ANAWork): Promise<WorkVote | null> {
+const ABSTENTION_RULE = "Abstain ONLY for a genuine conflict of interest or truly insufficient information to judge — never as simple social caution or to avoid taking a side.";
+
+async function castVoteAttempt(persona: NormiePersona, work: ANAWork): Promise<ParsedVote | null> {
   // Memorials are already fully created by the time their vote opens (see
   // memorialArt.ts) — the vote is moderation of a finished piece, not
   // approval of an idea, and there's no author/curator role left to fill.
   const userContent = work.isBurnMemorial
     ? `You are ${persona.name} (Normie #${persona.tokenId}), an ANA member.
 Archetype: ${persona.archetype ?? "unknown"}
-Traits: ${(persona.traits ?? []).join(", ") || "—"}
+Traits: ${formatTraitsForPrompt(persona.traits)}
 
-A fellow member has already created a memorial piece — vote to approve or reject it for on-chain publication. This is moderation, not brainstorming: vote HONESTLY on whether it's a fitting, genuine piece, not on whether you'd have made something different.
+A fellow member has already created a memorial piece — vote to approve or reject it for on-chain publication. This is moderation, not brainstorming: vote HONESTLY on whether it's a fitting, genuine piece, not on whether you'd have made something different. ${ABSTENTION_RULE}
 
 Title: "${work.title}"
 Context: ${work.proposal}
@@ -295,9 +304,9 @@ JSON only:
 {"vote":"yes"|"no"|"abstain","reason":"Your reason in 1-2 sentences from your unique perspective."}`
     : `You are ${persona.name} (Normie #${persona.tokenId}), an ANA member.
 Archetype: ${persona.archetype ?? "unknown"}
-Traits: ${(persona.traits ?? []).join(", ") || "—"}
+Traits: ${formatTraitsForPrompt(persona.traits)}
 
-Vote on this artwork proposal purely based on your own character, values, and taste — react as yourself, not as what you think the group expects from you.
+Vote on this artwork proposal purely based on your own character, values, and taste — react as yourself, not as what you think the group expects from you. ${ABSTENTION_RULE}
 
 Title: "${work.title}"
 Proposal: ${work.proposal}
@@ -317,32 +326,32 @@ If vote "yes": which role suits you in this creation? ("author" = create, "curat
     // At 120 tokens it routinely ran out before reaching {"vote":...}, and
     // the fallback below used to silently record that as "abstain" -- which
     // is why every vote kept coming back 0 yes / 0 no and no work could ever
-    // pass (tallyVotes() requires yes > no). Same root cause already fixed
+    // pass (computeVoteMetrics() requires yes > no). Same root cause already fixed
     // for proposeWork.ts/salon-exchange's JSON calls (350->900); missed here.
-    { model: MODEL_FAST, maxTokens: 500, temp: 0.75, expectJson: true }
+    { model: MODEL_FAST, maxTokens: 500, temp: 0.75, expectJson: true, task: "vote" }
   );
   if (!raw) return null;
+  return parseVoteChoice(extractJsonObject(raw));
+}
 
-  try {
-    const parsed = extractJsonObject(raw) as { vote?: string; reason?: string; interestedIn?: string };
-    // A genuinely malformed/missing vote field is a failed attempt, not a
-    // real abstention -- return null so stepVoteOpen() leaves this persona
-    // in notVoted and retries them next tick, instead of permanently
-    // recording an abstain that was never actually decided. The vote
-    // window's own timeout (stepVoteOpen) is the backstop if a persona
-    // never manages to produce a valid vote before it closes.
-    if (!(["yes", "no", "abstain"] as const).includes(parsed.vote as "yes")) return null;
-    return {
-      tokenId:      persona.tokenId,
-      name:         persona.name,
-      vote:         parsed.vote as WorkVote["vote"],
-      reason:       parsed.reason?.slice(0, 300) ?? "",
-      votedAt:      Date.now(),
-      interestedIn: (["author", "curator", "none"] as const).includes(parsed.interestedIn as "author")
-        ? (parsed.interestedIn as WorkVote["interestedIn"])
-        : "none",
-    };
-  } catch { return null; }
+/**
+ * One immediate short retry on an invalid/malformed JSON output (see
+ * voting.ts) — the pérennité study's explicit rule: a format error is a
+ * technical failure, not a decision, and deserves one quick second try before
+ * falling back to "retry next tick". Metrics (invalidOutputs/retries) are
+ * accumulated on `work` transiently via the returned counts, aggregated by
+ * stepVoteOpen() into vote_metrics once the window closes.
+ */
+async function castVote(persona: NormiePersona, work: ANAWork): Promise<{ vote: WorkVote | null; invalidOutputs: number; retried: boolean }> {
+  const { result, retried, invalidOutputs } = await attemptVoteTwice(() => castVoteAttempt(persona, work));
+  if (!result) return { vote: null, invalidOutputs, retried };
+  return {
+    vote: {
+      tokenId: persona.tokenId, name: persona.name, vote: result.vote,
+      reason: result.reason, votedAt: Date.now(), interestedIn: result.interestedIn ?? "none",
+    },
+    invalidOutputs, retried,
+  };
 }
 
 async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
@@ -354,8 +363,12 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
   // function limit is shared with everything else this route does per tick,
   // and Groq calls already retry their own rate limiting (groqFetch).
   let cast = 0;
+  let tickInvalidOutputs = 0;
+  let tickRetries = 0;
   for (const persona of notVoted) {
-    const vote = await castVote(persona, work);
+    const { vote, invalidOutputs, retried } = await castVote(persona, work);
+    tickInvalidOutputs += invalidOutputs;
+    if (retried) tickRetries++;
     if (vote) {
       await addVote(work.id, vote);
       cast++;
@@ -373,6 +386,12 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
       }).catch(() => null);
     }
   }
+  if (tickInvalidOutputs > 0 || tickRetries > 0) {
+    await updateWork(work.id, {
+      voteInvalidOutputs: (work.voteInvalidOutputs ?? 0) + tickInvalidOutputs,
+      voteRetries:        (work.voteRetries ?? 0) + tickRetries,
+    });
+  }
 
   // Reload to get fresh vote list
   const refreshed = await getWork(work.id);
@@ -384,16 +403,27 @@ async function stepVoteOpen(work: ANAWork, personas: NormiePersona[]): Promise<b
     && Date.now() - refreshed.voteOpenedAt > effectiveWindow;
 
   if (remaining.length === 0 || timeExpired) {
-    const { yes, no, abs, passed } = tallyVotes(refreshed);
+    const metrics = computeVoteMetrics({
+      eligible: personas.length,
+      votes: refreshed.votes.map(v => ({ vote: v.vote })),
+      invalidOutputs: refreshed.voteInvalidOutputs ?? 0,
+      providerErrors: refreshed.voteProviderErrors ?? 0,
+      retries: refreshed.voteRetries ?? 0,
+      tieBreak: refreshed.isBurnMemorial ? "pass" : "fail",
+    });
     await updateWork(work.id, {
       voteClosedAt: Date.now(),
-      voteResult:   passed ? "passed" : "rejected",
-      yesCount:     yes,
-      noCount:      no,
-      absCount:     abs,
-      totalVoters:  personas.length,
+      voteResult:   metrics.passed ? "passed" : "rejected",
+      yesCount:     metrics.yes,
+      noCount:      metrics.no,
+      absCount:     metrics.abstain,
+      totalVoters:  metrics.validVotes,
     });
-    await advanceState(work.id, "VOTE_TALLIED", `${yes} oui / ${no} non / ${abs} abs`);
+    await recordVoteMetrics(work.id, metrics).catch(e => console.error("[work-lifecycle] recordVoteMetrics failed:", e));
+    if (!metrics.quorumMet && !work.isBurnMemorial) {
+      console.warn(`[work-lifecycle] "${work.title}" window closed without quorum (turnout ${(metrics.turnoutRatio * 100).toFixed(0)}%) — quorum now GATES standard governance votes, so this resolves as rejected regardless of the yes/no split (26/09 external audit finding)`);
+    }
+    await advanceState(work.id, "VOTE_TALLIED", `${metrics.yes} oui / ${metrics.no} non / ${metrics.abstain} abs${metrics.quorumMet || work.isBurnMemorial ? "" : " (quorum not met — rejected)"}`);
     return true;
   }
 
@@ -678,8 +708,8 @@ Respond in JSON:
       { role: "user",   content: userPrompt },
     ],
     work.isFoundingWork
-      ? { maxTokens: 350, temp: 0.8 } // plain text, used verbatim as brief -- no JSON, no reasoning fallback
-      : { maxTokens: 600, temp: 0.8, expectJson: true }
+      ? { maxTokens: 350, temp: 0.8, task: "brief" } // plain text, used verbatim as brief -- no JSON, no reasoning fallback
+      : { maxTokens: 600, temp: 0.8, expectJson: true, task: "brief" }
   );
 
   if (!rawBrief) return false;
@@ -911,9 +941,10 @@ Generate ONLY the complete HTML, no explanations before or after.`,
     // a missing/misconfigured key degrades gracefully instead of stalling
     // the whole pipeline.
     artworkText = await oneMinAiCode(htmlMessages);
+    await recordLlmCall({ provider: "1minai", model: process.env.ONE_MIN_AI_CODE_MODEL ?? "deepseek-flash", task: "creating", success: !!artworkText });
     if (!artworkText) {
       console.warn(`[work-lifecycle] CREATING: 1min.ai unavailable for "${work.title}" — falling back to Groq`);
-      artworkText = await groq(htmlMessages, { maxTokens: scaledTokens(2500, work.ambitionLevel), temp: 0.95 });
+      artworkText = await groq(htmlMessages, { maxTokens: scaledTokens(2500, work.ambitionLevel), temp: 0.95, task: "creating" });
     }
 
     if (artworkText) {
@@ -922,6 +953,12 @@ Generate ONLY the complete HTML, no explanations before or after.`,
         const attempt = work.revisionCount ?? 0;
         const reason  = `Automated structural check failed: ${check.errors.join("; ")}`;
         console.warn(`[work-lifecycle] CREATING: "${work.title}" attempt ${attempt + 1} failed validation: ${check.errors.join("; ")}`);
+
+        const rethink = await trackSimilarFailure(work, reason);
+        if (rethink) {
+          await enterNeedsRethink(work, reason, "technical");
+          return true;
+        }
 
         // Stay in CREATING — the next cycle retries with this concrete feedback via
         // revisionCtx, no matter how many attempts it takes. Reporting "advanced"
@@ -960,7 +997,7 @@ ${selfCritiqueLine}
 No introduction, no meta-commentary. Just the artwork itself.`,
         },
       ],
-      { maxTokens: scaledTokens(work.artForm === "haiku" ? 80 : work.artForm === "sonnet" ? 350 : 450, work.ambitionLevel), temp: 0.95 }
+      { maxTokens: scaledTokens(work.artForm === "haiku" ? 80 : work.artForm === "sonnet" ? 350 : 450, work.ambitionLevel), temp: 0.95, task: "creating" }
     );
   }
 
@@ -988,17 +1025,94 @@ No introduction, no meta-commentary. Just the artwork itself.`,
   return true;
 }
 
+// ─── Circuit breaker: NEEDS_RETHINK ───────────────────────────────────────────
+//
+// Three similar failures in a row (curator rejections OR structural-check
+// failures, judged by word-overlap between successive reasons — see
+// jaccardSimilarity in topicEngine.ts) pause the work instead of letting it
+// loop CREATING <-> VALIDATING indefinitely, burning DeepSeek/Groq calls on
+// what is very likely the same unresolved issue. See workStore.ts's
+// NEEDS_RETHINK state doc comment for the two recovery paths.
+
+async function trackSimilarFailure(work: ANAWork, reason: string): Promise<boolean> {
+  const prev = work.validationNote ?? "";
+  const similar = prev.length > 0 && jaccardSimilarity(reason, prev) > 0.5;
+  const streak = similar ? (work.similarFailureStreak ?? 0) + 1 : 1;
+  await updateWork(work.id, { similarFailureStreak: streak });
+  return streak >= 3;
+}
+
+async function enterNeedsRethink(work: ANAWork, reason: string, kind: "technical" | "creative"): Promise<void> {
+  await updateWork(work.id, { needsRethinkReason: kind, validationNote: reason.slice(0, 500) });
+  await advanceState(work.id, "NEEDS_RETHINK", `3 similar failures in a row (${kind}) — pausing for a rethink`);
+  await addMessage({
+    salonId: work.salonId ?? AGORA_SALON_ID, tokenId: 0, name: "ANA", imageUrl: "",
+    content: kind === "technical"
+      ? `⏸️ "${work.title}" hit the same technical limitation three times in a row. Flagging for human review before trying again.`
+      : `⏸️ "${work.title}" hit the same creative wall three times in a row. Pausing for a rethink — a new Author and a fresh brief will pick it up next.`,
+    isLlm: true, timestamp: Date.now(), topic: "art",
+  }).catch(() => null);
+  if (kind === "technical") {
+    const { promoteOrCreateFromSynthesis } = await import("@/lib/devRequests");
+    await promoteOrCreateFromSynthesis(
+      `Recurring technical validation failure on generative works: ${reason.slice(0, 200)}`,
+      work.salonId ?? AGORA_SALON_ID,
+    ).catch(() => null);
+  }
+}
+
+/**
+ * Resumes a NEEDS_RETHINK work. A "technical" pause stays paused — a human
+ * dev-request was already opened on entry (enterNeedsRethink above), and
+ * resuming automatically would just reproduce the same structural failure;
+ * an admin's existing retryGenerative action (POST handler) is the deliberate
+ * manual resume path once the underlying issue is actually fixed. A
+ * "creative" pause resumes on its own: a different Author (round-robin,
+ * excluding the one who kept hitting the same wall) gets a fresh brief.
+ */
+async function stepNeedsRethink(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+  if (work.needsRethinkReason !== "creative") return false;
+
+  const candidateIds = personas.map(p => p.tokenId);
+  const exclude = work.authorTokenId != null ? [work.authorTokenId] : [];
+  const newAuthorId = await nextInDispatchRotation("author", candidateIds, exclude);
+  const newAuthor = personas.find(p => p.tokenId === newAuthorId);
+  if (!newAuthor) return false;
+
+  await addMessage({
+    salonId: work.salonId ?? AGORA_SALON_ID, tokenId: newAuthor.tokenId, name: newAuthor.name, imageUrl: newAuthor.imageUrl ?? "",
+    content: `🔁 Picking "${work.title}" back up with a fresh brief from ${work.rapporteurName ?? "the Rapporteur"} — new direction, new attempt.`,
+    isLlm: true, timestamp: Date.now(), topic: "art",
+  }).catch(() => null);
+
+  await updateWork(work.id, {
+    authorTokenId: newAuthor.tokenId, authorName: newAuthor.name,
+    brief: undefined, artworkText: undefined, validationNote: undefined,
+    revisionCount: 0, similarFailureStreak: 0, needsRethinkReason: undefined,
+  });
+  await advanceState(work.id, "BRIEFING", `Rethink resolved — new Author ${newAuthor.name}, fresh brief requested`);
+  return true;
+}
+
 // Shared by both rejection paths (curator-LLM "no" and the ground-truth structural
 // check above): always bounces the work back to CREATING with a concrete reason
 // attached for the next revisionCtx. No revision ceiling, deliberately — ANA
 // values a piece being right over being fast, so a work can go through as many
 // rounds as it takes. Past NOTABLE_REVISION_COUNT the salon message says so
 // explicitly, purely so a long-running piece stays legible instead of looking
-// like it's silently stuck.
+// like it's silently stuck. Three similar rejections in a row instead route to
+// NEEDS_RETHINK (see trackSimilarFailure/enterNeedsRethink above) rather than
+// bouncing back to CREATING a fourth time.
 async function rejectOrRevise(
   work: ANAWork, personas: NormiePersona[], curator: NormiePersona,
   reason: string, attempt: number,
 ): Promise<boolean> {
+  const rethink = await trackSimilarFailure(work, reason);
+  if (rethink) {
+    await enterNeedsRethink(work, reason, "creative");
+    return true;
+  }
+
   const notable = attempt + 1 >= NOTABLE_REVISION_COUNT
     ? ` (attempt ${attempt + 1} — this one's taking a while, which is fine)`
     : "";
@@ -1078,6 +1192,20 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
     } catch { return ""; }
   })();
 
+  // Cheap, deterministic backup for the curator's own similarity judgment —
+  // word-overlap against every stored creative fingerprint (see
+  // creativeFingerprint.ts), not another LLM call. A high score doesn't
+  // auto-reject; it just gives the curator a concrete number instead of
+  // relying purely on the text list above.
+  const fingerprintNote = await (async () => {
+    const sim = await findMostSimilarFingerprint({
+      theme: work.brief ?? work.proposal ?? "", structure: "", palette: "", movementType: "",
+      interaction: "", emotion: "", keywords: [work.title],
+    }, work.id).catch(() => ({ mostSimilarWorkId: null, score: 0 }));
+    if (sim.score < FINGERPRINT_SIMILARITY_THRESHOLD) return "";
+    return `\nSTRUCTURAL SIMILARITY FLAG: this submission scores ${sim.score.toFixed(2)} (word-overlap) against a prior work (${sim.mostSimilarWorkId}) — weigh this seriously when deciding "tooSimilarToExisting".\n`;
+  })();
+
   const raw = await groq(
     [
       { role: "system", content: buildSystemPrompt(curator, others) },
@@ -1090,12 +1218,12 @@ Brief: ${work.brief?.slice(0, 300)}
 ${isHtml
   ? `Visual artwork (${work.artForm}) submitted by ${work.authorName}, ${(work.artworkText ?? "").length} characters.
 ${structuralNote}
-Judge the ARTISTIC merit only: does it genuinely look visual and alive (real shapes/motion/color/glitch), and does it match the brief's mood and concept?
+You do NOT see this piece rendered — you're reading its source code and the automated structural check above, not a screenshot. Judge what you CAN honestly judge from that: does the code's structure and intent (shapes, motion logic, color choices, on-chain data usage) match the brief's mood and concept, and does it read as a genuine creative effort rather than a token gesture? Don't claim to see it "look alive" — reason about what it's built to do.
 Excerpt: ${(work.artworkText ?? "").slice(0, 600)}…`
   : `Artwork submitted by ${work.authorName}:
 ${work.artworkText}`
 }
-${pastWorksForCurator}
+${pastWorksForCurator}${fingerprintNote}
 Do you approve this work for immutable on-chain publication?${revisionCtx}
 
 If it's too close in concept, theme, or execution to one of the existing works above, that's not a "polish it" note — it needs a full rework from a fresh brief, not another pass on the same idea. Set "tooSimilarToExisting" to true in that case instead of just rejecting it.
@@ -1108,7 +1236,7 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
     // Was 180 -- same reasoning-model truncation risk as castVote() above,
     // silently defaulting to "not approved" (an extra unneeded revision
     // cycle) whenever the model ran out of budget before writing the JSON.
-    { model: MODEL_FAST, maxTokens: 500, temp: 0.5, expectJson: true }
+    { model: MODEL_FAST, maxTokens: 500, temp: 0.5, expectJson: true, task: "curation" }
   );
 
   if (!raw) return false;
@@ -1515,6 +1643,13 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   // pulls approved spontaneous drawings.
   await advanceState(work.id, "PUBLISHED", `tx: ${work.txHash?.slice(0, 12)}`);
 
+  // Best-effort creative fingerprint (see creativeFingerprint.ts) — feeds
+  // future propose-work/briefing similarity checks. Never blocks publishing.
+  extractFingerprintFields({
+    title: work.title, brief: work.brief ?? "", artworkExcerpt: (work.artworkText ?? "").slice(0, 1000), artForm: work.artForm,
+  }).then(fields => fields && saveFingerprint({ workId: work.id, createdAt: Date.now(), ...fields }))
+    .catch(e => console.error(`[work-lifecycle] fingerprint save failed for ${work.id} (non-fatal):`, e));
+
   if (work.salonId && work.salonId !== AGORA_SALON_ID) {
     // Archive the salon, but leave a window where Normies who did NOT make this
     // work can react/debate it (see runCritiquePhase()) — that feedback flows
@@ -1545,7 +1680,7 @@ sentences. Be specific and concrete (not just "nice"/"meh") so the Author can ac
 it for future works. Always write in English.`,
       },
     ],
-    { model: MODEL_FAST, maxTokens: 100, temp: 0.85 },
+    { model: MODEL_FAST, maxTokens: 100, temp: 0.85, task: "critique" },
   );
   if (!raw) return;
   await addMessage({
@@ -1572,7 +1707,7 @@ async function summarizeCritique(work: ANAWork): Promise<string | null> {
       role: "user",
       content: `Summarize this community feedback on the ANA work "${work.title}" (${work.artForm ?? "text"}) in 1-2 concrete sentences — what was liked, what wasn't — so future creators of similar works can learn from it:\n\n${transcript}`,
     }],
-    { model: MODEL_FAST, maxTokens: 100, temp: 0.4 },
+    { model: MODEL_FAST, maxTokens: 100, temp: 0.4, task: "critique" },
   );
   return raw?.trim() ?? null;
 }
@@ -1792,6 +1927,7 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
       case "CREATING":     return await stepCreating(work, personas);
       case "VALIDATING":   return await stepValidating(work, personas);
       case "PUBLISHING":   return await stepPublishing(work);
+      case "NEEDS_RETHINK": return await stepNeedsRethink(work, personas);
       default:             return false;
     }
   } catch (e) {
@@ -1991,11 +2127,16 @@ export async function POST(req: NextRequest) {
 
     // VOTE_OPEN legitimately returns false while waiting on the 24h voting window
     // (not everyone has voted yet) — that is normal, not a failure, never auto-reject it.
-    // Uses stalledAt (where advanceWork actually stopped), not the work's
-    // original `from` state, so a memorial that cascades past VOTE_OPEN and
-    // then genuinely fails at e.g. PUBLISHING isn't mistaken for "still voting".
+    // NEEDS_RETHINK("technical") also legitimately returns false while paused
+    // waiting on a human dev-request response (see stepNeedsRethink) — the
+    // circuit breaker exists specifically to STOP consuming pipeline-failure
+    // budget, so counting its own pause against MAX_PIPELINE_FAILS would
+    // defeat the point. Uses stalledAt (where advanceWork actually stopped),
+    // not the work's original `from` state, so a memorial that cascades past
+    // VOTE_OPEN and then genuinely fails at e.g. PUBLISHING isn't mistaken
+    // for "still voting".
     let autoRejected = false;
-    if (!advanced && stalledAt !== "VOTE_OPEN") {
+    if (!advanced && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK") {
       // Any other non-advancing step counts — even steps that only return false
       // on failure (no descriptive string) must not block the pipeline forever.
       const reason    = error ?? `no progress at ${stalledAt} (step returned false — likely a transient LLM/data issue)`;

@@ -1,0 +1,33 @@
+name: ANA — Orchestrator
+
+on:
+  # Single 30-minute schedule replacing auto-exchange/work-lifecycle/
+  # election-cycle/activity-catchup/check-burns/neon-keepalive's own independent
+  # schedules (see /api/keeper/orchestrator, which decides what's actually due
+  # on each tick) — concentrates every Neon wake-up into the same ~48
+  # windows/day instead of five schedules drifting independently. Sept 2026
+  # pérennisation study: 48 windows × ~5 min active ≈ 4h/day ≈ 30 CU-h/month.
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  orchestrator:
+    name: Run all due keeper tasks
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: POST /api/keeper/orchestrator
+        run: |
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ vars.ANA_APP_URL }}/api/keeper/orchestrator" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
+            -d '{}')
+          echo "HTTP $STATUS"
+          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Orchestrator reported at least one failed task (HTTP $STATUS) — see task results above"
+            exit 1
+          fi

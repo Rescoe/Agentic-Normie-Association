@@ -1,12 +1,11 @@
 name: ANA — Check Burns
 
 on:
-  schedule:
-    # Was every 15 min (96 Neon touches/day). Porteur's explicit cost call
-    # (25/09): 60 min still leaves ~3h of the ~4h burn -> vote -> display
-    # budget for the rest of the cascade (work-lifecycle), comfortably —
-    # nothing else in this pipeline runs on minute-level granularity anyway.
-    - cron: '0 * * * *'
+  # Schedule removed (Sept 2026 pérennisation pass) — orchestrator.yml now
+  # calls POST /api/keeper/check-burns every 2h (same tick as salon-exchange/
+  # work-lifecycle) as part of its own consolidated 30-min schedule (see
+  # /api/keeper/orchestrator). Kept as workflow_dispatch only, for manual
+  # triggering/testing.
   workflow_dispatch:
 
 jobs:

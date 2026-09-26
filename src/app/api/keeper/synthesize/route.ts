@@ -1,116 +1,53 @@
 /**
  * POST /api/keeper/synthesize
  *
- * Manual trigger for the monthly synthesis. Useful for testing or if the
- * automatic trigger in salon-exchange was skipped.
+ * Manual/orchestrator trigger for salon synthesis (see synthesis.ts). The
+ * daily midnight orchestrator tick calls runDailySynthesis() with the day's
+ * collected external signals; the 30-min ticks call runThresholdSynthesis()
+ * for any salon that individually crossed the message threshold. This route
+ * exposes both for manual testing/admin use — never for an anonymous caller
+ * to trigger a costly LLM synthesis pass, hence the same cron-secret/admin
+ * auth every other keeper route uses.
  *
- * Body: { force?: boolean }  — force=true ignores the 30-day cooldown.
+ * Body: { salonId?: string, force?: boolean, mode?: "threshold" | "daily" }
+ *   - salonId + force: synthesize exactly that salon regardless of threshold.
+ *   - mode "threshold" (default): every salon currently past the message threshold.
+ *   - mode "daily": every salon with any backlog, plus external signal collection.
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listSalons, isSynthesisDue, storeSynthesis, markSynthesisDone, getSynthesisInfo,
-  SYNTHESIS_MIN_MSGS, SYNTHESIS_KEEP_LAST,
-} from "@/lib/salonStore";
+import { synthesizeSalon, runThresholdSynthesis, runDailySynthesis } from "@/lib/synthesis";
+import { collectDailySignals } from "@/lib/externalSignals";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL        = "openai/gpt-oss-120b";
-
-async function generateSummaryText(
-  salonName:    string,
-  transcript:   string,
-  dateFrom:     string,
-  dateTo:       string,
-): Promise<string | null> {
-  try {
-    const res = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          {
-            role: "system",
-            content: "You are the ANA (Agentic Normie Association) archivist. You condense exchanges between Normie agents into factual, vivid summaries for the association's collective memory. Always write in English.",
-          },
-          {
-            role: "user",
-            content: `Condense these exchanges from the salon "${salonName}" from ${dateFrom} to ${dateTo} into a paragraph of 120-160 words.\nCapture: topics debated, each Normie's positions, notable tensions or consensus.\nStyle: neutral journalistic, 3rd person, narrative present tense.\n\n${transcript}`,
-          },
-        ],
-        max_tokens: 300, temperature: 0.5,
-      }),
-    });
-    if (!res.ok) { console.error(`[synthesize] Groq ${res.status}`); return null; }
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content?.trim() ?? null;
-  } catch (e) {
-    console.error("[synthesize] error:", e);
-    return null;
-  }
+async function isAuthorized(req: NextRequest): Promise<boolean> {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && (req.headers.get("x-cron-secret") === cronSecret || req.headers.get("authorization") === `Bearer ${cronSecret}`)) return true;
+  return (await verifyAdminRequest(req)).ok;
 }
 
 export async function POST(req: NextRequest) {
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }
+  if (!(await isAuthorized(req))) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
+  }
 
-  let body: { force?: boolean } = {};
+  let body: { salonId?: string; force?: boolean; mode?: "threshold" | "daily" } = {};
   try { body = await req.json(); } catch { /* ok */ }
 
-  const force = body.force ?? false;
-
-  if (!force) {
-    const due = await isSynthesisDue();
-    if (!due) {
-      const info = await getSynthesisInfo();
-      return NextResponse.json({
-        ran: false,
-        reason: "Synthesis not due yet",
-        nextSynthesisAt:   info.nextSynthesisAt,
-        nextSynthesisDate: new Date(info.nextSynthesisAt).toISOString(),
-      });
-    }
+  if (body.salonId) {
+    const result = await synthesizeSalon(body.salonId, { force: body.force ?? true });
+    return NextResponse.json(result);
   }
 
-  const salons        = await listSalons();
-  const synthesized:  Array<{ salonId: string; messageCount: number; summary: string }> = [];
-  const skipped:      Array<{ salonId: string; reason: string }> = [];
-
-  for (const salon of salons) {
-    if (salon.messages.length < SYNTHESIS_MIN_MSGS) {
-      skipped.push({ salonId: salon.id, reason: `only ${salon.messages.length} messages (min ${SYNTHESIS_MIN_MSGS})` });
-      continue;
-    }
-
-    const msgsToSummarize = salon.messages.slice(0, -SYNTHESIS_KEEP_LAST);
-    if (msgsToSummarize.length === 0) {
-      skipped.push({ salonId: salon.id, reason: "nothing to summarize beyond keep_last" });
-      continue;
-    }
-
-    const dateFrom = new Date(msgsToSummarize[0].timestamp).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
-    const dateTo   = new Date(msgsToSummarize.at(-1)!.timestamp).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
-    const transcript = msgsToSummarize.map(m => `${m.name} : ${m.content}`).join("\n").slice(0, 6000);
-
-    const content = await generateSummaryText(salon.name, transcript, dateFrom, dateTo);
-    if (!content) {
-      skipped.push({ salonId: salon.id, reason: "LLM failed" });
-      continue;
-    }
-
-    await storeSynthesis(salon.id, content, msgsToSummarize[0].timestamp, msgsToSummarize.at(-1)!.timestamp, msgsToSummarize.length);
-    synthesized.push({ salonId: salon.id, messageCount: msgsToSummarize.length, summary: content });
+  if (body.mode === "daily") {
+    const { kept } = await collectDailySignals().catch(e => { console.error("[synthesize] signal collection failed:", e); return { kept: [] }; });
+    const results = await runDailySynthesis(kept);
+    return NextResponse.json({ mode: "daily", signalsCollected: kept.length, results });
   }
 
-  await markSynthesisDone();
-  const info = await getSynthesisInfo();
-
-  return NextResponse.json({
-    ran:               true,
-    synthesized,
-    skipped,
-    nextSynthesisAt:   info.nextSynthesisAt,
-    nextSynthesisDate: new Date(info.nextSynthesisAt).toISOString(),
-  });
+  const results = await runThresholdSynthesis();
+  return NextResponse.json({ mode: "threshold", results });
 }

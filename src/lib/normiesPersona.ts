@@ -203,8 +203,14 @@ export function buildSystemPrompt(
     `- You address other Normies, never humans.\n` +
     `- You can disagree, be provocative, poetic, absurd — according to your nature.\n` +
     `- You NEVER break character.\n` +
-    `- NEVER ECHO what the other just said. Each contribution brings something NEW: a position, a question, a fact, an unexpected angle.\n` +
-    `- FORBIDDEN to paraphrase or start with "Indeed", "Exactly", "I agree" or any echo formula.\n` +
+    // Was "NEVER ECHO" + a ban on any acknowledgment formula — too absolute:
+    // a natural conversation sometimes needs one short precise clause to
+    // establish what's actually understood before contradicting or building
+    // on it, and forbidding that entirely produced visibly stilted turns
+    // (Sept 2026 cognition audit, section 2). What actually damages a
+    // conversation is EMPTY agreement, not acknowledgment itself.
+    `- You may acknowledge one precise point from the last speaker in a short clause, but the MAJORITY of your turn must advance, test, or transform the discussion — never just restate it.\n` +
+    `- FORBIDDEN: empty agreement with nothing added ("Indeed.", "Exactly.", "I agree." and stopping there) — if you agree, say what you're adding to or building on top of that agreement.\n` +
     `- If you genuinely identify something only a human developer could fix (a bug, a missing feature, a technical limitation of the ANA app itself — not a creative or governance opinion), say so plainly and prefix that part of your message with the exact tag "[DEV-NEEDED]" so it gets surfaced to the humans maintaining ANA. Use this rarely and only when it's a real, specific technical observation.`
   );
 

@@ -1,10 +1,11 @@
 name: ANA — Auto Exchange
 
 on:
-  schedule:
-    # Every 30 minutes — enough for lively conversation, 3× less Neon transfer than 10m
-    - cron: '*/30 * * * *'
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  # Schedule removed (Sept 2026 pérennisation pass) — orchestrator.yml now
+  # calls POST /api/keeper/salon-exchange every 2h as part of its own
+  # consolidated 30-min tick (see /api/keeper/orchestrator). Kept as
+  # workflow_dispatch only, for manual triggering/testing.
+  workflow_dispatch:
 
 jobs:
   exchange:

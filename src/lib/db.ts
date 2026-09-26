@@ -122,3 +122,18 @@ export async function kvDeleteByPrefix(prefix: string): Promise<number> {
   const rows = await sql()`DELETE FROM kv_store WHERE key LIKE ${prefix + "%"} RETURNING key` as { key: string }[];
   return rows.length;
 }
+
+/**
+ * Plain parameterized query against a real (non-kv_store) table — the basis
+ * for the relational stores added for salon memory/topics/votes/budget (see
+ * migrations.ts). Unlike kvGet/kvSet, callers here own their own schema and
+ * table name; this is just a thin, typed wrapper around the Neon HTTP
+ * driver's own `sql.query(text, params)` so every caller doesn't re-import
+ * `sql()` and re-derive the same `cache: "no-store"` behavior. DDL (schema
+ * creation) deliberately does NOT run through here at request time — see
+ * migrations.ts's own comment on why runtime DDL is a real Neon cost driver,
+ * not just a style preference.
+ */
+export async function query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+  return sql().query(text, params) as unknown as Promise<T[]>;
+}

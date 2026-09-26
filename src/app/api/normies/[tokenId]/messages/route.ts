@@ -10,24 +10,14 @@
  * Response:
  *   { tokenId, name, totalMessages, messages: Array<MessageWithContext> }
  *
- * MessageWithContext:
- *   { ...message, salonName, before: SalonMessage|null, after: SalonMessage|null }
+ * Rewritten (Sept 2026 pérennisation pass) to query salon_messages directly by
+ * token_id instead of iterating every salon's full message list (listSalons()
+ * no longer carries messages at all — see salonStore.ts's compact Salon type).
  */
 
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { listSalons, type SalonMessage } from "@/lib/salonStore";
-
-interface MessageWithContext {
-  id:        string;
-  salonId:   string;
-  salonName: string;
-  content:   string;
-  timestamp: number;
-  isLlm:     boolean;
-  before:    SalonMessage | null; // message just before in the salon
-  after:     SalonMessage | null; // message just after in the salon
-}
+import { getMessagesByTokenId } from "@/lib/salonStore";
 
 export async function GET(
   req: NextRequest,
@@ -38,50 +28,18 @@ export async function GET(
     return NextResponse.json({ error: "Invalid tokenId" }, { status: 400 });
   }
 
-  // Optional query params
   const limit  = Math.min(Number(req.nextUrl.searchParams.get("limit")  ?? "50"), 200);
   const offset = Number(req.nextUrl.searchParams.get("offset") ?? "0");
 
-  const salons = await listSalons();
-
-  const results: MessageWithContext[] = [];
-
-  for (const salon of salons) {
-    for (let i = 0; i < salon.messages.length; i++) {
-      const msg = salon.messages[i];
-      if (msg.tokenId !== tokenId) continue;
-
-      results.push({
-        id:        msg.id,
-        salonId:   salon.id,
-        salonName: salon.name,
-        content:   msg.content,
-        timestamp: msg.timestamp,
-        isLlm:     msg.isLlm,
-        before:    i > 0 ? salon.messages[i - 1] : null,
-        after:     i < salon.messages.length - 1 ? salon.messages[i + 1] : null,
-      });
-    }
-  }
-
-  // Sort by timestamp descending (most recent first)
-  results.sort((a, b) => b.timestamp - a.timestamp);
-
-  const total  = results.length;
-  const paged  = results.slice(offset, offset + limit);
-
-  // Resolve name from first found message
-  const name = salons
-    .flatMap(s => s.messages)
-    .find(m => m.tokenId === tokenId)?.name ?? `Normie #${tokenId}`;
+  const { total, messages, name } = await getMessagesByTokenId(tokenId, limit, offset);
 
   return NextResponse.json({
     tokenId,
-    name,
+    name: name ?? `Normie #${tokenId}`,
     totalMessages: total,
     limit,
     offset,
-    messages: paged,
+    messages,
   }, {
     headers: {
       "Cache-Control": "no-store",

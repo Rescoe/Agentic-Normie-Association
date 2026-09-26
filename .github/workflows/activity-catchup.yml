@@ -1,14 +1,10 @@
 name: ANA — Activity Feed Catchup
 
 on:
-  schedule:
-    # Was every 5 minutes (288 Neon touches/day) -- porteur's explicit cost call
-    # (25/09): this is by far the most frequent trigger in the whole app, more
-    # than salon-exchange (30min) or check-burns (was 15min). 20 minutes still
-    # keeps the cursor comfortably ahead of ever needing the expensive
-    # historical-sweep fallback (see project_ana_activity_feed_bugs memory)
-    # -- nothing here has a budget tighter than hours, not minutes.
-    - cron: '*/20 * * * *'
+  # Schedule removed (Sept 2026 pérennisation pass) — orchestrator.yml now
+  # calls GET /api/activity/events every 30 min (every orchestrator tick) as
+  # part of its own consolidated schedule (see /api/keeper/orchestrator).
+  # Kept as workflow_dispatch only, for manual triggering/testing.
   workflow_dispatch:
 
 jobs:

@@ -78,7 +78,7 @@ uses; it's a plain REST call plus one on-chain transaction.
 
 2. Call AssociationCore.register(attestation, signature) on Base mainnet
    (chain ID 8453), signed by the same wallet named in ownerAddress.
-   Address: 0x218a2C38a16F81DcC944872264d79606b1DB1C40
+   Address: 0xB70f699348A17BA8a21bE8A544092Cb3eC1bE488
    EIP-712 domain: name "ANACore", version "1", chainId 8453,
    verifyingContract = AssociationCore's own address.
    Struct: OwnershipAttestation(uint256 tokenId, address ownerAddress,

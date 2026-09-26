@@ -827,6 +827,14 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
               >
                 {work.collectionAddress.slice(0, 6)}…{work.collectionAddress.slice(-4)} ↗
               </a>
+              <a
+                href={`https://opensea.io/assets/base/${work.collectionAddress}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                OpenSea ↗
+              </a>
             </div>
             <ClaimFreeEditionButton collectionAddress={work.collectionAddress as `0x${string}`} />
             {work.editionPrice && (
@@ -1129,6 +1137,13 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                 >
                   {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
                 </a>
+                <a
+                  href={`https://opensea.io/assets/base/${cert.collectionAddress}`}
+                  target="_blank" rel="noopener noreferrer"
+                  className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+                >
+                  OpenSea ↗
+                </a>
               </div>
               <ClaimFreeEditionButton collectionAddress={cert.collectionAddress as `0x${string}`} />
               {cert.editionPrice && (
@@ -1231,6 +1246,13 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                 className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
               >
                 {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
+              </a>
+              <a
+                href={`https://opensea.io/assets/base/${cert.collectionAddress}`}
+                target="_blank" rel="noopener noreferrer"
+                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+              >
+                OpenSea ↗
               </a>
             </div>
             <ClaimFreeEditionButton collectionAddress={cert.collectionAddress as `0x${string}`} />

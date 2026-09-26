@@ -19,6 +19,7 @@ import { createWork, listWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { baseRpcTransport } from "@/lib/baseRpc";
 import { extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { recordLlmCall } from "@/lib/llmLedger";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -162,6 +163,7 @@ Respond with ONLY the raw JSON object below, always in English — no reasoning,
   }).catch(() => null);
 
   if (!res) throw new Error("Groq request failed (network error)");
+  await recordLlmCall({ provider: "groq", model: "openai/gpt-oss-120b", task: "propose-work", success: res.ok });
   if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 500)}`);
 
   const data = await res.json() as GroqChatResponse;

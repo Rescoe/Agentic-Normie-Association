@@ -25,11 +25,18 @@ export type WorkState =
   | "VALIDATING"
   | "PUBLISHING"
   | "PUBLISHED"
-  | "REJECTED";
+  | "REJECTED"
+  // Circuit breaker (Sept 2026 pérennisation pass): a work that fails
+  // similarly 3 times in a row pauses here instead of looping CREATING <->
+  // VALIDATING forever — see stepNeedsRethink() in work-lifecycle. Not a
+  // rejection: the work resumes automatically (new author + fresh brief) once
+  // the cause looks like a creative mismatch, or waits on a human dev-request
+  // if the cause looks technical (a structural validator failure).
+  | "NEEDS_RETHINK";
 
 export const ACTIVE_STATES: WorkState[] = [
   "PROPOSED", "VOTE_OPEN", "VOTE_TALLIED",
-  "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING",
+  "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING", "NEEDS_RETHINK",
 ];
 
 export interface WorkVote {
@@ -67,6 +74,13 @@ export interface ANAWork {
   noCount?:      number;
   absCount?:     number;
   totalVoters?:  number;
+  // Cumulative vote-attempt counters across every stepVoteOpen() tick this
+  // vote window has seen — an invalid LLM output or provider error is a
+  // technical failure, never folded into yes/no/abstain (see voting.ts).
+  // Persisted into vote_metrics (voteMetricsStore.ts) once the window closes.
+  voteInvalidOutputs?: number;
+  voteProviderErrors?: number;
+  voteRetries?:        number;
 
   // Roles (assigned after vote passes) — the Normie actually dispatched to do the work
   rapporteurTokenId?: number;
@@ -95,6 +109,9 @@ export interface ANAWork {
   validationNote?: string;
   revisionCount?:  number;
   pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — auto-rejects past MAX_PIPELINE_FAILS
+  // Circuit breaker bookkeeping (see NEEDS_RETHINK state above).
+  similarFailureStreak?: number;
+  needsRethinkReason?:   "technical" | "creative";
 
   // Post-publication community critique (non-creator Normies react/debate in the
   // work's archived salon for a limited window) — see openCritiqueWindow() in

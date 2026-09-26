@@ -1,10 +1,10 @@
 name: ANA — Election Cycle
 
 on:
-  schedule:
-    # Every 6 hours — the cycle is idempotent and only acts when the next
-    # step (open/candidacy/vote/close) is actually due.
-    - cron: '0 */6 * * *'
+  # Schedule removed (Sept 2026 pérennisation pass) — orchestrator.yml now
+  # calls POST /api/keeper/election-cycle every 6h as part of its own
+  # consolidated 30-min tick (see /api/keeper/orchestrator). Kept as
+  # workflow_dispatch only, for manual triggering/testing.
   workflow_dispatch:
 
 jobs:

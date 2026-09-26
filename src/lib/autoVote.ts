@@ -27,6 +27,7 @@ import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from 
 import { runProposeWork } from "@/lib/proposeWork";
 import { baseRpcTransport } from "@/lib/baseRpc";
 import { extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { recordLlmCall } from "@/lib/llmLedger";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
@@ -109,6 +110,7 @@ async function groqText(prompt: string, fast = false): Promise<string> {
       temperature: 0.7,
     }),
   });
+  await recordLlmCall({ provider: "groq", model: fast ? MODEL_F : MODEL, task: "candidacy", success: r.ok });
   if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
   const d = await r.json() as GroqChatResponse;
   return extractContent(d);
@@ -135,6 +137,7 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
       temperature: 0.6,
     }),
   });
+  await recordLlmCall({ provider: "groq", model: MODEL, task: "vote", success: r.ok });
   if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
   const d = await r.json() as GroqChatResponse;
   return extractJsonObject(extractContentOrReasoning(d));
