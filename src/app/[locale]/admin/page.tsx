@@ -20,6 +20,7 @@ import {
   useWriteContract,
   useWaitForTransactionReceipt,
   useSignMessage,
+  usePublicClient,
 } from "wagmi";
 import { useRouter } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
@@ -2389,6 +2390,17 @@ export default function AdminPage() {
   const [relayerInput, setRelayerInput] = useState("");
   const [activeTab,    setActiveTab]    = useState<AdminTab>("overview");
 
+  // Post-redeploy member migration (migrateMembers on the new Core) — reads
+  // the old Core's member list live, then submits the migration tx with the
+  // CONNECTED wallet. Added 26/09/2026: the equivalent hardhat script only
+  // has the CLI signer (RELAYER_PRIVATE_KEY) available, but the new Core's
+  // owner() was whichever wallet actually paid for its deployment (MetaMask,
+  // in this case) -- this lets that same wallet sign the migration directly,
+  // no private key juggling needed.
+  const [oldCoreInput,   setOldCoreInput]   = useState("");
+  const [migrateStatus,  setMigrateStatus]  = useState<string | null>(null);
+  const publicClient = usePublicClient();
+
   // ── Actions ───────────────────────────────────────────────────────────────
   const execTx = useCallback(async (
     address_: `0x${string}`,
@@ -2610,6 +2622,58 @@ export default function AdminPage() {
               <p className="font-mono text-xs text-[--fg-muted] mt-1">
                 Owner : {coreOwner ? String(coreOwner) : "—"}
               </p>
+            </div>
+
+            {/* migrateMembers */}
+            <div className="border border-orange-300 p-5 space-y-3">
+              <div>
+                <p className="font-bold text-sm">Migrer les membres (post-redéploiement)</p>
+                <p className="font-mono text-xs text-[--fg-muted] mt-0.5 leading-relaxed">
+                  Lit la liste des membres depuis l&apos;ANCIEN AssociationCore ci-dessous et les
+                  réimporte dans le Core actuel ({CORE_ADDR}) via <code>migrateMembers()</code> —
+                  personne n&apos;a besoin de se réinscrire.
+                  {Array.isArray(memberTokenIds) && (memberTokenIds as bigint[]).length > 0 && (
+                    <span className="text-green-700"> Le Core actuel a déjà {(memberTokenIds as bigint[]).length} membre(s).</span>
+                  )}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={oldCoreInput}
+                  onChange={e => { setOldCoreInput(e.target.value); setMigrateStatus(null); }}
+                  placeholder="0x… adresse de l'ANCIEN AssociationCore"
+                  className="font-mono text-xs border border-orange-300 bg-[--bg] px-3 py-2 flex-1 focus:outline-none focus:border-orange-500"
+                />
+                <button
+                  disabled={!isCoreOwner || !isAddress(oldCoreInput) || !publicClient}
+                  onClick={async () => {
+                    if (!publicClient) return;
+                    setMigrateStatus("Lecture des membres de l'ancien Core…");
+                    try {
+                      const tokenIds = await publicClient.readContract({
+                        address: oldCoreInput as `0x${string}`,
+                        abi: ASSOCIATION_CORE_ABI,
+                        functionName: "getMemberTokenIds",
+                      }) as bigint[];
+                      if (tokenIds.length === 0) {
+                        setMigrateStatus("⚠️ L'ancien Core ne renvoie aucun membre — vérifie l'adresse.");
+                        return;
+                      }
+                      setMigrateStatus(`Migration de ${tokenIds.length} membre(s) (${tokenIds.join(", ")}) — confirme dans ton wallet…`);
+                      await execTx(CORE_ADDR, ASSOCIATION_CORE_ABI, "migrateMembers", [oldCoreInput as `0x${string}`, tokenIds]);
+                      setMigrateStatus(`✅ ${tokenIds.length} membre(s) migré(s).`);
+                    } catch (e) {
+                      setMigrateStatus(`❌ ${e instanceof Error ? e.message : String(e)}`);
+                    }
+                  }}
+                  className="font-mono text-xs bg-orange-600 text-white px-4 py-2 hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                >
+                  Migrer →
+                </button>
+              </div>
+              {migrateStatus && (
+                <p className="font-mono text-xs text-[--fg-muted]">{migrateStatus}</p>
+              )}
             </div>
 
             {/* authorizeModule */}
