@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { readChainStats } from "@/lib/chainReader";
 import { getActiveWorks } from "@/lib/workStore";
 
+// Cached at the edge (Sept 2026 cost audit) -- backs LiveEventsBanner, which
+// is mounted site-wide via Navbar, so this was the single most-hit route.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120" };
+
 export async function GET() {
   const [stats, activeWorks] = await Promise.all([
     readChainStats(),
@@ -33,5 +37,5 @@ export async function GET() {
     })),
     chain:     "Base",
     updatedAt: Date.now(),
-  });
+  }, { headers: CACHE_HEADERS });
 }

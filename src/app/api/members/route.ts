@@ -31,10 +31,14 @@ async function getMemberIds(): Promise<number[]> {
   } catch { return []; }
 }
 
+// Cached at the edge (Sept 2026 cost audit) -- one persona build + one Neon
+// stats read per member per request otherwise, on the /members page.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
+
 export async function GET() {
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) {
-    return NextResponse.json({ members: [], note: "Chain read failed or no members yet" });
+    return NextResponse.json({ members: [], note: "Chain read failed or no members yet" }, { headers: CACHE_HEADERS });
   }
 
   const personas = await Promise.allSettled(memberIds.map(id => buildPersona(id)));
@@ -63,5 +67,5 @@ export async function GET() {
     };
   }));
 
-  return NextResponse.json({ members, count: members.length });
+  return NextResponse.json({ members, count: members.length }, { headers: CACHE_HEADERS });
 }

@@ -22,6 +22,11 @@ async function getMemberIds(): Promise<number[]> {
   } catch { return []; }
 }
 
+// GET is cached at the edge so read traffic no longer scales 1:1 with Neon
+// reads (Sept 2026 cost audit) -- POST below stays fully dynamic/uncached,
+// it's a write.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120" };
+
 export async function GET() {
   const [salons, synthInfo, outcomes] = await Promise.all([listSalons(), getSynthesisInfo(), getSalonWorkOutcomes()]);
   const enriched = salons.map(s => ({ ...s, workOutcome: outcomes[s.id] ?? null }));
@@ -29,7 +34,7 @@ export async function GET() {
     salons: enriched,
     nextSynthesisAt:   synthInfo.nextSynthesisAt,
     nextSynthesisDate: new Date(synthInfo.nextSynthesisAt).toISOString(),
-  });
+  }, { headers: CACHE_HEADERS });
 }
 
 export async function POST(req: NextRequest) {

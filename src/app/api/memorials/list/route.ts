@@ -21,6 +21,11 @@ const client = createPublicClient({
   transport: http(process.env.BASE_RPC_URL ?? "https://mainnet.base.org", { timeout: 30_000 }),
 });
 
+// Cached at the edge (Sept 2026 cost audit) -- Footer.tsx fetches this on
+// every single page, site-wide, so uncached this was the single most-hit
+// route on the whole site, plus one on-chain read per memorial series.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
+
 export interface MemorialListItem {
   memorialId:       number;
   workAnaId?:       string; // ANAWork id — links to the dedicated /galerie/celebrations/[id] page
@@ -41,7 +46,7 @@ export interface MemorialListItem {
 
 export async function GET() {
   const addr = CONTRACT_ADDRESSES.ANAMemorials as `0x${string}`;
-  if (!addr) return NextResponse.json({ contractAddress: "", items: [] satisfies MemorialListItem[] });
+  if (!addr) return NextResponse.json({ contractAddress: "", items: [] satisfies MemorialListItem[] }, { headers: CACHE_HEADERS });
 
   try {
     const [count, milestoneStepRaw] = await Promise.all([
@@ -53,7 +58,7 @@ export async function GET() {
     ]);
     const total = Number(count);
     const milestoneStep = Number(milestoneStepRaw);
-    if (total === 0) return NextResponse.json({ contractAddress: addr, milestoneStep, items: [] satisfies MemorialListItem[] });
+    if (total === 0) return NextResponse.json({ contractAddress: addr, milestoneStep, items: [] satisfies MemorialListItem[] }, { headers: CACHE_HEADERS });
 
     const works = await listWorks();
 
@@ -103,7 +108,7 @@ export async function GET() {
       }),
     );
 
-    return NextResponse.json({ contractAddress: addr, milestoneStep, items: items.reverse() }); // newest first
+    return NextResponse.json({ contractAddress: addr, milestoneStep, items: items.reverse() }, { headers: CACHE_HEADERS }); // newest first
   } catch (e) {
     console.error("[memorials/list] error:", e);
     return NextResponse.json({ error: "Failed to load memorials" }, { status: 500 });

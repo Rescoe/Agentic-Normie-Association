@@ -13,6 +13,11 @@ import { getHistoryStats, getBurnedTokens, getBurnedTokenImageUrl } from "@/lib/
 
 const TOTAL_SUPPLY = 10_000;
 
+// Cached at the edge (Sept 2026 cost audit) -- without it, every visitor hit
+// api.normies.art directly, so this scaled 1:1 with traffic same as the
+// Neon-backed routes.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120" };
+
 export async function GET() {
   try {
     const [stats, recent] = await Promise.all([
@@ -30,7 +35,7 @@ export async function GET() {
         burnedAt:    new Date(Number(t.timestamp) * 1000).toISOString(),
         imageUrl:    getBurnedTokenImageUrl(t.tokenId),
       })),
-    });
+    }, { headers: CACHE_HEADERS });
   } catch (err) {
     console.error("[burns/stats] ERROR:", err);
     return NextResponse.json({ error: "Failed to load burn stats" }, { status: 502 });
