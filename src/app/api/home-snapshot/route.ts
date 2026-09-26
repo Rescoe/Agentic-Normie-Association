@@ -25,10 +25,17 @@ import { getBurnedTokens, getBurnedTokenImageUrl } from "@/lib/normiesApi";
 
 const AGORA_SALON_ID = "salon_agora_ana";
 
-// 2 minutes fresh is more than enough for a homepage teaser -- nobody needs
-// this down to the second, and it caps Neon/normies.art traffic from this
-// widget to once per window regardless of visitor count.
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=120, stale-while-revalidate=300" };
+// 30 minutes, matching /api/works' own cache window (see its comment) --
+// s-maxage=120 was too short in practice: with stale-while-revalidate, ANY
+// visit within a 2-minute window re-triggers a background Neon fetch, which
+// is *more frequent* than Neon's 5-minute scale-to-zero threshold, so the
+// compute could never see a genuine idle gap as long as even light traffic
+// (crawlers, uptime monitors) kept arriving every few minutes. 30 minutes
+// gives real windows of ~25+ idle minutes between revalidations even with
+// steady traffic, at the cost of a homepage teaser that can lag by up to
+// half an hour -- acceptable for a "happening now" widget, same tradeoff
+// already accepted for /api/works.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
 
 export async function GET() {
   const [works, agoraMessages, burns] = await Promise.allSettled([
