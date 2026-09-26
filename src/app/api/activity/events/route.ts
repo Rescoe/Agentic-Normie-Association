@@ -17,13 +17,24 @@ import {
   MAX_EVENTS_KEPT, type ActivityEvent, type CachedPayload,
 } from "@/lib/activityScanner";
 
-// AssociationCore's actual deployment block (2026-06-10T21:10:41Z, per Simple-Deploy-Solidity's
-// deployed.json), rounded down for safety margin. This MUST be a fixed constant, not computed
-// from `latest` — it used to be `latest - 2_000_000n` ("46 days back"), which is a *sliding*
-// window: every day that passes without the cursor finishing its catch-up, the floor itself
-// creeps forward and permanently strands whatever the cursor hadn't reached yet. A fixed floor
-// anchored to the real deployment block doesn't have this problem — it never moves.
-const LAUNCH_FLOOR_BLOCK = 47_000_000n;
+// AssociationCore's actual deployment block for the CURRENT (26/09/2026)
+// redeploy — verified on-chain via binary search on eth_getCode against
+// 0xB70f699348A17BA8a21bE8A544092Cb3eC1bE488 (block 51,811,677, timestamp
+// 2026-09-26T08:51:41Z), rounded down for safety margin. Was 47_000_000n,
+// anchored to the PREVIOUS AssociationCore deployment (10/06/2026) — after
+// the 26/09 contract redeploy, every contract address this scanner reads
+// (Core, Assembly, WorkRegistry, ...) is new, so scanning from the old floor
+// only wasted ~4.4M blocks finding nothing before ever reaching real events,
+// while CACHE_KEY's version bump below drops the stale mixed-history cache
+// that floor had already accumulated. This MUST be a fixed constant, not
+// computed from `latest` — it used to be `latest - 2_000_000n` ("46 days
+// back"), which is a *sliding* window: every day that passes without the
+// cursor finishing its catch-up, the floor itself creeps forward and
+// permanently strands whatever the cursor hadn't reached yet. A fixed floor
+// anchored to the real deployment block doesn't have this problem — it
+// never moves. Update this again (and re-verify the address above) the next
+// time these contracts are redeployed.
+const LAUNCH_FLOOR_BLOCK = 51_800_000n;
 
 // Vercel Hobby hard-caps every function at 60s NO MATTER what maxDuration says. WINDOW bounds
 // how many *new* blocks a single request scans — the cache stores a permanent lastScannedBlock
