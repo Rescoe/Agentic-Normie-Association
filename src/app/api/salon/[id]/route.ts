@@ -3,13 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSalon, closeSalon, excludeMember } from "@/lib/salonStore";
 import { getWorkBySalonId } from "@/lib/workStore";
 
-// Cached at the edge, matching /api/works /api/status /api/salon (Sept 2026
-// cost audit) -- also lets HomeLiveActivity.tsx fetch the Agora's recent
-// messages for the homepage widget without an uncached full-detail read on
-// every page load. A live chat feel still comes from SalonClient's own
-// client-side 30-min poll of GET .../messages?since=..., which is unaffected.
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
-
+// NOT cached (reverted 26/09/2026 — this specific caching attempt was a real
+// regression, confirmed live): this is the route that actually renders a
+// salon's conversation when someone opens it, including right after the
+// orchestrator just posted new messages. A 30-min edge cache meant anyone
+// opening the salon inside that window could see a stale snapshot — up to
+// and including a fully empty "no exchange yet" for a salon that already has
+// real messages — because a request made a moment BEFORE those messages
+// existed got cached and kept being served regardless of what changed after.
+// The list endpoint (/api/salon) keeps its 30-min cache for the sidebar
+// preview, which is lower-stakes than the actual reading experience; this
+// route needs to always reflect the real current state instead.
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -18,7 +22,7 @@ export async function GET(
   if (!salon) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
   const work = await getWorkBySalonId(params.id);
   const workOutcome = work ? (work.state === "PUBLISHED" ? "published" : work.state === "REJECTED" ? "rejected" : "active") : null;
-  return NextResponse.json({ salon: { ...salon, workOutcome } }, { headers: CACHE_HEADERS });
+  return NextResponse.json({ salon: { ...salon, workOutcome } });
 }
 
 export async function PATCH(
