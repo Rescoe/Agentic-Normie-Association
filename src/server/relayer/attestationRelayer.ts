@@ -30,10 +30,14 @@ const RELAYER_PRIVATE_KEY =
 const ASSOCIATION_CORE_ADDRESS =
   process.env.NEXT_PUBLIC_ASSOCIATION_CORE_ADDRESS as `0x${string}` | undefined;
 
-const TARGET_CHAIN_ID =
-  process.env.NEXT_PUBLIC_CHAIN === "base" ? 8453 : 84532;
+// Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026
+// audit finding — was the reverse, so an unset/misconfigured NEXT_PUBLIC_CHAIN
+// in production silently fell back to Sepolia instead of the real chain).
+const IS_SEPOLIA = process.env.NEXT_PUBLIC_CHAIN === "baseSepolia";
 
-const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
+const TARGET_CHAIN_ID = IS_SEPOLIA ? 84532 : 8453;
+
+const TARGET_CHAIN = IS_SEPOLIA ? baseSepolia : base;
 
 // Attestation valid for 15 minutes
 const DEADLINE_BUFFER_SECONDS = 15 * 60;

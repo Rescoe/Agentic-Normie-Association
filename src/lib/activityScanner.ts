@@ -432,16 +432,17 @@ export async function scanRange(from: bigint, to: bigint): Promise<ActivityEvent
 // why, and backfill/route.ts for the one exception (recovering a dropped event
 // from a range the cursor already passed, without moving the cursor at all).
 
-// Bumped v8 -> v9 on the 26/09/2026 contract redeploy: v8's cache held
-// lastScannedBlock + events scanned against the PREVIOUS contract addresses
-// (old AssociationCore/WorkRegistry/etc.) — mixing those into new-contract
-// history would be actively wrong, not just stale. A version bump abandons
-// that old row cleanly (no DELETE needed — v9 simply doesn't exist yet, so
-// the very next request starts a fresh scan from LAUNCH_FLOOR_BLOCK in
-// events/route.ts, which was updated to the new contracts' real deployment
-// block in the same change). The old v8 row is harmless dead data in
-// kv_store from here on.
-export const CACHE_KEY       = "activity:events:v9";
+// v8 -> v9 (26/09/2026 contract redeploy): v8's cache held lastScannedBlock +
+// events scanned against the PREVIOUS contract addresses — mixing those into
+// new-contract history would be actively wrong, not just stale.
+// v9 -> v10 (same day, follow-up audit finding): v9 was populated by the
+// first post-redeploy scan, which ran BEFORE the MEMBER_REGISTERED
+// block-timestamp fix landed — so its cached events still carry the old
+// (historical-date) timestamps for the migration entries. A version bump is
+// the same fix as before: no DELETE needed, v10 doesn't exist yet, so the
+// next request rebuilds every event with the current logic. The old v8/v9
+// rows are harmless dead data in kv_store from here on.
+export const CACHE_KEY       = "activity:events:v10";
 export const MAX_EVENTS_KEPT = 1000; // keep the blob bounded — older events are still in tx_log/on-chain
 
 export interface CachedPayload {

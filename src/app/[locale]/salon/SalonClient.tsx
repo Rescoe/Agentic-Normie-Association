@@ -409,9 +409,20 @@ function SalonChat({
   const getName = useCallback((id: number) => nameMap.get(id) ?? `#${id}`, [nameMap]);
   // true once the first poll completes — prevents "Aucun échange" flicker on stale lambda cache
   const [initialLoaded, setInitialLoaded] = useState((salon.messages?.length ?? 0) > 0);
+  // Set on a genuine fetch failure (network error or non-2xx) — distinct from
+  // "loaded, genuinely zero messages" so the UI never conflates the two (see
+  // the render branch below). Cleared on the next successful poll/retry.
+  const [pollError,     setPollError]     = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef   = useRef<NodeJS.Timeout | null>(null);
-  const lastTs    = useRef<number>(salon.messages?.at(-1)?.timestamp ?? salon.lastMessageAt ?? 0);
+  // Seeded ONLY from the actual messages array, never from salon.lastMessageAt
+  // (external audit finding, 26/09/2026): if `messages` was empty/stale while
+  // lastMessageAt was already set, seeding the cursor from lastMessageAt would
+  // make the very next poll's `since=<that same timestamp>` filter return
+  // ZERO messages — permanently masking the real history behind a "since"
+  // value that's already past every message that exists, instead of the 0
+  // that would correctly trigger a full catch-up fetch.
+  const lastTs    = useRef<number>(salon.messages?.at(-1)?.timestamp ?? 0);
 
   const mergeMessages = useCallback((incoming: SalonMessage[]) => {
     if (!incoming?.length) return;
@@ -424,6 +435,46 @@ function SalonChat({
     });
   }, []);
 
+  // Re-syncs local state whenever the SALON PROP itself changes — covers two
+  // cases the mount-only useState() initializers above miss entirely
+  // (external audit finding, 26/09/2026): (1) the parent's handleSelect()
+  // shows a salon immediately with whatever it already has (possibly the
+  // compact list entry, no `.messages`), then replaces it with the full
+  // detail fetch a moment later — a plain useState initializer never re-runs
+  // on that later prop change, so this component kept rendering the FIRST
+  // (possibly empty) snapshot forever; (2) switching from one open salon to
+  // another must not carry over the previous salon's messages/cursor.
+  useEffect(() => {
+    const incoming = salon.messages ?? [];
+    setMessages(incoming);
+    lastTs.current = incoming.at(-1)?.timestamp ?? 0;
+    setInitialLoaded(incoming.length > 0);
+    setPollError(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salon.id, salon.messages]);
+
+  const mountedRef = useRef(true);
+  // Extracted so the error state's retry button (render, below) can trigger
+  // exactly the same fetch the interval/visibility effect uses, instead of
+  // duplicating it or only being able to flip local flags with nothing to
+  // actually re-fetch.
+  const poll = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/salon/${salon.id}/messages?since=${lastTs.current}`);
+      // A non-2xx must surface as an error, never as silent "zero messages"
+      // (external audit finding, 26/09/2026) — the empty-state render below
+      // only ever means "loaded successfully, genuinely nothing yet".
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { messages: SalonMessage[] };
+      mergeMessages(data.messages ?? []);
+      if (mountedRef.current) setPollError(null);
+    } catch (e) {
+      if (mountedRef.current) setPollError(e instanceof Error ? e.message : "network error");
+    } finally {
+      if (mountedRef.current) setInitialLoaded(true);
+    }
+  }, [salon.id, mergeMessages]);
+
   // Poll every 30min, matching how often messages can even arrive (the cron
   // that generates them runs every 30 min). Porteur's own call (25/09):
   // traffic is low, priority is staying as close to $0/month as possible for
@@ -431,16 +482,7 @@ function SalonChat({
   // while the tab is hidden/backgrounded -- a tab nobody is looking at
   // doesn't need this. Catches up immediately on refocus.
   useEffect(() => {
-    let mounted = true;
-    const poll = async () => {
-      try {
-        const res  = await fetch(`/api/salon/${salon.id}/messages?since=${lastTs.current}`);
-        const data = await res.json() as { messages: SalonMessage[] };
-        mergeMessages(data.messages ?? []);
-      } catch { /* ignore */ } finally {
-        if (mounted) setInitialLoaded(true);
-      }
-    };
+    mountedRef.current = true;
     const start = () => { if (!pollRef.current) pollRef.current = setInterval(poll, 1_800_000); };
     const stop  = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
     const onVisibility = () => {
@@ -451,12 +493,11 @@ function SalonChat({
     if (document.visibilityState === "visible") start();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [salon.id]);
+  }, [poll]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -553,6 +594,19 @@ function SalonChat({
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-purple-500 inline-block animate-pulse" />
                 <p className="font-mono text-sm text-[--fg-muted]">{t("chat.loadingExchanges")}</p>
+              </>
+            ) : pollError ? (
+              // A genuine fetch failure must never render as "no exchange yet"
+              // (external audit finding, 26/09/2026) — those mean two very
+              // different things to someone reading the salon.
+              <>
+                <p className="font-mono text-sm text-red-500">{pollError}</p>
+                <button
+                  onClick={() => void poll()}
+                  className="font-mono text-xs text-[--fg-muted] underline"
+                >
+                  {t("chat.retry")}
+                </button>
               </>
             ) : activeFilter ? (
               <>

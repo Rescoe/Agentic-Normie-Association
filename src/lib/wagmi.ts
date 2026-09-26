@@ -10,9 +10,12 @@ import {
 import { createConfig, http } from "wagmi";
 import { base, baseSepolia } from "wagmi/chains";
 
-// Chain cible selon env
+// Chain cible selon env — Base mainnet par défaut, Sepolia seulement en
+// opt-in explicite (trouvaille de l'audit du 26/09/2026 : c'était l'inverse,
+// donc un NEXT_PUBLIC_CHAIN absent/mal configuré en prod basculait
+// silencieusement sur Sepolia).
 export const targetChain =
-  process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
+  process.env.NEXT_PUBLIC_CHAIN === "baseSepolia" ? baseSepolia : base;
 
 const projectId =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ||

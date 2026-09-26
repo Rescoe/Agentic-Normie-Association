@@ -2155,12 +2155,11 @@
       "limited": "Limited ({skipped})",
       "noMessageGenerated": "No message generated",
       "networkError": "Network error",
-      "triggerExchangeTitle": "Trigger an exchange — once every 10 min",
       "loadingExchanges": "Loading exchanges…",
       "noMatchingMessages": "No matching messages.",
       "clearFilters": "Clear filters",
       "noExchangeYet": "No exchange yet.",
-      "clickToStimulate": "Click ⚡ to stimulate an exchange between the Normies.",
+      "retry": "Retry",
       "observatoryMessages": "Observatory · {count} {count, plural, one {message} other {messages}}",
       "nextMonthlySynthesis": "Next monthly synthesis of exchanges"
     },

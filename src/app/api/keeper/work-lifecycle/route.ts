@@ -1523,15 +1523,28 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
         await updateWork(work.id, { collectionAddress });
         console.log(`[work-lifecycle] collection deployed: ${collectionAddress}`);
       } else if (deployResult.error) {
-        console.warn(`[work-lifecycle] collection deploy failed (non-fatal): ${deployResult.error}`);
-        // Non-fatal to the overall step (publish() is still attempted below),
-        // but this was previously invisible in the admin panel — a failed
-        // deploy silently left collectionAddress unset, which for a memorial
-        // meant buildWorkHtml() fell back to embedding the full image inline,
-        // which then also failed publish()'s own gas budget — two failures,
-        // only the second one ever visible. Surface this one too.
+        console.warn(`[work-lifecycle] collection deploy failed: ${deployResult.error}`);
         await updateWork(work.id, { validationNote: `deployCollection: ${deployResult.error.slice(0, 280)}` });
       }
+    }
+
+    // A work that NEEDS a collection (HTML/generative, paid editions, a
+    // celebration link, or any memorial) must never reach WorkRegistry.publish()
+    // without one (external audit finding, 26/09/2026 — was "non-fatal", so a
+    // failed deploy still let publish() proceed, producing a PUBLISHED work
+    // whose certificate pointed at nothing: no artwork to render, nowhere for
+    // buyers/claimers to mint from, and no general recovery path once that
+    // certificate is immutably on-chain). Stay in PUBLISHING and retry next
+    // cycle instead. Note: deployCollection() has no on-chain "does this work
+    // already have a collection" check before deploying — a retry after a
+    // genuine deploy failure is safe, but the pre-existing narrow window
+    // where a deploy tx confirms and the Lambda dies before persisting
+    // collectionAddress would still redeploy a redundant collection on the
+    // next tick. Not new to this fix; not addressed here.
+    if (needsCollection && !collectionAddress) {
+      const errMsg = "collection required but not deployed — see validationNote";
+      console.error(`[work-lifecycle] PUBLISHING blocked for "${work.title}": ${errMsg}`);
+      return errMsg;
     }
 
     // ── Step 2: Build certificate HTML (now includes collectionAddress) ──
@@ -1620,6 +1633,32 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
         return `initializeCollection failed: ${errMsg.slice(0, 200)}`;
       }
       console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
+    }
+
+    // Re-read on-chain state before trusting initialization succeeded
+    // (external audit finding, 26/09/2026) — a confirmed tx receipt only
+    // proves the transaction didn't revert, not that the values actually
+    // landed as expected (e.g. a prior partial init, an ABI/argument
+    // mismatch). Checked every time this branch runs, not just right after a
+    // fresh initResult, so a work that was "already initialized" per the
+    // early check above still gets the same verification before PUBLISHED.
+    try {
+      const [onChainInitialized, onChainWorkIdOnCollection, onChainArtwork] = await Promise.all([
+        client.readContract({ address: collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "initialized" }) as Promise<boolean>,
+        client.readContract({ address: collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "workId" }) as Promise<bigint>,
+        client.readContract({ address: collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "artworkContent" }) as Promise<string>,
+      ]);
+      if (!onChainInitialized || Number(onChainWorkIdOnCollection) !== onChainWorkId || !onChainArtwork) {
+        const errMsg = `post-init verification failed (initialized=${onChainInitialized}, workId=${onChainWorkIdOnCollection} expected ${onChainWorkId}, artworkContent length=${onChainArtwork?.length ?? 0})`;
+        console.error(`[work-lifecycle] ${errMsg} for "${work.title}" — staying in PUBLISHING`);
+        await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
+        return errMsg;
+      }
+    } catch (e) {
+      const errMsg = `post-init verification read failed: ${e instanceof Error ? e.message : String(e)}`;
+      console.error(`[work-lifecycle] ${errMsg} for "${work.title}" — staying in PUBLISHING`);
+      await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
+      return errMsg;
     }
   }
 

@@ -28,6 +28,18 @@ const nextConfig = {
       fs: false,
       net: false,
       tls: false,
+      // Same pattern (26/09/2026): @coinbase/cdp-sdk's x402 payment/charging
+      // feature is pulled in transitively via @wagmi/connectors' Coinbase
+      // "base account" connector (RainbowKit -> wagmi -> @base-org/account ->
+      // @coinbase/cdp-sdk), which statically imports these even though ANA
+      // never uses Coinbase's x402 payment protocol. Not installed on
+      // purpose — this app has its own relayer/payment flow entirely — so
+      // treat them as empty modules instead of a hard build failure.
+      "@x402/evm":              false,
+      "@x402/evm/upto/client":  false,
+      "@x402/evm/exact/client": false,
+      "@x402/core/client":      false,
+      "@x402/svm/exact/client": false,
     };
     return config;
   },

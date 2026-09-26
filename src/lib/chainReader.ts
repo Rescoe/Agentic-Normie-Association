@@ -244,10 +244,16 @@ export async function readChainStats(): Promise<ChainStats> {
   if (!contractsDeployed) {
     return { memberCount: 0, workCount: 0, sessionState: null, deployed: false };
   }
-  const [memberCount, workCount, sessionState] = await Promise.all([
-    readMemberCount(),
+  // memberCount comes from getMemberTokenIds().length, not a separate
+  // getMemberCount() call (external audit finding, 26/09/2026) — one fewer
+  // contract function to keep in sync, and readMemberTokenIds() already has
+  // its own try/catch+log, so a genuine RPC failure here surfaces as an
+  // empty array (length 0) with a logged error, never a silent divergence
+  // between two calls that are supposed to agree.
+  const [tokenIds, workCount, sessionState] = await Promise.all([
+    readMemberTokenIds(),
     readWorkCount(),
     readCurrentSession(),
   ]);
-  return { memberCount, workCount, sessionState, deployed: true };
+  return { memberCount: tokenIds.length, workCount, sessionState, deployed: true };
 }

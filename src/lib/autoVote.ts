@@ -33,7 +33,9 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
 const MODEL_F  = "openai/gpt-oss-120b";
 
-const IS_MAINNET = process.env.NEXT_PUBLIC_CHAIN === "base";
+// Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026
+// audit finding — was the reverse).
+const IS_MAINNET = process.env.NEXT_PUBLIC_CHAIN !== "baseSepolia";
 const CHAIN      = IS_MAINNET ? base : baseSepolia;
 // Base sepolia (testnet, no real usage) stays on a single plain endpoint —
 // the failover is only worth the complexity where real traffic hits it.

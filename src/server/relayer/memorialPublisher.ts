@@ -31,7 +31,8 @@ import { base, baseSepolia } from "viem/chains";
 import { ANA_MEMORIALS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { logTxSubmitted, logTxConfirmed, logTxFailed } from "@/lib/txLog";
 
-const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
+// Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026 audit finding).
+const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "baseSepolia" ? baseSepolia : base;
 const RPC_URL      = process.env.BASE_RPC_URL ?? "https://mainnet.base.org";
 
 // Keeps addReservedClaims comfortably under mainnet.base.org's confirmed

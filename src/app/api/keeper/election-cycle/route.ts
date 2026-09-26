@@ -33,7 +33,9 @@ import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS 
 import { runAutoVotePhase, type AutoVoteBody } from "@/lib/autoVote";
 import { baseRpcTransport } from "@/lib/baseRpc";
 
-const IS_MAINNET = process.env.NEXT_PUBLIC_CHAIN === "base";
+// Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026
+// audit finding — was the reverse).
+const IS_MAINNET = process.env.NEXT_PUBLIC_CHAIN !== "baseSepolia";
 const CHAIN      = IS_MAINNET ? base : baseSepolia;
 const TRANSPORT  = IS_MAINNET
   ? baseRpcTransport(30_000)
