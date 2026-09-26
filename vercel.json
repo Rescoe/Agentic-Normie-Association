@@ -14,6 +14,9 @@
     },
     "src/app/api/works/html/[id]/route.ts": {
       "maxDuration": 30
+    },
+    "src/app/api/memorials/list/route.ts": {
+      "maxDuration": 30
     }
   }
 }

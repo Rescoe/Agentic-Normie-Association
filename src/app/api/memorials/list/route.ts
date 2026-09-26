@@ -62,7 +62,15 @@ export async function GET() {
 
     const works = await listWorks();
 
-    const items: MemorialListItem[] = await Promise.all(
+    // Was Promise.all() over every memorial -- one bad RPC call (a timeout, a
+    // rate-limited public node, a single reverting read) failed the ENTIRE
+    // response with a 500. Confirmed live (26/09): this route was 500ing in
+    // production, uncached (the catch block below never set Cache-Control),
+    // so every visitor on every page (Footer.tsx fetches this site-wide) kept
+    // retrying the full RPC fan-out and kept re-hitting the same failure.
+    // allSettled + per-memorial try/catch means one failure degrades that one
+    // memorial to null (filtered out) instead of taking down the whole list.
+    const settled = await Promise.allSettled(
       Array.from({ length: total }, (_, memorialId) => memorialId).map(async memorialId => {
         const [series, burnedTokenIdsRaw] = await Promise.all([
           client.readContract({
@@ -73,7 +81,7 @@ export async function GET() {
           }) as Promise<readonly bigint[]>,
         ]);
 
-        const burnedTokenIds = await Promise.all(burnedTokenIdsRaw.map(async tokenIdBn => {
+        const burnedTokenIdsSettled = await Promise.allSettled(burnedTokenIdsRaw.map(async tokenIdBn => {
           const tokenId = Number(tokenIdBn);
           const [recipient, claimed] = await Promise.all([
             client.readContract({
@@ -85,6 +93,9 @@ export async function GET() {
           ]);
           return { tokenId, reservedRecipient: recipient, reservedClaimed: claimed };
         }));
+        const burnedTokenIds = burnedTokenIdsSettled
+          .filter((r): r is PromiseFulfilledResult<{ tokenId: number; reservedRecipient: string; reservedClaimed: boolean }> => r.status === "fulfilled")
+          .map(r => r.value);
 
         const work = works.find(w => w.onChainMemorialId === memorialId);
 
@@ -108,9 +119,23 @@ export async function GET() {
       }),
     );
 
+    const failures = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      console.error(`[memorials/list] ${failures.length}/${total} memorial(s) failed to load:`, failures.map(f => f.reason));
+    }
+    const items = settled
+      .filter(r => r.status === "fulfilled")
+      .map(r => (r as PromiseFulfilledResult<MemorialListItem>).value);
+
     return NextResponse.json({ contractAddress: addr, milestoneStep, items: items.reverse() }, { headers: CACHE_HEADERS }); // newest first
   } catch (e) {
     console.error("[memorials/list] error:", e);
-    return NextResponse.json({ error: "Failed to load memorials" }, { status: 500 });
+    // Short cache even on total failure -- without it, an outage (RPC down,
+    // etc.) means every visitor on every page keeps retrying the full RPC
+    // fan-out for as long as the outage lasts, exactly what was observed live.
+    return NextResponse.json(
+      { error: "Failed to load memorials", items: [] satisfies MemorialListItem[] },
+      { status: 500, headers: { "Cache-Control": "public, s-maxage=15, stale-while-revalidate=60" } },
+    );
   }
 }

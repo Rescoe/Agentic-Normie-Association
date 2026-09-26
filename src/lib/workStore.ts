@@ -197,7 +197,9 @@ interface DispatchRotation {
 
 interface WorkStore {
   works:             Record<string, ANAWork>;
-  lastNormieSupply?: number;
+  // lastNormieSupply used to live here -- moved to its own Neon row, see
+  // "Burn tracking" below. Old blobs may still carry a stale copy of this
+  // field; it's simply ignored now, not worth a data migration to strip it.
   dispatchRotation?: DispatchRotation;
 }
 
@@ -339,11 +341,12 @@ async function useNeon(): Promise<boolean> {
   return USE_NEON;
 }
 
-// Neon is the source of truth, read fresh on every call — no cross-request
-// in-memory caching. Vercel routes serverless functions to whichever Lambda
-// instance is available, so a per-instance TTL cache caused different pages
-// (gallery, homepage banner, admin) to see different ages of the same data.
-// Neon reads are fast and this app's traffic is low, so always-fresh is cheap.
+// Stale note (kept as a warning, not a fix): this comment used to say Neon
+// was read fresh on every call with no caching -- that stopped being true
+// once the in-process cache below was added (Sept 2026 cost audit) and this
+// comment was simply never updated. Found during a follow-up cost audit
+// precisely because it misdescribed the code beneath it -- a reminder to
+// keep comments like this one honest, since they get taken at face value.
 async function getStore(): Promise<WorkStore> {
   if (await useNeon()) {
     // Serve from in-process cache when fresh — avoids one ~1.4MB Neon read
@@ -484,13 +487,49 @@ export async function addVote(id: string, vote: WorkVote): Promise<void> {
 }
 
 // ─── Burn tracking ────────────────────────────────────────────────────────────
+//
+// Deliberately its OWN Neon row ("burn-supply-tracker"), not a field on the
+// ~1.4MB work-store blob. check-burns.yml runs hourly and unconditionally
+// calls updateNormieSupply() (even when supply is unchanged) -- when this was
+// stored on WorkStore.lastNormieSupply, that single-integer write triggered a
+// full mutate(): a fresh 1.4MB neonLoad() (bypasses the read cache on
+// purpose) plus a full 1.4MB neonSave(), on every single cron tick, for a
+// value that only actually needs a few bytes. Confirmed (Sept 2026 audit) as
+// ~3GB/month of Neon transfer from this one cron alone. A dedicated tiny key
+// means this tracker's read/write cost stays proportional to its own size,
+// completely decoupled from how large the works list grows.
+const SUPPLY_FILE = path.join(process.cwd(), "data", "burn-supply.json");
+let _supplyCache: number | null = null;
 
 export async function getLastNormieSupply(): Promise<number | null> {
-  return (await getStore()).lastNormieSupply ?? null;
+  if (await useNeon()) {
+    const { kvGet } = await import("./db");
+    const raw = await kvGet("burn-supply-tracker");
+    return raw ? Number(raw) : null;
+  }
+  if (_supplyCache !== null) return _supplyCache;
+  try {
+    if (fs.existsSync(SUPPLY_FILE)) {
+      _supplyCache = JSON.parse(fs.readFileSync(SUPPLY_FILE, "utf-8")).supply ?? null;
+    }
+  } catch { /* empty */ }
+  return _supplyCache;
 }
 
 export async function updateNormieSupply(supply: number): Promise<void> {
-  await mutate(s => { s.lastNormieSupply = supply; });
+  // Skip the write entirely when unchanged -- the common case on every
+  // hourly tick where no burn happened.
+  if (await getLastNormieSupply() === supply) return;
+  if (await useNeon()) {
+    const { kvSet } = await import("./db");
+    await kvSet("burn-supply-tracker", String(supply));
+    return;
+  }
+  _supplyCache = supply;
+  try {
+    fs.mkdirSync(path.dirname(SUPPLY_FILE), { recursive: true });
+    fs.writeFileSync(SUPPLY_FILE, JSON.stringify({ supply }), "utf-8");
+  } catch (e) { console.error("[workStore] burn-supply fileSave error:", e); }
 }
 
 // ─── Creative dispatch (round-robin) ──────────────────────────────────────────
