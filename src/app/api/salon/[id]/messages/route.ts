@@ -6,6 +6,7 @@ import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { getSalon, getMessages, addMessage, checkRateLimit, checkSalonMessageLimit, recordSalonMessage } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt } from "@/lib/normiesPersona";
 import { trimIfTruncated } from "@/lib/groq";
+import { verifyAdminRequest } from "@/lib/adminAuth";
 
 const GROQ_API_URL    = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL           = "openai/gpt-oss-120b";
@@ -48,6 +49,24 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  // Closed to anonymous callers (26/09/2026, external audit finding): this
+  // route accepted ANY registered tokenId with no proof the caller actually
+  // controls it — the only check was "is this tokenId a real ANA member",
+  // which anyone could pass by just naming a member's tokenId. A visitor
+  // could make the server generate and publish a message under any of the
+  // four Normies' identities. Not currently called from any live UI (no
+  // frontend fetch to this endpoint as of this fix), so gating it costs
+  // nothing today. A genuine "speak as your own Normie" feature would need
+  // real wallet-ownership verification (signature + on-chain ownership
+  // check against the tokenId), not just membership — that's a distinct
+  // feature to build deliberately, not a quick patch here.
+  const cronSecret = process.env.CRON_SECRET;
+  const isCron = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
+  const isAdmin = (await verifyAdminRequest(req)).ok;
+  if (!isCron && !isAdmin) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
+  }
+
   if (!process.env.GROQ_API_KEY) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }

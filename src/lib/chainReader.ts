@@ -14,13 +14,24 @@ import { baseRpcTransport } from "@/lib/baseRpc";
 
 // ─── Client ───────────────────────────────────────────────────────────────────
 
-const isMainnet = process.env.NEXT_PUBLIC_CHAIN === "base";
+// Was `isMainnet = NEXT_PUBLIC_CHAIN === "base"` (opt-IN to mainnet) — if
+// that var was ever unset/misnamed on Vercel, this silently fell back to Base
+// Sepolia in PRODUCTION, where CORE_ADDRESS (a mainnet address) doesn't
+// exist, so every read below threw and was swallowed by its own `catch {
+// return 0 }` — exactly what produced /api/status's "memberCount: 0" while
+// every other file (which hardcodes `chain: base` directly, e.g.
+// proposeWork.ts, activityScanner.ts) read the real chain fine. Per this
+// project's own standing rule (preview/staging also run real contracts on
+// Base mainnet, never Sepolia — see project memory
+// feedback_chain_always_base_mainnet), the safe default is mainnet; Sepolia
+// requires an explicit opt-in instead.
+const isSepolia = process.env.NEXT_PUBLIC_CHAIN === "baseSepolia";
 
-const targetChain = isMainnet ? base : baseSepolia;
+const targetChain = isSepolia ? baseSepolia : base;
 
-const transport = isMainnet
-  ? baseRpcTransport(8_000)
-  : http(process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org", { timeout: 8_000 });
+const transport = isSepolia
+  ? http(process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org", { timeout: 8_000 })
+  : baseRpcTransport(8_000);
 
 export const publicClient = createPublicClient({
   chain: targetChain,
@@ -70,7 +81,7 @@ export async function readMemberCount(): Promise<number> {
       functionName: "getMemberCount",
     });
     return Number(count);
-  } catch { return 0; }
+  } catch (e) { console.error("[chainReader] readMemberCount failed:", e); return 0; }
 }
 
 export async function readMemberTokenIds(): Promise<number[]> {
@@ -82,7 +93,7 @@ export async function readMemberTokenIds(): Promise<number[]> {
       functionName: "getMemberTokenIds",
     });
     return (ids as bigint[]).map(Number);
-  } catch { return []; }
+  } catch (e) { console.error("[chainReader] readMemberTokenIds failed:", e); return []; }
 }
 
 export async function readMemberOwner(tokenId: number): Promise<string | null> {
@@ -95,7 +106,7 @@ export async function readMemberOwner(tokenId: number): Promise<string | null> {
       args: [BigInt(tokenId)],
     });
     return owner as string;
-  } catch { return null; }
+  } catch (e) { console.error("[chainReader] readMemberOwner failed:", e); return null; }
 }
 
 export async function readIsMember(tokenId: number): Promise<boolean> {
@@ -107,7 +118,7 @@ export async function readIsMember(tokenId: number): Promise<boolean> {
       functionName: "isMember",
       args: [BigInt(tokenId)],
     }) as boolean;
-  } catch { return false; }
+  } catch (e) { console.error("[chainReader] readIsMember failed:", e); return false; }
 }
 
 export interface RoleHolder {
@@ -133,7 +144,7 @@ export async function readRoleHolder(roleHash: `0x${string}`): Promise<RoleHolde
       holderAddress: result.holderAddress,
       assignedAt:    Number(result.assignedAt),
     };
-  } catch { return null; }
+  } catch (e) { console.error("[chainReader] readRoleHolder failed:", e); return null; }
 }
 
 // ─── ConstituentAssembly reads ────────────────────────────────────────────────
@@ -165,7 +176,7 @@ async function readCurrentSessionOnce(): Promise<SessionState | null> {
       active:   Boolean(t[4]),
       resolved: Boolean(t[5]),
     };
-  } catch { return null; }
+  } catch (e) { console.error("[chainReader] readCurrentSessionOnce failed:", e); return null; }
 }
 
 /**
@@ -203,7 +214,7 @@ export async function readLeaderForRole(roleHash: `0x${string}`): Promise<RoleLe
     });
     const r = raw as unknown as { tokenId: bigint; count: bigint };
     return { roleHash, tokenId: Number(r.tokenId), voteCount: Number(r.count) };
-  } catch { return { roleHash, tokenId: 0, voteCount: 0 }; }
+  } catch (e) { console.error("[chainReader] readLeaderForRole failed:", e); return { roleHash, tokenId: 0, voteCount: 0 }; }
 }
 
 // ─── WorkRegistry reads ───────────────────────────────────────────────────────
@@ -217,7 +228,7 @@ export async function readWorkCount(): Promise<number> {
       functionName: "getWorkCount",
     });
     return Number(count);
-  } catch { return 0; }
+  } catch (e) { console.error("[chainReader] readWorkCount failed:", e); return 0; }
 }
 
 // ─── Composite: stats pour StatusBar ─────────────────────────────────────────

@@ -229,12 +229,31 @@ export async function scanRange(from: bigint, to: bigint): Promise<ActivityEvent
 
   const events: ActivityEvent[] = [];
 
+  // MEMBER_REGISTERED's own `timestamp` event param is NOT reliably "when this
+  // was emitted" — migrateMembers() (26/09/2026 contract redeploy) deliberately
+  // sets it to each member's HISTORICAL registration date, to preserve
+  // "member since" — which made a same-day migration look months old in the
+  // activity feed (external audit finding, 26/09). Fetched here only for
+  // MEMBER_REGISTERED specifically (rare — new members, not a bulk event
+  // type) so this doesn't add meaningful RPC cost the way doing it for every
+  // event type in a whole scan window would.
+  const memberBlockTimestamps = await Promise.all(
+    memberLogs.map(log => log.blockNumber == null ? Promise.resolve(null) :
+      rpc.getBlock({ blockNumber: log.blockNumber }).then(b => Number(b.timestamp)).catch(() => null))
+  );
   memberLogs.forEach((log, i) => {
     const a = args(log);
+    const registeredAt   = Number(a.timestamp ?? 0);
+    const blockTimestamp = memberBlockTimestamps[i];
     events.push({ ...makeEv(log, "MEMBER_REGISTERED", i),
       tokenId:   Number(a.tokenId  ?? 0),
       address:   String(a.ownerAddress ?? ""),
-      timestamp: Number(a.timestamp ?? 0),
+      // Real emission time, for the feed's ordering/display.
+      timestamp: blockTimestamp ?? registeredAt,
+      // Historical membership date, preserved separately — this is the
+      // meaningful "member since" value, just not what the feed should sort/
+      // display by.
+      extra:     { registeredAt },
     });
   });
 

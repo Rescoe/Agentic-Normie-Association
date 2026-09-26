@@ -16,6 +16,7 @@ import {
   rpc, scanRange, readCache, writeCache, CORE_CONFIGURED,
   MAX_EVENTS_KEPT, type ActivityEvent, type CachedPayload,
 } from "@/lib/activityScanner";
+import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 // AssociationCore's actual deployment block for the CURRENT (26/09/2026)
 // redeploy — verified on-chain via binary search on eth_getCode against
@@ -71,9 +72,27 @@ const TX_LOG_TYPE_MAP: Record<string, string> = {
   "initialize-collection":  "COLLECTION_INITIALIZED",
 };
 
+// Every currently-deployed contract address this app talks to, lowercased —
+// used below to drop tx_log rows aimed at a contract from a PREVIOUS
+// deployment (external audit finding, 26/09/2026): the block-number filter
+// alone handles the common case (old rows are also old blocks), but a
+// belt-and-suspenders address check catches anything with a missing/odd
+// block_number without depending on the exact epoch cutoff being perfect.
+const CURRENT_CONTRACT_ADDRESSES = new Set(
+  Object.values(CONTRACT_ADDRESSES).filter((a): a is string => !!a).map(a => a.toLowerCase())
+);
+
 function txLogToEvents(rows: TxLogRow[]): ActivityEvent[] {
   return rows
     .filter(r => r.status === "confirmed")
+    // Drop rows from before the current contracts existed (a previous
+    // deployment's works/memorials/etc. re-surfacing after a redeploy —
+    // external audit finding, 26/09/2026). block_number is the primary
+    // guard; target_address is a secondary check for the rows that do carry
+    // one, skipped (not excluded) when a row has no target_address at all
+    // rather than guessing.
+    .filter(r => r.block_number !== null && BigInt(r.block_number) >= LAUNCH_FLOOR_BLOCK)
+    .filter(r => !r.target_address || CURRENT_CONTRACT_ADDRESSES.has(r.target_address.toLowerCase()))
     .map(r => {
       const resultData = (r.result_data ?? {}) as Record<string, unknown>;
       // The on-chain numeric workId only exists for "publish" (from the WorkPublished
