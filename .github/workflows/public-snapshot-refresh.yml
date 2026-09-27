@@ -1,0 +1,31 @@
+name: ANA — Refresh Public Snapshot
+
+on:
+  # Manual only — the orchestrator already refreshes the snapshot on its own
+  # 2h/6h/24h/weekly schedule (see /api/keeper/orchestrator). This exists for
+  # bootstrapping (the very first snapshot, before any orchestrator tick has
+  # a due group) and for manual recovery if the snapshot is ever missing or
+  # visibly stale. No `schedule:` — this must never become an extra
+  # independent cron waking Neon on its own cadence.
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: Rebuild and store the public snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: POST /api/keeper/public-snapshot-refresh
+        run: |
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ vars.ANA_APP_URL }}/api/keeper/public-snapshot-refresh" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
+            -d '{}')
+          echo "HTTP $STATUS"
+          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            echo "Snapshot refresh failed with HTTP $STATUS"
+            exit 1
+          fi
