@@ -1,8 +1,8 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
 import { verifyMemberRequest } from "@/lib/memberAuth";
 import { getDrawing, updateDrawing } from "@/lib/drawStore";
+import { refreshPublicSnapshot } from "@/lib/publicSnapshot";
 
 /**
  * POST /api/draw/[id]/peer-review — approval gate for a SpontaneousDrawing
@@ -42,10 +42,11 @@ export async function POST(
     decisionNote: body.note,
     decidedAt:    Date.now(),
   });
-  // An approval changes /api/ana-art/feed's item list directly; a rejection
-  // doesn't (rejected drawings were never in it), but tagging both is
-  // simpler than special-casing and costs nothing extra.
-  revalidateTag("ana-art-feed");
+  // Human-triggered, out-of-band (not part of the orchestrator's own
+  // cycle) -- rebuild the public snapshot now so the decision (which
+  // changes /api/ana-art/feed's approved-items list) is reflected
+  // immediately rather than waiting for the next orchestrator tick.
+  await refreshPublicSnapshot();
 
   return NextResponse.json({ ok: true });
 }

@@ -1,28 +1,54 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { getSalon, closeSalon, excludeMember } from "@/lib/salonStore";
-import { getWorkBySalonId } from "@/lib/workStore";
+import { closeSalon, excludeMember } from "@/lib/salonStore";
+import { readPublicSnapshot } from "@/lib/publicSnapshot";
 
-// NOT cached (reverted 26/09/2026 — this specific caching attempt was a real
-// regression, confirmed live): this is the route that actually renders a
-// salon's conversation when someone opens it, including right after the
-// orchestrator just posted new messages. A 30-min edge cache meant anyone
-// opening the salon inside that window could see a stale snapshot — up to
-// and including a fully empty "no exchange yet" for a salon that already has
-// real messages — because a request made a moment BEFORE those messages
-// existed got cached and kept being served regardless of what changed after.
-// The list endpoint (/api/salon) keeps its 30-min cache for the sidebar
-// preview, which is lower-stakes than the actual reading experience; this
-// route needs to always reflect the real current state instead.
+// Reads ONLY the durable public snapshot (see @/lib/publicSnapshot) --
+// replaces the previous direct Neon read (getSalon(), 5 queries/call, no
+// cache), which combined with the homepage widget calling this route
+// directly was the first-found (but not the only, see /api/ana-art/feed)
+// cause of Neon's compute never sleeping.
+//
+// Freshness model, per the porteur's explicit direction: this route must
+// NEVER return a stale-empty 200 the way the old direct-Neon read
+// theoretically could on a transient error. There are three distinct cases:
+//   1. No snapshot exists at all yet (Blob storage empty/unreachable) → 503.
+//   2. The salon id genuinely doesn't exist (not in the snapshot's own
+//      salon list) → 404, same as before.
+//   3. The salon EXISTS in the list but its detail failed to build during
+//      the last snapshot refresh (a per-salon fault, see buildSalons() in
+//      publicSnapshot.ts) → 503, NOT a fake-empty 200 for a salon that
+//      actually has messages.
+// generatedAt/messageCount/lastMessageAt are included so a caller can judge
+// staleness itself rather than assuming the response is instant-fresh.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=120, stale-while-revalidate=600" };
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const salon = await getSalon(params.id);
-  if (!salon) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
-  const work = await getWorkBySalonId(params.id);
-  const workOutcome = work ? (work.state === "PUBLISHED" ? "published" : work.state === "REJECTED" ? "rejected" : "active") : null;
-  return NextResponse.json({ salon: { ...salon, workOutcome } });
+  const snapshot = await readPublicSnapshot();
+  if (!snapshot) {
+    return NextResponse.json({ error: "Snapshot unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+
+  const exists = snapshot.salons.list.some(s => s.id === params.id);
+  if (!exists) return NextResponse.json({ error: "Salon not found" }, { status: 404 });
+
+  const detail = snapshot.salons.detail[params.id];
+  if (!detail) {
+    return NextResponse.json(
+      { error: "Salon detail temporarily unavailable — try again after the next snapshot refresh" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  return NextResponse.json({
+    salon: detail,
+    generatedAt:   snapshot.generatedAt,
+    messageCount:  detail.messageCount,
+    lastMessageAt: detail.lastMessageAt,
+  }, { headers: CACHE_HEADERS });
 }
 
 export async function PATCH(

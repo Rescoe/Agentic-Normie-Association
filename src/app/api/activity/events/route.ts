@@ -10,13 +10,14 @@
 export const dynamic = "force-dynamic"; // never pre-render at build time
 export const maxDuration = 60; // Vercel Hobby plan cap — was unset (10s default), far too short for a full chain scan
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { listTxLog, type TxLogRow } from "@/lib/txLog";
 import {
   rpc, scanRange, readCache, writeCache, CORE_CONFIGURED,
   MAX_EVENTS_KEPT, type ActivityEvent, type CachedPayload,
 } from "@/lib/activityScanner";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { readPublicSnapshot } from "@/lib/publicSnapshot";
 
 // AssociationCore's actual deployment block for the CURRENT (26/09/2026)
 // redeploy — verified on-chain via binary search on eth_getCode against
@@ -140,8 +141,32 @@ async function mergeTxLog(events: ActivityEvent[]): Promise<ActivityEvent[]> {
 }
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
+//
+// Two very different callers hit this same URL:
+//   1. The orchestrator (x-cron-secret header) — runs the REAL scan below,
+//      advancing the cursor and writing to Neon (readCache/writeCache) and
+//      RPC. This is the only path that should ever do real work.
+//   2. Anyone else (public visitors, bots, the /activity page) — no secret.
+//      Sept 2026 Neon cost investigation: this route had NO auth at all, so
+//      every one of these calls ALSO ran the full scan-and-advance logic,
+//      one of several routes that kept Neon's compute from ever sleeping.
+//      These now read ONLY the durable public snapshot (@/lib/publicSnapshot,
+//      refreshed by the orchestrator) -- no Neon, no RPC, ever.
+export async function GET(req: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET;
+  const isCron = !!cronSecret && req.headers.get("x-cron-secret") === cronSecret;
 
-export async function GET() {
+  if (!isCron) {
+    const snapshot = await readPublicSnapshot();
+    if (!snapshot) {
+      return NextResponse.json({ events: [], meta: null, error: "Snapshot unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    }
+    return NextResponse.json(
+      { events: snapshot.activity.events, meta: snapshot.activity.meta },
+      { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=1800" } },
+    );
+  }
+
   if (!CORE_CONFIGURED) {
     return NextResponse.json({ events: [], meta: null, error: "Contracts not configured" });
   }
