@@ -1,16 +1,13 @@
 name: ANA — Batch Memorial
 
 on:
-  # Schedule removed (Sept 2026 snapshot-architecture follow-up) —
-  # orchestrator.yml now calls POST /api/keeper/batch-memorial once a week as
-  # part of its own consolidated tick (see /api/keeper/orchestrator's weekly
-  # group), instead of this workflow's own independent cron -- every
-  # separately-scheduled workflow is one more unpredictable Neon wake-up
-  # outside the orchestrator's own window. Kept as workflow_dispatch only,
-  # for manual triggering/testing. Batching (instead of one memorial per
-  # burn) is what keeps the relayer solvent: creation now costs 2
-  # relayer-paid transactions per WEEK regardless of how many burns
-  # happened, instead of 3 per burn.
+  schedule:
+    # Weekly, Sunday 03:00 UTC — drains the burns queued by check-burns.yml's
+    # 15-min detection tick into ONE collective memorial. Batching (instead of
+    # one memorial per burn) is what keeps the relayer solvent: creation now
+    # costs 2 relayer-paid transactions per WEEK regardless of how many burns
+    # happened, instead of 3 per burn.
+    - cron: '0 3 * * 0'
   workflow_dispatch:
 
 jobs:

@@ -12,7 +12,6 @@
  *   every ~2h    → salon exchange, work lifecycle, burns
  *   every ~6h    → election cycle
  *   every ~24h   → daily synthesis catch-all + external signals + health ping
- *   every ~7d    → batch memorial (drains the week's queued burns)
  *
  * "Every ~2h/6h/24h" is measured as elapsed wall-clock time since each
  * group's own last run (tracked in kv_store), NOT calendar alignment (e.g.
@@ -45,10 +44,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { kvGet, kvSet } from "@/lib/db";
 
 const HOUR = 60 * 60 * 1000;
-const INTERVAL_2H   = 2 * HOUR;
-const INTERVAL_6H   = 6 * HOUR;
-const INTERVAL_24H  = 24 * HOUR;
-const INTERVAL_WEEK = 7 * 24 * HOUR;
+const INTERVAL_2H  = 2 * HOUR;
+const INTERVAL_6H  = 6 * HOUR;
+const INTERVAL_24H = 24 * HOUR;
 
 /**
  * Due = at least `intervalMs` since this group's last run, per kv_store
@@ -131,20 +129,18 @@ export async function POST(req: NextRequest) {
   }
 
   const now = Date.now();
-  const [due2h, due6h, due24h, dueWeek] = await Promise.all([
+  const [due2h, due6h, due24h] = await Promise.all([
     isGroupDue("orchestrator:lastRun:2h", INTERVAL_2H, now),
     isGroupDue("orchestrator:lastRun:6h", INTERVAL_6H, now),
     isGroupDue("orchestrator:lastRun:24h", INTERVAL_24H, now),
-    isGroupDue("orchestrator:lastRun:week", INTERVAL_WEEK, now),
   ]);
   // Mark due groups run BEFORE awaiting their tasks below, not after --
   // narrows (doesn't eliminate) the race window against another concurrent
   // invocation reading the same "due" state.
   await Promise.all([
-    due2h   ? kvSet("orchestrator:lastRun:2h", String(now))   : Promise.resolve(),
-    due6h   ? kvSet("orchestrator:lastRun:6h", String(now))   : Promise.resolve(),
-    due24h  ? kvSet("orchestrator:lastRun:24h", String(now))  : Promise.resolve(),
-    dueWeek ? kvSet("orchestrator:lastRun:week", String(now)) : Promise.resolve(),
+    due2h  ? kvSet("orchestrator:lastRun:2h", String(now))  : Promise.resolve(),
+    due6h  ? kvSet("orchestrator:lastRun:6h", String(now))  : Promise.resolve(),
+    due24h ? kvSet("orchestrator:lastRun:24h", String(now)) : Promise.resolve(),
   ]);
 
   const results: TaskResult[] = [];
@@ -165,24 +161,17 @@ export async function POST(req: NextRequest) {
     // ~Every 24h since last run: full synthesis catch-all + external signals + keepalive ping.
     { name: "synthesis-daily", due: due24h, fn: () => callRoute(req, cronSecret, "/api/keeper/synthesize", "POST", { mode: "daily" }) },
     { name: "health-ping",     due: due24h, fn: () => callRoute(req, cronSecret, "/api/health", "GET") },
-
-    // ~Every 7d since last run: drain the week's queued burns into one collective memorial.
-    { name: "batch-memorial", due: dueWeek, fn: () => callRoute(req, cronSecret, "/api/keeper/batch-memorial", "POST", {}) },
   ]);
 
   // Public snapshot refresh runs SEQUENTIALLY AFTER the block above, not
   // inside the same Promise.allSettled batch -- it needs to read Neon/chain
-  // state AFTER salon-exchange/work-lifecycle/check-burns/election-cycle/
-  // batch-memorial have actually written their changes, which concurrent
-  // execution can't guarantee (their writes might land after snapshot's
-  // reads). Only runs when something that could plausibly have changed
-  // public data was due this tick; a no-op tick (nothing due beyond the
-  // every-tick tasks) skips it entirely rather than rebuilding an identical
-  // snapshot. This call always fully rebuilds regardless of which of these
-  // groups fired -- see @/lib/publicSnapshot's buildPublicSnapshot(), which
-  // reads every domain unconditionally each time, so any subset of due
-  // groups is covered by the same single call.
-  if (due2h || due6h || due24h || dueWeek) {
+  // state AFTER salon-exchange/work-lifecycle/check-burns/election-cycle
+  // have actually written their changes, which concurrent execution can't
+  // guarantee (their writes might land after snapshot's reads). Only runs
+  // when something that could plausibly have changed public data was due
+  // this tick; a no-op tick (nothing due beyond the every-tick tasks) skips
+  // it entirely rather than rebuilding an identical snapshot.
+  if (due2h || due6h || due24h) {
     const r = await callRoute(req, cronSecret, "/api/keeper/public-snapshot-refresh", "POST", {});
     results.push({ task: "public-snapshot-refresh", ran: true, ok: r.ok, status: r.status, error: r.error, body: r.body });
   } else {
