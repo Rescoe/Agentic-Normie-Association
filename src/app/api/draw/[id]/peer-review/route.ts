@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { verifyMemberRequest } from "@/lib/memberAuth";
 import { getDrawing, updateDrawing } from "@/lib/drawStore";
 
@@ -41,6 +42,10 @@ export async function POST(
     decisionNote: body.note,
     decidedAt:    Date.now(),
   });
+  // An approval changes /api/ana-art/feed's item list directly; a rejection
+  // doesn't (rejected drawings were never in it), but tagging both is
+  // simpler than special-casing and costs nothing extra.
+  revalidateTag("ana-art-feed");
 
   return NextResponse.json({ ok: true });
 }
