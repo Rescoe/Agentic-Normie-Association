@@ -12,6 +12,7 @@
 
 import fs   from "fs";
 import path from "path";
+import { revalidateTag } from "next/cache";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -489,6 +490,12 @@ export async function advanceState(id: string, newState: WorkState, note?: strin
     w.stateHistory.push({ state: newState, at: Date.now(), note });
   });
   if (updated) console.log(`[workStore] ${id} → ${newState}${note ? ` (${note})` : ""}`);
+  // A pixel-drawing memorial reaching PUBLISHED is exactly the case
+  // /api/ana-art/feed's cached item list needs to pick up sooner than its
+  // own 30-min revalidate -- cheap to call for every work, not just
+  // pixel-drawing ones, since it just clears a Next.js cache tag (no Neon
+  // read/write of its own).
+  if (updated && newState === "PUBLISHED") revalidateTag("ana-art-feed");
 }
 
 export async function addVote(id: string, vote: WorkVote): Promise<void> {

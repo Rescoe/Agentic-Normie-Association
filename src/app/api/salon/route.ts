@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
-import { createSalon, getActiveSalonByCreator } from "@/lib/salonStore";
-import { readPublicSnapshot } from "@/lib/publicSnapshot";
+import { listSalons, createSalon, getActiveSalonByCreator } from "@/lib/salonStore";
+import { getSalonWorkOutcomes } from "@/lib/workStore";
 
 const client = createPublicClient({
   chain:     base,
@@ -22,21 +22,36 @@ async function getMemberIds(): Promise<number[]> {
   } catch { return []; }
 }
 
-// GET reads ONLY the durable public snapshot -- see @/lib/publicSnapshot's
-// header comment. POST below is a write (creating a salon) and stays fully
-// dynamic/uncached/Neon-backed, unrelated to the "no public GET touches
-// Neon" goal.
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=1800" };
+// GET is cached at the edge so read traffic no longer scales 1:1 with Neon
+// reads (Sept 2026 cost audit) -- POST below stays fully dynamic/uncached,
+// it's a write. Was 30s; the compact-list rewrite (salonStore.ts, 26/09
+// pérennisation pass) means this no longer reads full message history per
+// salon, but the audit's own P0 finding was that even the OLD 30s window
+// could still burn ~120 Go/mois/region under sustained traffic — 30 minutes
+// matches /api/works and /api/status (see the 26/09 follow-up cost audit).
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
+
+// Synthesis is now per-salon (threshold-based, checked every 30-min orchestrator
+// tick) with a daily catch-all at 00:00 UTC for any backlog — see synthesis.ts.
+// There's no longer one single "next synthesis" timestamp shared by every
+// salon, so this reports the guaranteed daily catch-all only: worst case,
+// everything gets synthesized by then, even if a busy salon's own threshold
+// fires sooner. Kept for the existing UI footnote (SalonClient.tsx), which
+// already treats this field as optional.
+function nextMidnightUtc(): number {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  return next.getTime();
+}
 
 export async function GET() {
-  const snapshot = await readPublicSnapshot();
-  if (!snapshot) {
-    return NextResponse.json({ error: "Snapshot unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
-  }
+  const [salons, outcomes] = await Promise.all([listSalons(), getSalonWorkOutcomes()]);
+  const enriched = salons.map(s => ({ ...s, workOutcome: outcomes[s.id] ?? null }));
+  const nextSynthesisAt = nextMidnightUtc();
   return NextResponse.json({
-    salons: snapshot.salons.list,
-    nextSynthesisAt: snapshot.salons.nextSynthesisAt,
-    nextSynthesisDate: snapshot.salons.nextSynthesisDate,
+    salons: enriched,
+    nextSynthesisAt,
+    nextSynthesisDate: new Date(nextSynthesisAt).toISOString(),
   }, { headers: CACHE_HEADERS });
 }
 

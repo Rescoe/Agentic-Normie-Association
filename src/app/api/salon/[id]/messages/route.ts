@@ -7,7 +7,6 @@ import { getSalon, getMessages, addMessage, checkRateLimit, checkSalonMessageLim
 import { buildPersona, buildSystemPrompt } from "@/lib/normiesPersona";
 import { trimIfTruncated } from "@/lib/groq";
 import { verifyAdminRequest } from "@/lib/adminAuth";
-import { refreshPublicSnapshot } from "@/lib/publicSnapshot";
 
 const GROQ_API_URL    = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL           = "openai/gpt-oss-120b";
@@ -164,11 +163,6 @@ export async function POST(
       content, isLlm: true, timestamp: Date.now(),
     });
     await recordSalonMessage(ip);
-    // Out-of-band write (not part of the orchestrator's own 2h cycle, which
-    // already refreshes the public snapshot after salon-exchange runs) --
-    // rebuild now, in this same request, so the new message is visible
-    // immediately instead of waiting up to the next orchestrator tick.
-    await refreshPublicSnapshot();
     return NextResponse.json({ message: msg });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Unexpected error" }, { status: 500 });

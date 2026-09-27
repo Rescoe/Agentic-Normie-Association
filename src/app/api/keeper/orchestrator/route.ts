@@ -163,21 +163,6 @@ export async function POST(req: NextRequest) {
     { name: "health-ping",     due: due24h, fn: () => callRoute(req, cronSecret, "/api/health", "GET") },
   ]);
 
-  // Public snapshot refresh runs SEQUENTIALLY AFTER the block above, not
-  // inside the same Promise.allSettled batch -- it needs to read Neon/chain
-  // state AFTER salon-exchange/work-lifecycle/check-burns/election-cycle
-  // have actually written their changes, which concurrent execution can't
-  // guarantee (their writes might land after snapshot's reads). Only runs
-  // when something that could plausibly have changed public data was due
-  // this tick; a no-op tick (nothing due beyond the every-tick tasks) skips
-  // it entirely rather than rebuilding an identical snapshot.
-  if (due2h || due6h || due24h) {
-    const r = await callRoute(req, cronSecret, "/api/keeper/public-snapshot-refresh", "POST", {});
-    results.push({ task: "public-snapshot-refresh", ran: true, ok: r.ok, status: r.status, error: r.error, body: r.body });
-  } else {
-    results.push({ task: "public-snapshot-refresh", ran: false });
-  }
-
   const ranTasks = results.filter(r => r.ran);
   const failedTasks = ranTasks.filter(r => r.ok === false);
   const allOk = failedTasks.length === 0;
