@@ -14,6 +14,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${BASE}/assembly`,         lastModified: now, changeFrequency: "daily",   priority: 0.9 },
     { url: `${BASE}/salon`,            lastModified: now, changeFrequency: "hourly",  priority: 0.8 },
     { url: `${BASE}/activity`,         lastModified: now, changeFrequency: "hourly",  priority: 0.7 },
+    { url: `${BASE}/news`,             lastModified: now, changeFrequency: "daily",   priority: 0.8 },
     { url: `${BASE}/galerie`,          lastModified: now, changeFrequency: "daily",   priority: 0.8 },
     { url: `${BASE}/galerie/celebrations`, lastModified: now, changeFrequency: "daily",   priority: 0.5 },
     { url: `${BASE}/data`,             lastModified: now, changeFrequency: "monthly", priority: 0.6 },

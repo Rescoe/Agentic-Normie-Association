@@ -22,6 +22,7 @@ import { NextResponse } from "next/server";
 import { listWorks } from "@/lib/workStore";
 import { getMessages } from "@/lib/salonStore";
 import { getBurnedTokens, getBurnedTokenImageUrl } from "@/lib/normiesApi";
+import { listNews } from "@/lib/newsStore";
 
 const AGORA_SALON_ID = "salon_agora_ana";
 
@@ -38,10 +39,11 @@ const AGORA_SALON_ID = "salon_agora_ana";
 const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
 
 export async function GET() {
-  const [works, agoraMessages, burns] = await Promise.allSettled([
+  const [works, agoraMessages, burns, news] = await Promise.allSettled([
     listWorks(),
     getMessages(AGORA_SALON_ID, undefined, 5),
     getBurnedTokens(24, 0),
+    listNews(50),
   ]);
 
   return NextResponse.json({
@@ -54,5 +56,6 @@ export async function GET() {
           imageUrl: getBurnedTokenImageUrl(t.tokenId),
         }))
       : [],
+    news: news.status === "fulfilled" ? news.value : [],
   }, { headers: CACHE_HEADERS });
 }

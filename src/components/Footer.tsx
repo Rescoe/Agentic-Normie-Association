@@ -53,6 +53,7 @@ export function Footer() {
         { href: "/members",  label: t("foundingMembers") },
         { href: "/assembly", label: t("constituentAssembly") },
         { href: "/galerie",    label: t("works") },
+        { href: "/news",       label: "News" },
       ],
     },
     {

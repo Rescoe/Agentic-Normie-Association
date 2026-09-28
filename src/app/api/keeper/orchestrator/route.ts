@@ -154,6 +154,7 @@ export async function POST(req: NextRequest) {
     { name: "salon-exchange", due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/salon-exchange", "POST", {}) },
     { name: "work-lifecycle", due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/work-lifecycle", "POST", {}) },
     { name: "check-burns",    due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/check-burns", "POST", {}) },
+    { name: "generate-news",  due: due2h, fn: () => callRoute(req, cronSecret, "/api/keeper/generate-news", "POST", {}) },
 
     // ~Every 6h since last run.
     { name: "election-cycle", due: due6h, fn: () => callRoute(req, cronSecret, "/api/keeper/election-cycle", "POST", {}) },

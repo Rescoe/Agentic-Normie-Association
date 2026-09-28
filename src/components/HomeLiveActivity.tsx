@@ -12,6 +12,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { getNormieImageUrl } from "@/lib/normiesApi";
 import type { ANAWork } from "@/lib/workStore";
+import type { ANANewsItem } from "@/lib/newsStore";
+import { NewsFeed } from "@/components/NewsFeed";
 
 const STATE_LABEL: Record<string, string> = {
   PROPOSED:     "Proposed",
@@ -52,12 +54,13 @@ interface RecentBurn { tokenId: number; imageUrl: string; burnedAt: string }
 // three separate live fetches -- one of which (GET /api/salon/[id]) used to
 // hit Neon 5+ times per homepage visit with no cache at all. See that
 // route's own comment for the Sept 2026 cost-audit context.
-interface HomeSnapshot { works: ANAWork[]; agoraMessages: SalonMessage[]; recentBurns: RecentBurn[] }
+interface HomeSnapshot { works: ANAWork[]; agoraMessages: SalonMessage[]; recentBurns: RecentBurn[]; news: ANANewsItem[] }
 
 export function HomeLiveActivity() {
   const [works, setWorks] = useState<ANAWork[] | null>(null);
   const [agoraMessages, setAgoraMessages] = useState<SalonMessage[]>([]);
   const [recentBurns, setRecentBurns] = useState<RecentBurn[]>([]);
+  const [news, setNews] = useState<ANANewsItem[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -67,6 +70,7 @@ export function HomeLiveActivity() {
       setWorks(snapshot.works ?? []);
       setAgoraMessages((snapshot.agoraMessages ?? []).slice(0, 5));
       setRecentBurns((snapshot.recentBurns ?? []).slice(0, 8));
+      setNews((snapshot.news ?? []).slice(0, 10));
       setLoaded(true);
     }).catch(() => setLoaded(true));
     return () => { cancelled = true; };
@@ -210,6 +214,17 @@ export function HomeLiveActivity() {
               Join the Agora →
             </Link>
           </div>
+        </div>
+
+        <div className="space-y-5 pt-4">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">From the elected Rapporteur</p>
+              <h2 className="text-2xl font-bold mt-1">Association news</h2>
+            </div>
+            <Link href="/news" className="font-mono text-xs hover:underline shrink-0">All news →</Link>
+          </div>
+          <NewsFeed items={news} compact />
         </div>
 
         {/* ── Recently burned strip ── */}

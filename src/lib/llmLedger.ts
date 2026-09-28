@@ -20,7 +20,7 @@ import { query, USE_NEON } from "./db";
 export type LlmProvider = "groq" | "1minai";
 export type LlmTask =
   | "salon-speech" | "vote" | "candidacy" | "propose-work" | "brief"
-  | "creating" | "curation" | "synthesis" | "critique" | "fingerprint" | "other";
+  | "creating" | "curation" | "synthesis" | "critique" | "fingerprint" | "news" | "other";
 
 export interface LlmCallOutcome {
   provider:  LlmProvider;
