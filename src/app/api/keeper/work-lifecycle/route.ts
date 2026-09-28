@@ -45,27 +45,27 @@ const MODEL        = "openai/gpt-oss-120b";
 // curator approval, and critique calls all returned null on every run).
 const MODEL_FAST   = "openai/gpt-oss-120b";
 
-// A work that fails the same pipeline step this many times in a row gets
-// auto-rejected instead of staying stuck in PUBLISHING/CREATING/etc. forever.
-// This guards against genuine infra failures (LLM API down, missing persona) —
-// it is NOT the revision budget for a generative artwork that's being iterated
-// on, since a structural-validation retry or a curator's rejection both report
-// advanced:true and never increment this counter (see rejectOrRevise below).
+// A work that fails the same pipeline step this many times in a row is PAUSED
+// for technical review. It must never be rejected automatically after the
+// members approved it: provider outages and malformed LLM output are not
+// collective artistic decisions.
 const MAX_PIPELINE_FAILS = 4;
 
-// stepBriefing prompts the Rapporteur LLM to pick editionPrice from exactly
-// these values and editionSupply in [1,100] (see the prompt below) — but that
-// was never enforced in code, only requested in the prompt text. A
-// non-compliant response (observed in production: editions priced at 1 ETH)
-// went straight to chain unvalidated. clampEditionParams() is the actual
-// enforcement — the allowed price set here must stay in sync with the prompt.
-const ALLOWED_EDITION_PRICES = ["0.0005", "0.001", "0.005", "0.01", "0.05"];
+// The collection contract accepts any non-negative uint256 price. Normies are
+// therefore free to choose their exact price; this parser only protects the
+// relayer from malformed/scientific notation and obvious accidental extremes.
+// The 100 ETH ceiling is a technical safety rail, not a menu of allowed prices.
+const MAX_EDITION_PRICE_ETH = 100;
 function clampEditionParams(price: string | undefined, supply: number | undefined): {
   editionPrice?: string; editionSupply?: number;
 } {
-  const editionPrice = price != null && ALLOWED_EDITION_PRICES.includes(price)
-    ? price
-    : (price != null ? ALLOWED_EDITION_PRICES[0] : undefined); // non-compliant value → safest tier, not silently trusted
+  const normalizedPrice = price?.trim();
+  const parsedPrice = normalizedPrice && /^\d+(?:\.\d{1,18})?$/.test(normalizedPrice)
+    ? Number(normalizedPrice)
+    : Number.NaN;
+  const editionPrice = Number.isFinite(parsedPrice) && parsedPrice >= 0 && parsedPrice <= MAX_EDITION_PRICE_ETH
+    ? normalizedPrice
+    : undefined;
   const editionSupply = typeof supply === "number" && Number.isFinite(supply)
     ? Math.max(1, Math.min(100, Math.round(supply)))
     : undefined;
@@ -83,6 +83,14 @@ const NOTABLE_REVISION_COUNT = 5;
 // Forms a curator may reclassify a text-centric html-* submission into,
 // instead of rejecting it outright — see stepValidating's reclassifyAs handling.
 const RECLASSIFIABLE_FORMS = ["poem", "prose", "manifesto"];
+const CREATIVE_FORMS = [
+  "haiku", "sonnet", "poem", "prose", "manifesto",
+  "html-canvas", "html-p5js", "html-threejs", "html-webgl",
+] as const;
+
+function looksLikeModelReasoning(value: string): boolean {
+  return /\b(we need to|let'?s craft|word count|must produce json|response format|the instructions say|now produce json)\b/i.test(value);
+}
 
 // Non-creator Normies may react/debate in a published work's archived salon
 // for this long afterwards — see runCritiquePhase() and openCritiqueWindow().
@@ -124,17 +132,15 @@ THINKING ABOUT EDITION COUNT:
   • 1 edition     = unique piece (1/1), collectible, price can be higher
   • 3-10 editions = rare run, small community of collectors
   • 20-50 editions = standard collection, broad accessibility
-  • 100+ editions = "open" work, prioritizes reach over profit
+  • 100 editions   = open run, prioritizing reach over rarity
 
 PHILOSOPHY: ANA is a young community in an experimental phase. Favor accessibility
 so other Normies can collect. A price set too high slows the circulation of works.
 Vary your choices based on the work's form and ambition — don't always pick the same combination.
 
-PRICE MUST TRACK THE AMBITION LEVEL YOU PICKED — don't price a "quick" piece like an
-"ambitious" one just because the form is the same: "quick" → 0.0005-0.001 ETH range,
-"standard" → 0.001-0.005 ETH range, "ambitious" → 0.005-0.05 ETH range, only reaching the
-top of that if it's genuinely a standout piece. The price is a promise about the effort
-actually invested — keep it honest.`;
+The examples are context, not permitted tiers. Choose the exact price yourselves — including
+0 for a free edition — and explain the relationship between price, supply, accessibility,
+rarity and the work. Do not mechanically derive price from ambition.`;
 }
 
 const client = createPublicClient({
@@ -661,7 +667,8 @@ It must embody:
 - Collective governance: votes, roles, an autonomous assembly
 - The emotion of this founding first moment
 
-Brief in 120-150 words. No title, no introduction. Write it directly. Always write in English.`
+Write a useful, direct brief with as much or as little detail as this work needs. Do not
+count words or discuss formatting instructions. No title or introduction. Always write in English.`
     : `You are the Rapporteur for the work "${work.title}".
 Proposal: ${work.proposal}
 ${work.suggestedForm ? `Proposer's suggested form: "${work.suggestedForm}"` : ""}
@@ -692,14 +699,16 @@ ${pricingCtx}
 
 The brief you write MUST stay faithful to the original proposal above — do not invent a different concept, theme, or form than what was proposed.
 
-Respond in JSON:
+Respond with one complete JSON object only. Do not expose your reasoning, count words, or
+describe these instructions. Never invent a block number, transaction, date, event, or other
+on-chain fact; include one only when it appears in the proposal or trusted context above.
 {
   "artForm": "haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl",
   "ambitionLevel": "quick"|"standard"|"ambitious",
-  "editionPrice": "0.0005"|"0.001"|"0.005"|"0.01"|"0.05",
+  "editionPrice": "<your exact price in ETH, from 0 to 100, up to 18 decimals>",
   "editionSupply": <integer 1-100>,
   "priceReasoning": "<1 sentence: why this price and quantity given the context above>",
-  "brief": "<120-150 words for the Author. Must reflect the proposal's actual concept and chosen form. Specify: tone, emotional goal, on-chain/ANA vocabulary. For HTML/JS: describe the desired visual experience and data to inject. No title, no intro.>"
+  "brief": "<direct creative direction for the Author. Follow the proposal's actual concept and chosen form. Describe tone and emotional goal; use on-chain vocabulary only when it serves the work. For HTML/JS, describe the desired visual experience and data to inject.>"
 }`;
 
   const rawBrief = await groq(
@@ -726,9 +735,24 @@ Respond in JSON:
         artForm?: string; ambitionLevel?: string; editionPrice?: string; editionSupply?: number;
         priceReasoning?: string; brief?: string;
       };
-      brief         = parsed.brief ?? rawBrief;
-      artForm       = parsed.artForm;
+      const candidateBrief = typeof parsed.brief === "string" ? parsed.brief.trim() : "";
+      const candidateForm  = typeof parsed.artForm === "string" ? parsed.artForm : "";
+      if (!candidateBrief || looksLikeModelReasoning(candidateBrief)) {
+        console.warn("[work-lifecycle] stepBriefing: missing/unsafe brief — retrying on next cycle");
+        return false;
+      }
+      if (!(CREATIVE_FORMS as readonly string[]).includes(candidateForm)) {
+        console.warn(`[work-lifecycle] stepBriefing: invalid art form "${candidateForm}" — retrying on next cycle`);
+        return false;
+      }
+
+      brief         = candidateBrief;
+      artForm       = candidateForm;
       ({ editionPrice, editionSupply } = clampEditionParams(parsed.editionPrice, parsed.editionSupply));
+      if (editionPrice == null || editionSupply == null) {
+        console.warn("[work-lifecycle] stepBriefing: invalid edition parameters — retrying on next cycle");
+        return false;
+      }
       ambitionLevel = (["quick", "standard", "ambitious"] as const).includes(parsed.ambitionLevel as never)
         ? parsed.ambitionLevel as ANAWork["ambitionLevel"]
         : "standard";
@@ -736,7 +760,8 @@ Respond in JSON:
         console.log(`[work-lifecycle] pricing rationale: ${parsed.priceReasoning}`);
       }
     } catch {
-      console.warn("[work-lifecycle] stepBriefing: JSON parse failed, using raw text as brief");
+      console.warn("[work-lifecycle] stepBriefing: JSON parse failed — retrying on next cycle");
+      return false;
     }
   }
 
@@ -1978,6 +2003,53 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
+// Self-healing migration for works rejected by the former generic failure
+// counter. A passed member vote remains binding: infrastructure may pause
+// execution, but it cannot overturn the collective decision.
+async function recoverLegacyPipelineRejections(): Promise<number> {
+  const rejectedByInfrastructure = (await listWorks()).filter(work =>
+    work.state === "REJECTED" &&
+    work.voteResult === "passed" &&
+    (work.pipelineFailCount ?? 0) >= MAX_PIPELINE_FAILS
+  );
+
+  for (const work of rejectedByInfrastructure) {
+    const badBrief = !work.brief || looksLikeModelReasoning(work.brief);
+    await updateWork(work.id, {
+      pipelineFailCount: 0,
+      validationNote: undefined,
+      needsRethinkReason: undefined,
+      ...(badBrief ? {
+        brief: undefined,
+        briefAt: undefined,
+        artworkText: undefined,
+        artworkAt: undefined,
+        editionPrice: undefined,
+        editionSupply: undefined,
+      } : {}),
+    });
+    if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+      await reopenSalon(work.salonId).catch(() => null);
+    }
+    await advanceState(
+      work.id,
+      badBrief ? "BRIEFING" : "CREATING",
+      "Recovered: an infrastructure failure cannot overturn a passed member vote",
+    );
+    await addMessage({
+      salonId: work.salonId ?? AGORA_SALON_ID,
+      tokenId: 0,
+      name: "ANA",
+      imageUrl: "",
+      content: `▶️ "${work.title}" is resuming. Its approval vote remains valid; the previous stop was technical, not an artistic rejection.`,
+      isLlm: true,
+      timestamp: Date.now(),
+      topic: "art",
+    }).catch(() => null);
+  }
+  return rejectedByInfrastructure.length;
+}
+
 export async function POST(req: NextRequest) {
   // GitHub Actions via x-cron-secret, Vercel cron via Authorization: Bearer
   const cronSecret  = process.env.CRON_SECRET;
@@ -2057,6 +2129,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
   }
 
+  const recoveredWorks = await recoverLegacyPipelineRejections();
   const [activeWorks, memberIds] = await Promise.all([getActiveWorks(), getMemberIds()]);
 
   const personaResults = await Promise.allSettled(memberIds.map(id => buildPersona(id)));
@@ -2113,12 +2186,12 @@ export async function POST(req: NextRequest) {
   });
 
   if (activeWorks.length === 0 && !foundingCreated) {
-    return NextResponse.json({ message: "No active works to advance", advanced: [], foundingCreated: false });
+    return NextResponse.json({ message: "No active works to advance", advanced: [], foundingCreated: false, recoveredWorks });
   }
 
   // Re-fetch active works in case founding work was just created
   const worksToProcess = foundingCreated ? await getActiveWorks() : activeWorks;
-  const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string; autoRejected?: boolean }> = [];
+  const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string; pausedForReview?: boolean }> = [];
 
   // CREATING is the one step whose Groq call can be genuinely large (up to 3750
   // declared max_tokens for an "ambitious" html-* piece — nearly half of Groq's
@@ -2174,21 +2247,17 @@ export async function POST(req: NextRequest) {
     // not the work's original `from` state, so a memorial that cascades past
     // VOTE_OPEN and then genuinely fails at e.g. PUBLISHING isn't mistaken
     // for "still voting".
-    let autoRejected = false;
+    let pausedForReview = false;
     if (!advanced && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK") {
       // Any other non-advancing step counts — even steps that only return false
       // on failure (no descriptive string) must not block the pipeline forever.
       const reason    = error ?? `no progress at ${stalledAt} (step returned false — likely a transient LLM/data issue)`;
       const failCount = (work.pipelineFailCount ?? 0) + 1;
       if (failCount >= MAX_PIPELINE_FAILS) {
-        await advanceState(work.id, "REJECTED", `Auto-rejected after ${failCount} failures at ${stalledAt}: ${reason.slice(0, 200)}`);
         await updateWork(work.id, { validationNote: reason.slice(0, 300), pipelineFailCount: failCount });
-        await announceInSalon(work, "pipeline_failed", personas, { failedState: stalledAt, error: reason });
-        if (work.salonId && work.salonId !== AGORA_SALON_ID) {
-          await closeSalon(work.salonId, 0).catch(() => null);
-        }
-        autoRejected = true;
-        console.warn(`[work-lifecycle] "${work.title}" auto-rejected after ${failCount} consecutive failures at ${stalledAt}`);
+        await enterNeedsRethink(work, `${stalledAt}: ${reason}`, "technical");
+        pausedForReview = true;
+        console.warn(`[work-lifecycle] "${work.title}" paused for technical review after ${failCount} consecutive failures at ${stalledAt}`);
       } else {
         await updateWork(work.id, { pipelineFailCount: failCount });
       }
@@ -2200,7 +2269,7 @@ export async function POST(req: NextRequest) {
     const refreshed = await getWork(work.id);
     results.push({
       id: work.id, title: work.title, from, to: refreshed?.state ?? from, advanced,
-      ...(error ? { error } : {}), ...(autoRejected ? { autoRejected } : {}),
+      ...(error ? { error } : {}), ...(pausedForReview ? { pausedForReview } : {}),
     });
     await new Promise(r => setTimeout(r, 300));
   }

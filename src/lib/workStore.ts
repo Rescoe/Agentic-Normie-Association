@@ -109,7 +109,7 @@ export interface ANAWork {
   artworkAt?:      number;
   validationNote?: string;
   revisionCount?:  number;
-  pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — auto-rejects past MAX_PIPELINE_FAILS
+  pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — pauses for technical review past MAX_PIPELINE_FAILS
   // Circuit breaker bookkeeping (see NEEDS_RETHINK state above).
   similarFailureStreak?: number;
   needsRethinkReason?:   "technical" | "creative";

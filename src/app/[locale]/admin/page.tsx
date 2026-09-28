@@ -1557,7 +1557,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                   )}
                   {!!w.pipelineFailCount && (
                     <p className="font-mono text-[10px] text-orange-500">
-                      Échecs consécutifs : {w.pipelineFailCount}/4 — auto-rejet au prochain échec si atteint
+                      Échecs techniques consécutifs : {w.pipelineFailCount}/4 — mise en pause pour diagnostic au seuil, jamais rejet automatique
                     </p>
                   )}
                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
