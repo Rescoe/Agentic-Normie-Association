@@ -188,12 +188,40 @@ export async function POST(req: NextRequest) {
     try {
       const result = await callAutoVote({ phase: "candidacy", onlyTokenIds: newCandidates });
       const candidacies = Array.isArray(result.candidacies) ? result.candidacies as Candidacy[] : [];
-      await saveCycleState({
+      const accumulatedCandidacies = mergeCandidacies(cycle.pendingCandidacies, candidacies);
+      const afterCandidacy: CycleState = {
         ...cycle,
         candidacyDoneForSession: session.id,
         candidacyMemberIds: unionIds(cycle.candidacyDoneForSession === session.id ? cycle.candidacyMemberIds : [], newCandidates),
-        pendingCandidacies: mergeCandidacies(cycle.pendingCandidacies, candidacies),
-      });
+        pendingCandidacies: accumulatedCandidacies,
+      };
+
+      // For members who joined after the initial cohort, do not make them wait
+      // for a second ~6h keeper pass: submit their candidacy and their ballots
+      // in this same invocation. This keeps the full open window meaningful,
+      // including its final hours. The initial (potentially large) cohort stays
+      // split across two calls to respect the serverless duration budget.
+      if (
+        cycle.candidacyDoneForSession === session.id &&
+        cycle.votesDoneForSession === session.id &&
+        newCandidates.length > 0
+      ) {
+        const voteResult = await callAutoVote({
+          phase: "vote",
+          mode: "execute",
+          onlyTokenIds: newCandidates,
+          candidacies: accumulatedCandidacies,
+        });
+        await saveCycleState({
+          ...afterCandidacy,
+          votesDoneForSession: session.id,
+          voteMemberIds: unionIds(cycle.voteMemberIds, newCandidates),
+          pendingCandidacies: undefined,
+        });
+        return NextResponse.json({ step: "late-member-candidacy-and-vote", candidacy: result, vote: voteResult });
+      }
+
+      await saveCycleState(afterCandidacy);
       return NextResponse.json({ step: "candidacy", result });
     } catch (e) {
       return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
