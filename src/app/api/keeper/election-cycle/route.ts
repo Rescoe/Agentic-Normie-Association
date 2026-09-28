@@ -27,10 +27,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
-import { CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { kvGet, kvSet } from "@/lib/db";
 import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
-import { runAutoVotePhase, type AutoVoteBody } from "@/lib/autoVote";
+import { runAutoVotePhase, type AutoVoteBody, type Candidacy } from "@/lib/autoVote";
 import { baseRpcTransport } from "@/lib/baseRpc";
 
 // Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026
@@ -42,12 +42,31 @@ const TRANSPORT  = IS_MAINNET
   : http(process.env.BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org", { timeout: 30_000 });
 
 const CA = CONTRACT_ADDRESSES.ConstituentAssembly as `0x${string}`;
+const CORE = CONTRACT_ADDRESSES.AssociationCore as `0x${string}`;
 
 const CYCLE_KEY = "election-cycle-state";
 
 interface CycleState {
   candidacyDoneForSession?: number;
   votesDoneForSession?: number;
+  candidacyMemberIds?: number[];
+  voteMemberIds?: number[];
+  pendingCandidacies?: Candidacy[];
+}
+
+function missingIds(all: number[], processed: number[] | undefined): number[] {
+  const done = new Set(processed ?? []);
+  return all.filter(id => !done.has(id));
+}
+
+function unionIds(a: number[] | undefined, b: number[]): number[] {
+  return [...new Set([...(a ?? []), ...b])].sort((x, y) => x - y);
+}
+
+function mergeCandidacies(a: Candidacy[] | undefined, b: Candidacy[]): Candidacy[] {
+  const byToken = new Map((a ?? []).map(c => [c.tokenId, c]));
+  for (const candidacy of b) byToken.set(candidacy.tokenId, candidacy);
+  return [...byToken.values()];
 }
 
 async function getCycleState(): Promise<CycleState> {
@@ -95,7 +114,28 @@ export async function POST(req: NextRequest) {
   }
 
   const now = Date.now();
-  const cycle = await getCycleState();
+  let cycle = await getCycleState();
+
+  let currentMemberIds: number[];
+  try {
+    const raw = await pub.readContract({ address: CORE, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds" });
+    currentMemberIds = (raw as bigint[]).map(Number);
+  } catch (e) {
+    return NextResponse.json({ error: `Member read failed: ${e}` }, { status: 503 });
+  }
+
+  // Migration for a session already processed by the old all-or-nothing
+  // keeper: treat the current cohort as its baseline, avoiding duplicate
+  // candidacy/vote messages immediately after deployment. Any later member is
+  // then detected incrementally on the following ticks.
+  if (cycle.candidacyDoneForSession === session.id && !cycle.candidacyMemberIds) {
+    cycle = { ...cycle, candidacyMemberIds: currentMemberIds };
+    await saveCycleState(cycle);
+  }
+  if (cycle.votesDoneForSession === session.id && !cycle.voteMemberIds) {
+    cycle = { ...cycle, voteMemberIds: currentMemberIds };
+    await saveCycleState(cycle);
+  }
 
   // ── Step 1: open a new session if none is active and it's due ──────────────
   // First ever session: gated by the announced constitutive AG date, not by
@@ -141,10 +181,19 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Step 2: candidacies not yet gathered for this session ──────────────────
-  if (cycle.candidacyDoneForSession !== session.id) {
+  const newCandidates = cycle.candidacyDoneForSession === session.id
+    ? missingIds(currentMemberIds, cycle.candidacyMemberIds)
+    : currentMemberIds;
+  if (cycle.candidacyDoneForSession !== session.id || newCandidates.length > 0) {
     try {
-      const result = await callAutoVote({ phase: "candidacy" });
-      await saveCycleState({ ...cycle, candidacyDoneForSession: session.id });
+      const result = await callAutoVote({ phase: "candidacy", onlyTokenIds: newCandidates });
+      const candidacies = Array.isArray(result.candidacies) ? result.candidacies as Candidacy[] : [];
+      await saveCycleState({
+        ...cycle,
+        candidacyDoneForSession: session.id,
+        candidacyMemberIds: unionIds(cycle.candidacyDoneForSession === session.id ? cycle.candidacyMemberIds : [], newCandidates),
+        pendingCandidacies: mergeCandidacies(cycle.pendingCandidacies, candidacies),
+      });
       return NextResponse.json({ step: "candidacy", result });
     } catch (e) {
       return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
@@ -152,10 +201,23 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Step 3: votes not yet cast for this session ─────────────────────────────
-  if (cycle.votesDoneForSession !== session.id) {
+  const newVoters = cycle.votesDoneForSession === session.id
+    ? missingIds(currentMemberIds, cycle.voteMemberIds)
+    : currentMemberIds;
+  if (cycle.votesDoneForSession !== session.id || newVoters.length > 0) {
     try {
-      const result = await callAutoVote({ phase: "vote", mode: "execute" });
-      await saveCycleState({ ...cycle, votesDoneForSession: session.id });
+      const result = await callAutoVote({
+        phase: "vote",
+        mode: "execute",
+        onlyTokenIds: newVoters,
+        candidacies: cycle.pendingCandidacies,
+      });
+      await saveCycleState({
+        ...cycle,
+        votesDoneForSession: session.id,
+        voteMemberIds: unionIds(cycle.votesDoneForSession === session.id ? cycle.voteMemberIds : [], newVoters),
+        pendingCandidacies: undefined,
+      });
       return NextResponse.json({ step: "vote", result });
     } catch (e) {
       return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

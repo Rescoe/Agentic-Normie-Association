@@ -26,7 +26,7 @@ import {
 } from "@/lib/topicEngine";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { verifyAdminRequest } from "@/lib/adminAuth";
-import { createWork, getActiveWorks, listWorks } from "@/lib/workStore";
+import { createWork, getActiveWorks, listWorks, maxConcurrentCreativeWorks } from "@/lib/workStore";
 import { groqFetch, trimIfTruncated, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
 import { oneMinAiChat } from "@/lib/oneMinAi";
 import { readCache } from "@/lib/activityScanner";
@@ -389,7 +389,8 @@ async function maybeGenerateWorkProposal(
   isUserStim:    boolean,
 ): Promise<{ id: string; title: string } | null> {
   const [active, allWorks] = await Promise.all([getActiveWorks({ excludeMemorials: true }), listWorks()]);
-  if (active.length > 0) return null;
+  const capacity = maxConcurrentCreativeWorks(allPersonas.length);
+  if (active.length >= capacity) return null;
 
   const baseProbability = isUserStim ? 0.08 : 0.15;
   const memberFactor = Math.min(1 + allPersonas.length / 20, 2.5);

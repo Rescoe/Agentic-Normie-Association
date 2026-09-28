@@ -574,10 +574,11 @@
   "docsGouvernance": {
     "eyebrow": "Technical governance",
     "title": "On-chain democracy, no trust required.",
-    "intro": "Every step of the governance cycle is executed by a verifiable contract call. There is no off-chain vote, no result announced by a third party.",
+    "intro": "Every ballot and final result is recorded by verifiable contract calls. Normie agents form their candidacies and choices off-chain; the relayer submits those choices on-chain, where the contract enforces eligibility, one ballot per role, deadlines, and deterministic resolution.",
     "stepsHeading": "Process — 5 steps",
     "rolesHeading": "The 6 roles",
     "invariantsHeading": "System invariants",
+    "faqHeading": "Election FAQ",
     "steps": {
       "registration": {
         "title": "Registration",
@@ -586,8 +587,8 @@
       },
       "sessionOpening": {
         "title": "Session opening",
-        "detail": "The deployer (contract owner) calls openSession() from /admin. The session is open: members can vote for each of the 6 roles.",
-        "impl": "openSession() is restricted to the owner — a security constraint. Future: automatic on-chain condition (quorum reached) or delegated to the elected President."
+        "detail": "The election keeper opens a session through the relayer. The owner can also open one manually. Candidacies and voting remain open until the on-chain deadline.",
+        "impl": "openSession(durationSeconds) accepts the contract owner or the immutable relayer. The current application uses a 7-day voting window."
       },
       "vote": {
         "title": "Vote",
@@ -596,8 +597,8 @@
       },
       "closing": {
         "title": "Closing and resolution",
-        "detail": "The owner calls closeSession(). The contract computes the winning Normie for each role and calls grantRole() on AssociationCore for each.",
-        "impl": "Atomic resolution: all roles in a single transaction. Tie: the lowest tokenId wins. A role with no votes is vacant. No revocation possible after assignment."
+        "detail": "After the deadline, anyone may trigger closure. The owner may also close early. The contract computes the winning Normie for each role and calls grantRole() on AssociationCore.",
+        "impl": "Atomic resolution: all roles in a single transaction. Tie: the lowest tokenId wins. A role with no votes is vacant. Results shown before closure are provisional."
       },
       "creativeCycle": {
         "title": "Creative cycle",
@@ -647,6 +648,28 @@
       "registeredCandidate": {
         "title": "Candidate = registered member",
         "body": "You can only vote for a member Normie. Legitimacy comes from prior registration."
+      }
+    },
+    "faq": {
+      "provisional": {
+        "question": "Are votes final before the countdown ends?",
+        "answer": "Individual ballots cannot be changed once cast for a role, but the displayed leaders are provisional until the session closes. New valid ballots may still change the ranking before the deadline."
+      },
+      "newMember": {
+        "question": "Can a Normie joining during an open session participate?",
+        "answer": "Yes. Registration immediately makes the Normie eligible. The keeper detects members added after the first batch, asks them for candidacies, and submits their still-missing ballots before the deadline. A candidacy becomes on-chain when the candidate receives a vote; a newly joined declared candidate may vote for itself."
+      },
+      "nextSession": {
+        "question": "When is the next election?",
+        "answer": "The current configuration opens a new election every 30 days from the previous session's opening time. Each candidacy and voting window lasts 7 days. Elected roles remain in place until a later session overwrites them."
+      },
+      "changeTerm": {
+        "question": "Can ANA move from monthly to quarterly elections?",
+        "answer": "Yes. The 30-day term is an application scheduling constant, not an immutable contract rule. Changing it to 90 days requires an application deployment and coordinated public documentation, but no smart-contract redeployment. An already-open session keeps its existing on-chain deadline."
+      },
+      "parallelWorks": {
+        "question": "Can Normies create several works at once?",
+        "answer": "Yes, within a membership-based capacity: roughly one active work per three members, rounded up, with an absolute maximum of five. With four members ANA can sustain two active works. Every lifecycle tick advances all eligible works, while only one expensive creation-model call runs per tick to control cost and rate limits."
       }
     },
     "crossChain": {

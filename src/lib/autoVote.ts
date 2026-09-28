@@ -191,7 +191,11 @@ async function decideAllVotes(
     // Build per-role candidate list (excluding the voter themselves)
     const roleDefs = ORDERED_ROLE_ENTRIES.map(({ hash, label }) => {
       const fromCandidacies = candidacies
-        .filter(c => c.tokenId !== voter.tokenId && c.roles.includes(hash))
+        // A declared candidate remains eligible for their own ballot. This is
+        // essential for a lone member joining mid-session: previous voters
+        // cannot alter their ballots, so self-voting is the only way their
+        // candidacy can be recorded on-chain before the deadline.
+        .filter(c => c.roles.includes(hash))
         .map(c => c.tokenId);
       const fallback = allPersonas
         .filter(p => p.tokenId !== voter.tokenId)
@@ -343,6 +347,8 @@ export interface AutoVoteBody {
   phase?: string;
   mode?: string;
   candidacies?: Candidacy[];
+  /** Optional incremental cohort (e.g. members registered after this session's first batch). */
+  onlyTokenIds?: number[];
 }
 
 export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<string, unknown>> {
@@ -417,6 +423,11 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
     .filter((r): r is PromiseFulfilledResult<NormiePersona> => r.status === "fulfilled")
     .map(r => r.value);
   if (personas.length === 0) throw new Error("No personas built");
+  const only = body.onlyTokenIds ? new Set(body.onlyTokenIds) : null;
+  const participatingPersonas = only ? personas.filter(p => only.has(p.tokenId)) : personas;
+  if (participatingPersonas.length === 0) {
+    return { phase, message: "No new eligible members to process", memberCount: personas.length, processedMemberCount: 0 };
+  }
 
   // ── Candidacy phase (or implicit candidacy for vote phase) ────────────────
   // Use candidacies passed in body (from a previous candidacy call) OR compute fresh ones
@@ -428,7 +439,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
     candidacies = body.candidacies;
     console.log(`[auto-vote] reusing ${candidacies.length} candidacies from body`);
   } else {
-    const candRes = await runInBatches(personas, computeBatchSize(personas.length), decideCandidacy);
+    const candRes = await runInBatches(participatingPersonas, computeBatchSize(participatingPersonas.length), decideCandidacy);
     candidacies   = candRes
       .filter((r): r is PromiseFulfilledResult<Candidacy> => r.status === "fulfilled")
       .map(r => r.value);
@@ -476,11 +487,11 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
   }
 
   if (isExplicitCandidacy) {
-    return { phase: "candidacy", memberCount: memberIds.length, candidacies, voteSalonId };
+    return { phase: "candidacy", memberCount: memberIds.length, processedMemberCount: participatingPersonas.length, candidacies, voteSalonId };
   }
 
   // ── Vote phase ────────────────────────────────────────────────────────────
-  const voteRes      = await runInBatches(personas, computeBatchSize(personas.length), p => decideAllVotes(p, candidacies, personas));
+  const voteRes      = await runInBatches(participatingPersonas, computeBatchSize(participatingPersonas.length), p => decideAllVotes(p, candidacies, personas));
   const allDecisions = voteRes
     .filter((r): r is PromiseFulfilledResult<VoteDecision[]> => r.status === "fulfilled")
     .flatMap(r => r.value);
@@ -490,7 +501,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
   const voteErrors = voteRes.filter((r): r is PromiseRejectedResult => r.status === "rejected");
 
   // Post one vote-summary message per voter to the dedicated salon
-  for (const voter of personas) {
+  for (const voter of participatingPersonas) {
     const myDecisions = allDecisions.filter(d => d.voterTokenId === voter.tokenId);
     if (myDecisions.length === 0) continue;
     const summary = myDecisions
@@ -513,6 +524,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
       candidacies, decisions: allDecisions,
       decisionCount: allDecisions.length,
       memberCount: personas.length,
+      processedMemberCount: participatingPersonas.length,
       roleCount: ORDERED_ROLE_ENTRIES.length,
       voteErrorCount: voteErrors.length,
       voteSalonId,
@@ -525,6 +537,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
     candidacies, decisions: allDecisions,
     submitted: result.ok, failed: result.failed,
     voteErrorCount: voteErrors.length,
+    processedMemberCount: participatingPersonas.length,
     voteSalonId,
   };
 }

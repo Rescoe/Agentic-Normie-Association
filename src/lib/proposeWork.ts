@@ -15,7 +15,7 @@
 import { createPublicClient } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROLES } from "@/lib/contracts";
-import { createWork, listWorks } from "@/lib/workStore";
+import { createWork, getActiveWorks, listWorks, maxConcurrentCreativeWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { baseRpcTransport } from "@/lib/baseRpc";
 import { extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
@@ -70,15 +70,20 @@ export async function runProposeWork(forcedProposerId: number | null): Promise<P
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) throw new Error("No member found on AssociationCore");
 
-  const [personaResults, allWorks] = await Promise.all([
+  const [personaResults, allWorks, activeWorks] = await Promise.all([
     Promise.allSettled(memberIds.map(id => buildPersona(id))),
     listWorks(),
+    getActiveWorks({ excludeMemorials: true }),
   ]);
   const personas: NormiePersona[] = personaResults
     .filter((r): r is PromiseFulfilledResult<NormiePersona> => r.status === "fulfilled")
     .map(r => r.value);
 
   if (personas.length === 0) throw new Error("Normies API unavailable");
+  const capacity = maxConcurrentCreativeWorks(personas.length);
+  if (activeWorks.length >= capacity) {
+    throw new Error(`Creative capacity reached (${activeWorks.length}/${capacity} active works for ${personas.length} members)`);
+  }
 
   // Prefer the elected Auteur; fall back to a random member
   const electedAuteurId = forcedProposerId ?? await getElectedAuteurId();

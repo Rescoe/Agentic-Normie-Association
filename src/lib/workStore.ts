@@ -40,6 +40,16 @@ export const ACTIVE_STATES: WorkState[] = [
   "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING", "NEEDS_RETHINK",
 ];
 
+/**
+ * Creative capacity grows with the association without allowing an unlimited
+ * backlog: roughly one concurrent work per three members, rounded up, with a
+ * hard ceiling of five. Four founding members can therefore sustain two works;
+ * thirteen or more members still cap at five.
+ */
+export function maxConcurrentCreativeWorks(memberCount: number): number {
+  return Math.max(1, Math.min(5, Math.ceil(Math.max(0, memberCount) / 3)));
+}
+
 export interface WorkVote {
   tokenId:      number;
   name:         string;

@@ -114,6 +114,13 @@ export default async function DocsGovernancePage() {
   const STEPS = getSteps(t);
   const ROLES = getRoles(t);
   const INVARIANTS = getInvariants(t);
+  const FAQ = [
+    { question: t("faq.provisional.question"), answer: t("faq.provisional.answer") },
+    { question: t("faq.newMember.question"), answer: t("faq.newMember.answer") },
+    { question: t("faq.nextSession.question"), answer: t("faq.nextSession.answer") },
+    { question: t("faq.changeTerm.question"), answer: t("faq.changeTerm.answer") },
+    { question: t("faq.parallelWorks.question"), answer: t("faq.parallelWorks.answer") },
+  ];
 
   return (
     <div className="space-y-16">
@@ -202,6 +209,21 @@ export default async function DocsGovernancePage() {
               {t("crossChain.mvpImplementation.resolution")}
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Election FAQ */}
+      <div className="space-y-4">
+        <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted] border-b border-[--border] pb-2">
+          {t("faqHeading")}
+        </p>
+        <div className="space-y-2">
+          {FAQ.map(item => (
+            <details key={item.question} className="border border-[--border] bg-[--bg-card] px-4 py-3">
+              <summary className="font-mono text-xs font-bold cursor-pointer">{item.question}</summary>
+              <p className="text-sm text-[--fg-muted] leading-relaxed mt-3">{item.answer}</p>
+            </details>
+          ))}
         </div>
       </div>
     </div>
