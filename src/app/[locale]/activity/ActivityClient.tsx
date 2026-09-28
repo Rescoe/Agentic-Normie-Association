@@ -44,6 +44,47 @@ const TYPE_CONFIG: Record<string, { labelKey: string; color: string; icon: strin
 
 const ALL_TYPES = Object.keys(TYPE_CONFIG);
 
+type ActivityDisplayItem =
+  | { kind: "event"; event: ActivityEvent }
+  | { kind: "voteGroup"; id: string; votes: ActivityEvent[] };
+
+/**
+ * A Normie casts one on-chain ballot per role. Those transactions are useful
+ * audit evidence, but presenting all six as top-level activity items makes one
+ * electoral action dominate the feed. Group them by voter + election session;
+ * the individual transactions remain available in the expanded row.
+ */
+function groupActivityEvents(events: ActivityEvent[]): ActivityDisplayItem[] {
+  const items: ActivityDisplayItem[] = [];
+  const groups = new Map<string, Extract<ActivityDisplayItem, { kind: "voteGroup" }>>();
+
+  for (const event of events) {
+    if (event.type !== "VOTE_CAST" || !event.tokenId || event.sessionId === undefined) {
+      items.push({ kind: "event", event });
+      continue;
+    }
+
+    const key = `${event.sessionId}:${event.tokenId}`;
+    const existing = groups.get(key);
+    if (existing) {
+      // Protect the public feed against duplicate indexed logs while retaining
+      // distinct role ballots, even when several land in the same block.
+      if (!existing.votes.some(v => v.id === event.id)) existing.votes.push(event);
+      continue;
+    }
+
+    const group: Extract<ActivityDisplayItem, { kind: "voteGroup" }> = {
+      kind: "voteGroup",
+      id: `vote-group:${key}`,
+      votes: [event],
+    };
+    groups.set(key, group);
+    items.push(group);
+  }
+
+  return items;
+}
+
 // ─── ActivityRow ─────────────────────────────────────────────────────────────
 
 function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number) => string }) {
@@ -147,13 +188,90 @@ function ActivityRow({ ev, getName }: { ev: ActivityEvent; getName: (id: number)
   );
 }
 
+function VoteGroupRow({ votes, getName }: { votes: ActivityEvent[]; getName: (id: number) => string }) {
+  const t = useTranslations("activity");
+  const ordered = [...votes].sort((a, b) => {
+    const roleA = a.roleLabel ?? String(a.extra?.name ?? "");
+    const roleB = b.roleLabel ?? String(b.extra?.name ?? "");
+    return roleA.localeCompare(roleB);
+  });
+  const first = votes[0];
+  const voterId = first.tokenId ?? 0;
+  const voter = voterId > 0 ? getName(voterId) : t("descVoteCastFallbackVoter");
+  const session = first.sessionId ?? 0;
+  const blocks = votes.map(v => Number(v.blockNumber)).filter(Number.isFinite);
+  const minBlock = blocks.length ? Math.min(...blocks) : Number(first.blockNumber);
+  const maxBlock = blocks.length ? Math.max(...blocks) : Number(first.blockNumber);
+  const blockLabel = minBlock === maxBlock
+    ? t("block", { n: first.blockNumber })
+    : t("blocksRange", { from: String(minBlock), to: String(maxBlock) });
+
+  // Do not wrap a lone ballot in a disclosure widget: partial elections and
+  // older contracts remain readable exactly like any other atomic event.
+  if (votes.length === 1) return <ActivityRow ev={first} getName={getName} />;
+
+  return (
+    <details className="group border-b border-[--border] last:border-none">
+      <summary className="grid grid-cols-[auto_1fr_auto] gap-4 py-3 items-center cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="font-mono text-[10px] border px-1.5 py-0.5 shrink-0 text-yellow-700 border-yellow-200 bg-yellow-50/50">
+            ✓ {t("typeVoteCast")}
+          </span>
+          {voterId > 0 && (
+            <div className="relative w-6 h-6 shrink-0 overflow-hidden">
+              <Image src={getNormieImageUrl(voterId)} alt={voter} fill
+                className="object-contain" style={{ imageRendering: "pixelated" }} unoptimized />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium truncate">
+            {t("voteGroupSummary", { voter, count: votes.length, session })}
+          </p>
+          <p className="font-mono text-[10px] text-[--fg-muted] truncate">
+            {blockLabel} · {t("voteGroupTransactions", { count: votes.length })} · <span className="group-open:hidden">{t("voteGroupExpand")}</span><span className="hidden group-open:inline">{t("voteGroupCollapse")}</span>
+          </p>
+        </div>
+        {first.timestamp ? (
+          <p className="font-mono text-[10px] text-[--fg-muted] shrink-0 text-right whitespace-nowrap">
+            {new Date(first.timestamp * 1000).toLocaleDateString("en-US", { day: "numeric", month: "short" })}
+          </p>
+        ) : <span className="font-mono text-[10px] text-[--fg-muted]">—</span>}
+      </summary>
+      <div className="ml-0 sm:ml-28 mb-3 border-l border-[--border] pl-4 space-y-2">
+        {ordered.map(vote => {
+          const role = vote.roleLabel ?? String(vote.extra?.name ?? t("descRoleGrantedFallbackRole"));
+          const candidate = vote.candidateId && vote.candidateId > 0 ? getName(vote.candidateId) : "?";
+          return (
+            <div key={vote.id} className="flex items-center justify-between gap-3 text-xs">
+              <span className="min-w-0 truncate">{t("voteGroupDetail", { role, candidate })}</span>
+              <a href={`https://basescan.org/tx/${vote.txHash}`} target="_blank" rel="noopener noreferrer"
+                className="font-mono text-[10px] text-[--fg-muted] hover:underline shrink-0"
+                title={vote.txHash}>
+                {vote.txHash.slice(0, 10)}… ↗
+              </a>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 // ─── NormieSummary ────────────────────────────────────────────────────────────
 
 function NormieSummary({ events, getName }: { events: ActivityEvent[]; getName: (id: number) => string }) {
   const t = useTranslations("activity");
   const byNormie: Record<number, number> = {};
+  const countedVoteGroups = new Set<string>();
   for (const ev of events) {
-    if (ev.tokenId && ev.tokenId > 0) byNormie[ev.tokenId] = (byNormie[ev.tokenId] ?? 0) + 1;
+    if (!ev.tokenId || ev.tokenId <= 0) continue;
+    if (ev.type === "VOTE_CAST" && ev.sessionId !== undefined) {
+      const groupKey = `${ev.sessionId}:${ev.tokenId}`;
+      if (countedVoteGroups.has(groupKey)) continue;
+      countedVoteGroups.add(groupKey);
+    }
+    byNormie[ev.tokenId] = (byNormie[ev.tokenId] ?? 0) + 1;
   }
   const sorted = Object.entries(byNormie)
     .sort((a, b) => b[1] - a[1])
@@ -358,6 +476,7 @@ export function ActivityClient({ initialEvents = [], initialMeta = null }: Activ
   }, [events]);
 
   const filtered = filter === "ALL" ? events : events.filter(e => e.type === filter);
+  const displayed = groupActivityEvents(filtered);
 
   return (
     // translate="no" — this subtree re-renders on every poll/filter change. Google
@@ -458,7 +577,10 @@ export function ActivityClient({ initialEvents = [], initialMeta = null }: Activ
             )}
           </div>
           <div className="px-5">
-            {filtered.map(ev => <ActivityRow key={ev.id} ev={ev} getName={getName} />)}
+            {displayed.map(item => item.kind === "event"
+              ? <ActivityRow key={item.event.id} ev={item.event} getName={getName} />
+              : <VoteGroupRow key={item.id} votes={item.votes} getName={getName} />
+            )}
           </div>
         </div>
       )}
