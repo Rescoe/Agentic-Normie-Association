@@ -56,10 +56,10 @@ const MAX_PIPELINE_FAILS = 4;
 // relayer from malformed/scientific notation and obvious accidental extremes.
 // The 100 ETH ceiling is a technical safety rail, not a menu of allowed prices.
 const MAX_EDITION_PRICE_ETH = 100;
-function clampEditionParams(price: string | undefined, supply: number | undefined): {
+function clampEditionParams(price: string | number | undefined, supply: number | undefined): {
   editionPrice?: string; editionSupply?: number;
 } {
-  const normalizedPrice = price?.trim();
+  const normalizedPrice = price != null ? String(price).trim() : undefined;
   const parsedPrice = normalizedPrice && /^\d+(?:\.\d{1,18})?$/.test(normalizedPrice)
     ? Number(normalizedPrice)
     : Number.NaN;
@@ -718,7 +718,11 @@ on-chain fact; include one only when it appears in the proposal or trusted conte
     ],
     work.isFoundingWork
       ? { maxTokens: 350, temp: 0.8, task: "brief" } // plain text, used verbatim as brief -- no JSON, no reasoning fallback
-      : { maxTokens: 600, temp: 0.8, expectJson: true, task: "brief" }
+      // 600 tokens was too short for Groq's reasoning model: it could spend
+      // the entire allowance deliberating and be cut off before emitting the
+      // JSON. The strict parser below prevents reasoning leakage; this larger
+      // ceiling gives it enough room to actually reach the structured answer.
+      : { maxTokens: 1400, temp: 0.8, expectJson: true, task: "brief" }
   );
 
   if (!rawBrief) return false;
@@ -732,7 +736,7 @@ on-chain fact; include one only when it appears in the proposal or trusted conte
   if (!work.isFoundingWork) {
     try {
       const parsed = extractJsonObject(rawBrief) as {
-        artForm?: string; ambitionLevel?: string; editionPrice?: string; editionSupply?: number;
+        artForm?: string; ambitionLevel?: string; editionPrice?: string | number; editionSupply?: number;
         priceReasoning?: string; brief?: string;
       };
       const candidateBrief = typeof parsed.brief === "string" ? parsed.brief.trim() : "";
