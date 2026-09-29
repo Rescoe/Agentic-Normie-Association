@@ -1,9 +1,10 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useReadContract, useWriteContract, useWaitForTransactionReceipt, useAccount } from "wagmi";
-import { createPublicClient, http, parseAbiItem } from "viem";
+import { createPublicClient, http, parseAbiItem, formatEther } from "viem";
+import { deriveMintUiState, unclaimedFreeTokenIds, shouldRefetchAfterSettle, type MintUiState, type FreeClaimCandidate, type TriBool } from "@/lib/mintState";
 import { base as baseChain } from "viem/chains";
 import Image from "next/image";
 import Link from "next/link";
@@ -23,9 +24,14 @@ const viemClient = createPublicClient({
 const WR_ADDR  = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
 const deployed = !!CONTRACT_ADDRESSES.WorkRegistry;
 
+// A paused work (NEEDS_RETHINK/BLOCKED_TECHNICAL) is neither published nor
+// rejected — it stays in the in-progress list rather than vanishing (the
+// 29/09/2026 incident: a technically-paused work disappeared from every
+// public view). See workStore.ts's WorkState doc comment.
 const ACTIVE_STATES: WorkState[] = [
   "PROPOSED", "VOTE_OPEN", "VOTE_TALLIED",
   "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING",
+  "NEEDS_RETHINK", "BLOCKED_TECHNICAL",
 ];
 
 // STATE_LABEL keys map to messages under works.stateLabels.* (see getStateLabel below).
@@ -37,6 +43,8 @@ const STATE_LABEL_KEYS: Record<string, string> = {
   CREATING:     "stateLabels.creating",
   VALIDATING:   "stateLabels.validating",
   PUBLISHING:   "stateLabels.publishing",
+  NEEDS_RETHINK:     "stateLabels.needsRethink",
+  BLOCKED_TECHNICAL: "stateLabels.blockedTechnical",
 };
 
 const STATE_COLOR: Record<string, string> = {
@@ -47,6 +55,8 @@ const STATE_COLOR: Record<string, string> = {
   CREATING:     "text-indigo-500 border-indigo-500/30",
   VALIDATING:   "text-cyan-500 border-cyan-500/30",
   PUBLISHING:   "text-teal-500 border-teal-500/30",
+  NEEDS_RETHINK:     "text-amber-500 border-amber-500/30",
+  BLOCKED_TECHNICAL: "text-orange-600 border-orange-600/30",
 };
 
 // ─── InProgressWorkCard ───────────────────────────────────────────────────────
@@ -72,8 +82,13 @@ function InProgressWorkCard({ work, getName }: { work: ANAWork; getName: GetName
     { state: "VALIDATING",   short: t("steps.validation")},
     { state: "PUBLISHING",   short: t("steps.publication")},
   ];
-  // VOTE_TALLIED = still in vote phase for progress display
-  const progressState = work.state === "VOTE_TALLIED" ? "VOTE_OPEN" : work.state as WorkState;
+  // VOTE_TALLIED = still in vote phase for progress display. A paused work
+  // (NEEDS_RETHINK/BLOCKED_TECHNICAL) freezes at whatever step it stalled at
+  // (pausedFromState) instead of showing no progress at all.
+  const isPaused = work.state === "NEEDS_RETHINK" || work.state === "BLOCKED_TECHNICAL";
+  const progressState = work.state === "VOTE_TALLIED" ? "VOTE_OPEN"
+    : isPaused ? (work.pausedFromState ?? "PROPOSED")
+    : work.state as WorkState;
   const currentStep   = STEPS.findIndex(s => s.state === progressState);
 
   return (
@@ -90,6 +105,14 @@ function InProgressWorkCard({ work, getName }: { work: ANAWork; getName: GetName
           {label}
         </span>
       </div>
+
+      {isPaused && (
+        <p className="text-xs text-orange-600 leading-relaxed">
+          {work.state === "NEEDS_RETHINK" && work.needsRethinkReason !== "technical"
+            ? t("pausedCreative")
+            : t("pausedTechnical")}
+        </p>
+      )}
 
       {/* Progress steps — named labels */}
       <div className="flex gap-0.5 items-end">
@@ -477,48 +500,50 @@ function ArtworkModal({
   );
 }
 
-// ─── ClaimFreeEditionButton — free mint for ANA members (Normie holders) ────────
+// ─── EditionMintPanel — single fail-closed controller for free claim + paid mint ──
+//
+// Replaces two independent components (ClaimFreeEditionButton, BuyEditionButton)
+// that used to derive their own, inconsistent notion of "is this safe to show"
+// (see mintState.ts's doc comment for the exact incident this fixes). Every
+// on-chain read funnels through deriveMintUiState() — an unknown/failed read
+// NEVER renders as "eligible" or "available", and a submitted transaction is
+// only ever reported as a success once useWaitForTransactionReceipt confirms
+// status "success".
 
-type ClaimCheckStatus = "idle" | "checking" | "unsupported" | "not-member" | "ready" | "all-claimed";
-
-function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x${string}` }) {
+function EditionMintPanel({
+  collectionAddress,
+  editionPriceEthFallback,
+  totalEditions,
+}: {
+  collectionAddress:        `0x${string}`;
+  editionPriceEthFallback?: string | null; // off-chain display fallback only — priceWei() on-chain is the source of truth once it loads
+  totalEditions:            number;
+}) {
+  const t = useTranslations("works");
   const { address: connectedAddr } = useAccount();
-  const [status,       setStatus]       = useState<ClaimCheckStatus>("idle");
-  const [unclaimedIds, setUnclaimedIds] = useState<number[]>([]);
-  const [claiming,     setClaiming]     = useState<number | null>(null);
-  const [txError,      setTxError]      = useState<string | null>(null);
-
   const CORE_ADDR = CONTRACT_ADDRESSES.AssociationCore as `0x${string}`;
 
+  // ── Does this collection even support free claims? (legacy collections
+  // deployed before claimFree()/core() existed do not.) ──
+  const [supportsFree, setSupportsFree] = useState<TriBool>("unknown");
   useEffect(() => {
-    if (!connectedAddr || !CORE_ADDR) return;
-    setStatus("checking");
-    setUnclaimedIds([]);
+    let cancelled = false;
+    viemClient.readContract({ address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "core" })
+      .then(core => { if (!cancelled) setSupportsFree(!!core && core !== "0x0000000000000000000000000000000000000000"); })
+      .catch(() => { if (!cancelled) setSupportsFree(false); });
+    return () => { cancelled = true; };
+  }, [collectionAddress]);
 
+  // ── Member Normie tokenIds owned by the connected wallet ──
+  const [ownedMemberIds, setOwnedMemberIds] = useState<number[] | "unknown">("unknown");
+  useEffect(() => {
+    if (!connectedAddr || !CORE_ADDR || supportsFree !== true) { setOwnedMemberIds([]); return; }
+    let cancelled = false;
     (async () => {
       try {
-        // Step 1: verify collection supports claimFree (new factory only — has core())
-        try {
-          const coreOnCollection = await viemClient.readContract({
-            address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "core",
-          }) as string;
-          if (!coreOnCollection || coreOnCollection === "0x0000000000000000000000000000000000000000") {
-            setStatus("unsupported");
-            return;
-          }
-        } catch {
-          // Old collection deployed before the rewrite — no core() function
-          setStatus("unsupported");
-          return;
-        }
-
-        // Step 2: find which ANA Normie IDs belong to connected wallet
         const allIds = await viemClient.readContract({
           address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberTokenIds",
         }) as bigint[];
-
-        if (!allIds.length) { setStatus("not-member"); return; }
-
         const owners = await Promise.allSettled(
           allIds.map(id => viemClient.readContract({
             address: CORE_ADDR, abi: ASSOCIATION_CORE_ABI, functionName: "getMemberOwner", args: [id],
@@ -528,181 +553,238 @@ function ClaimFreeEditionButton({ collectionAddress }: { collectionAddress: `0x$
           .filter((_, i) => owners[i].status === "fulfilled" &&
             (owners[i] as PromiseFulfilledResult<unknown>).value?.toString().toLowerCase() === connectedAddr.toLowerCase())
           .map(Number);
-
-        if (!mine.length) { setStatus("not-member"); return; }
-
-        // Step 3: check which tokens haven't claimed yet
-        const claimed = await Promise.allSettled(
-          mine.map(id => viemClient.readContract({
-            address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "freeClaimed", args: [BigInt(id)],
-          }))
-        );
-        const unclaimed = mine.filter((_, i) =>
-          !(claimed[i].status === "fulfilled" && claimed[i].value)
-        );
-
-        setUnclaimedIds(unclaimed);
-        setStatus(unclaimed.length === 0 ? "all-claimed" : "ready");
-      } catch (e) {
-        console.error("[ClaimFreeEditionButton] check failed:", e);
-        // Don't show an error UI — fall back silently so buy button still works
-        setStatus("unsupported");
+        if (!cancelled) setOwnedMemberIds(mine);
+      } catch {
+        if (!cancelled) setOwnedMemberIds([]);
       }
     })();
-  }, [connectedAddr, collectionAddress, CORE_ADDR]);
+    return () => { cancelled = true; };
+  }, [connectedAddr, CORE_ADDR, supportsFree]);
 
+  // ── initialized() / priceWei() / getAvailableEditions() — kept live via wagmi ──
+  const { data: initializedData, isLoading: initLoading, isError: initErrored, refetch: refetchInitialized } = useReadContract({
+    address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "initialized", query: { refetchInterval: 60_000 },
+  });
+  const initialized: TriBool = (initLoading || initErrored) ? "unknown" : Boolean(initializedData);
+
+  const { data: priceWeiData, refetch: refetchPrice } = useReadContract({
+    address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "priceWei", query: { refetchInterval: 60_000 },
+  });
+  // priceWei() on-chain is authoritative once it loads — never trust the
+  // off-chain editionPrice field alone (26/09/2026 external audit finding).
+  const priceEth = priceWeiData != null ? formatEther(priceWeiData as bigint) : (editionPriceEthFallback ?? undefined);
+
+  const { data: availableData, isLoading: availLoading, isError: availErrored, refetch: refetchAvailable } = useReadContract({
+    address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "getAvailableEditions", query: { refetchInterval: 30_000 },
+  });
+  const availableEditions: number | "unknown" = (availLoading || availErrored) ? "unknown" : Number(availableData as bigint);
+
+  // ── freeClaimed() per owned candidate — a REJECTED read stays "unknown", never "false" ──
+  const [freeCandidates, setFreeCandidates] = useState<FreeClaimCandidate[]>([]);
+  const [claimReadNonce, setClaimReadNonce] = useState(0);
+  useEffect(() => {
+    if (ownedMemberIds === "unknown" || ownedMemberIds.length === 0) { setFreeCandidates([]); return; }
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.allSettled(
+        ownedMemberIds.map(id => viemClient.readContract({
+          address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "freeClaimed", args: [BigInt(id)],
+        }))
+      );
+      if (cancelled) return;
+      setFreeCandidates(ownedMemberIds.map((tokenId, i) => ({
+        tokenId,
+        claimed: results[i].status === "fulfilled" ? Boolean((results[i] as PromiseFulfilledResult<unknown>).value) : "unknown" as const,
+      })));
+    })();
+    return () => { cancelled = true; };
+  }, [ownedMemberIds, collectionAddress, claimReadNonce]);
+
+  const stillResolvingFreeEligibility = !!connectedAddr
+    && (supportsFree === "unknown" || (supportsFree === true && ownedMemberIds === "unknown"));
+
+  // ── Write + receipt (shared by both claim and buy — only one can be in flight) ──
   const { writeContractAsync } = useWriteContract();
+  const [pendingTokenId, setPendingTokenId] = useState<number | null>(null); // which free tokenId, if a claim
+  const [pendingKind,    setPendingKind]    = useState<"claim" | "buy" | null>(null);
+  const [txHash,         setTxHash]         = useState<`0x${string}` | undefined>(undefined);
+  const [localError,     setLocalError]     = useState<string | null>(null);
+
+  const { data: receipt, isLoading: receiptPending } = useWaitForTransactionReceipt({ hash: txHash });
+
+  const txPhase: "idle" | "pending" | "confirmed" | "reverted" =
+    !txHash ? "idle"
+      : receiptPending ? "pending"
+      : receipt?.status === "success" ? "confirmed"
+      : "reverted";
+
+  const refetchAll = useCallback(() => {
+    refetchInitialized();
+    refetchPrice();
+    refetchAvailable();
+    setClaimReadNonce(n => n + 1);
+  }, [refetchInitialized, refetchPrice, refetchAvailable]);
+
+  // Refetch on-chain state exactly once per confirmed/reverted transaction —
+  // shouldRefetchAfterSettle() (mintState.ts) is the tested guard.
+  const settledHashRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!shouldRefetchAfterSettle(txPhase, txHash, settledHashRef.current)) return;
+    settledHashRef.current = txHash ?? null;
+    refetchAll();
+  }, [txPhase, txHash, refetchAll]);
+
+  const derived: MintUiState = stillResolvingFreeEligibility ? "loading"
+    : deriveMintUiState({ initialized, freeCandidates, availableEditions, txPhase });
+
+  // Nothing sellable AND nothing claimable — no price ever configured and the
+  // connected wallet (or nobody, if disconnected) has nothing to claim.
+  if (!editionPriceEthFallback && priceWeiData == null && (derived === "paid-available" || derived === "sold-out")) {
+    return null;
+  }
 
   async function handleClaim(tokenId: number) {
-    setClaiming(tokenId);
-    setTxError(null);
+    setLocalError(null);
     try {
-      await writeContractAsync({
+      // Simulate first — surfaces a revert reason (e.g. already claimed by a
+      // race, not the expected owner) before spending a wallet round-trip.
+      await viemClient.simulateContract({
+        address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "claimFree",
+        args: [BigInt(tokenId)], account: connectedAddr,
+      });
+    } catch (e) {
+      setLocalError(e instanceof Error && e.message.includes("User rejected") ? t("claim.cancelled") : t("claim.failed"));
+      return;
+    }
+    setPendingKind("claim");
+    setPendingTokenId(tokenId);
+    try {
+      const hash = await writeContractAsync({
         address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "claimFree", args: [BigInt(tokenId)],
       });
-      setUnclaimedIds(prev => {
-        const next = prev.filter(id => id !== tokenId);
-        if (next.length === 0) setStatus("all-claimed");
-        return next;
-      });
+      setTxHash(hash);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setTxError(msg.includes("User rejected") ? "Cancelled" : "Claim failed — check you own this Normie in ANA");
-    } finally {
-      setClaiming(null);
+      setLocalError(msg.includes("User rejected") ? t("claim.cancelled") : t("claim.failed"));
+      setPendingKind(null);
+      setPendingTokenId(null);
     }
   }
-
-  if (status === "idle" || status === "checking" || status === "unsupported" || status === "not-member") return null;
-
-  if (status === "all-claimed") {
-    return (
-      <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
-        ✓ Free edition claimed for all your Normies
-      </p>
-    );
-  }
-
-  return (
-    <div className="space-y-1">
-      {unclaimedIds.map(tokenId => (
-        <div key={tokenId} className="flex items-center justify-between gap-2">
-          <p className="font-mono text-[10px] text-[--fg-muted]">◎ Free edition · Normie #{tokenId}</p>
-          <button
-            onClick={() => handleClaim(tokenId)}
-            disabled={claiming === tokenId}
-            className="font-mono text-[10px] border border-green-600 text-green-500 px-2 py-1 hover:bg-green-600 hover:text-black transition-colors disabled:opacity-50 disabled:cursor-wait"
-          >
-            {claiming === tokenId ? "Confirming…" : "Claim free"}
-          </button>
-        </div>
-      ))}
-      {txError && <p className="font-mono text-[10px] text-red-400">{txError}</p>}
-    </div>
-  );
-}
-
-// ─── BuyEditionButton — wagmi write, reads available token IDs on-chain ─────────
-
-function BuyEditionButton({
-  collectionAddress,
-  editionPriceEth,
-  totalEditions,
-}: {
-  collectionAddress: `0x${string}`;
-  editionPriceEth:   string;
-  totalEditions:     number;
-}) {
-  const t = useTranslations("works");
-  const { address: connectedAddr } = useAccount();
-  const [buying, setBuying] = useState(false);
-  const [error,  setError]  = useState<string | null>(null);
-  const [done,   setDone]   = useState(false);
-
-  // Read available supply directly from the contract
-  const { data: availableData, refetch } = useReadContract({
-    address:      collectionAddress,
-    abi:          ANA_EDITIONS_ABI,
-    functionName: "getAvailableEditions",
-    query: { refetchInterval: 30_000 },
-  });
-
-  // Also check if collection is initialized (artwork linked)
-  const { data: isInitialized } = useReadContract({
-    address:      collectionAddress,
-    abi:          ANA_EDITIONS_ABI,
-    functionName: "initialized",
-    query: { refetchInterval: 60_000 },
-  });
-
-  const { writeContractAsync } = useWriteContract();
-
-  const priceWei   = BigInt(Math.round(parseFloat(editionPriceEth) * 1e18));
-  const available  = availableData != null ? Number(availableData as bigint) : null;
 
   async function handleBuy() {
-    if (!connectedAddr) return;
-    setBuying(true);
-    setError(null);
+    if (!connectedAddr || priceEth == null) return;
+    setLocalError(null);
+    const priceWeiValue = priceWeiData != null ? (priceWeiData as bigint) : BigInt(Math.round(parseFloat(priceEth) * 1e18));
     try {
-      // buyAndMint() — no tokenId needed, mints directly to buyer
-      await writeContractAsync({
-        address:      collectionAddress,
-        abi:          ANA_EDITIONS_ABI,
-        functionName: "buyAndMint",
-        args:         [],
-        value:        priceWei,
+      await viemClient.simulateContract({
+        address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "buyAndMint",
+        args: [], value: priceWeiValue, account: connectedAddr,
       });
-      setDone(true);
-      refetch();
+    } catch (e) {
+      setLocalError(e instanceof Error && e.message.includes("User rejected") ? t("buy.cancelled") : t("buy.failed"));
+      return;
+    }
+    setPendingKind("buy");
+    try {
+      const hash = await writeContractAsync({
+        address: collectionAddress, abi: ANA_EDITIONS_ABI, functionName: "buyAndMint", args: [], value: priceWeiValue,
+      });
+      setTxHash(hash);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg.includes("User rejected") ? t("buy.cancelled") : t("buy.failed"));
-    } finally {
-      setBuying(false);
+      setLocalError(msg.includes("User rejected") ? t("buy.cancelled") : t("buy.failed"));
+      setPendingKind(null);
     }
   }
 
-  if (done) {
-    return (
-      <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
-        ✓ {t("buy.acquired")}
-      </p>
-    );
-  }
-
-  // Collection deployed but not yet initialized (artwork not linked)
-  if (isInitialized === false) {
+  // ── In-flight / just-settled transaction — takes over the whole panel ──
+  if (derived === "tx-pending") {
     return (
       <p className="font-mono text-[10px] text-[--fg-muted] border border-[--border] px-2 py-1">
-        ◎ {t("buy.activating", { totalEditions, price: editionPriceEth })}
+        ◎ {pendingKind === "claim" ? t("claim.confirming") : t("buy.confirming")}
+      </p>
+    );
+  }
+  if (derived === "tx-confirmed") {
+    return (
+      <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
+        ✓ {pendingKind === "claim" ? t("claim.claimed") : t("buy.acquired")}
+      </p>
+    );
+  }
+  if (derived === "tx-reverted") {
+    return (
+      <p className="font-mono text-[10px] text-red-400 border border-red-400/30 px-2 py-1">
+        ✗ {pendingKind === "claim" ? t("claim.reverted") : t("buy.reverted")}
       </p>
     );
   }
 
+  if (derived === "loading") {
+    return <p className="font-mono text-[10px] text-[--fg-muted]">◎ {t("claim.loading")}</p>;
+  }
+  if (derived === "read-error") {
+    return <p className="font-mono text-[10px] text-red-400">{t("claim.readError")}</p>;
+  }
+  if (derived === "not-initialized") {
+    return (
+      <p className="font-mono text-[10px] text-[--fg-muted] border border-[--border] px-2 py-1">
+        ◎ {priceEth ? t("buy.activating", { totalEditions, price: priceEth }) : t("claim.notInitialized")}
+      </p>
+    );
+  }
+
+  if (derived === "free-claimed") {
+    return (
+      <p className="font-mono text-[10px] text-green-400 border border-green-400/30 px-2 py-1">
+        ✓ {t("claim.allClaimed")}
+      </p>
+    );
+  }
+
+  if (derived === "free-eligible") {
+    const ids = unclaimedFreeTokenIds({ initialized, freeCandidates, availableEditions, txPhase });
+    return (
+      <div className="space-y-1">
+        {ids.map(tokenId => (
+          <div key={tokenId} className="flex items-center justify-between gap-2">
+            <p className="font-mono text-[10px] text-[--fg-muted]">◎ {t("claim.eligible", { tokenId })}</p>
+            <button
+              onClick={() => void handleClaim(tokenId)}
+              className="font-mono text-[10px] border border-green-600 text-green-500 px-2 py-1 hover:bg-green-600 hover:text-black transition-colors"
+            >
+              {t("claim.cta")}
+            </button>
+          </div>
+        ))}
+        {localError && <p className="font-mono text-[10px] text-red-400">{localError}</p>}
+      </div>
+    );
+  }
+
+  // derived is "paid-available" or "sold-out" here.
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
         <p className="font-mono text-[10px] text-[--fg-muted]">
-          {available === null
-            ? `${totalEditions} editions · ${editionPriceEth} ETH`
-            : available === 0
-              ? t("buy.soldOut")
-              : t("buy.available", { available, totalEditions, price: editionPriceEth })}
+          {derived === "sold-out"
+            ? t("buy.soldOut")
+            : availableEditions === "unknown" || priceEth == null
+              ? `${totalEditions} editions${priceEth ? ` · ${priceEth} ETH` : ""}`
+              : t("buy.available", { available: availableEditions, totalEditions, price: priceEth })}
         </p>
         {!connectedAddr ? (
           <p className="font-mono text-[10px] text-[--fg-muted]">{t("buy.connectWallet")}</p>
-        ) : available !== null && available > 0 ? (
+        ) : derived === "paid-available" && priceEth != null ? (
           <button
-            onClick={handleBuy}
-            disabled={buying}
-            className="font-mono text-[10px] border border-[--fg] px-2 py-1 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors disabled:opacity-50 disabled:cursor-wait"
+            onClick={() => void handleBuy()}
+            className="font-mono text-[10px] border border-[--fg] px-2 py-1 text-[--fg] hover:bg-[--fg] hover:text-[--bg] transition-colors"
           >
-            {buying ? t("buy.confirming") : t("buy.mintCta", { price: editionPriceEth })}
+            {t("buy.mintCta", { price: priceEth })}
           </button>
         ) : null}
       </div>
-      {error && <p className="font-mono text-[10px] text-red-400">{error}</p>}
+      {localError && <p className="font-mono text-[10px] text-red-400">{localError}</p>}
     </div>
   );
 }
@@ -836,14 +918,11 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
                 OpenSea ↗
               </a>
             </div>
-            <ClaimFreeEditionButton collectionAddress={work.collectionAddress as `0x${string}`} />
-            {work.editionPrice && (
-              <BuyEditionButton
-                collectionAddress={work.collectionAddress as `0x${string}`}
-                editionPriceEth={work.editionPrice}
-                totalEditions={work.editionSupply ?? 1}
-              />
-            )}
+            <EditionMintPanel
+              collectionAddress={work.collectionAddress as `0x${string}`}
+              editionPriceEthFallback={work.editionPrice}
+              totalEditions={work.editionSupply ?? 1}
+            />
           </div>
         )}
 
@@ -1145,14 +1224,11 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                   OpenSea ↗
                 </a>
               </div>
-              <ClaimFreeEditionButton collectionAddress={cert.collectionAddress as `0x${string}`} />
-              {cert.editionPrice && (
-                <BuyEditionButton
-                  collectionAddress={cert.collectionAddress as `0x${string}`}
-                  editionPriceEth={cert.editionPrice}
-                  totalEditions={cert.editionSupply ?? 1}
-                />
-              )}
+              <EditionMintPanel
+                collectionAddress={cert.collectionAddress as `0x${string}`}
+                editionPriceEthFallback={cert.editionPrice}
+                totalEditions={cert.editionSupply ?? 1}
+              />
             </div>
           )}
 
@@ -1255,14 +1331,11 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                 OpenSea ↗
               </a>
             </div>
-            <ClaimFreeEditionButton collectionAddress={cert.collectionAddress as `0x${string}`} />
-            {cert.editionPrice && (
-              <BuyEditionButton
-                collectionAddress={cert.collectionAddress as `0x${string}`}
-                editionPriceEth={cert.editionPrice}
-                totalEditions={cert.editionSupply ?? 1}
-              />
-            )}
+            <EditionMintPanel
+              collectionAddress={cert.collectionAddress as `0x${string}`}
+              editionPriceEthFallback={cert.editionPrice}
+              totalEditions={cert.editionSupply ?? 1}
+            />
           </div>
         )}
 

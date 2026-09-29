@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
-import { listWorks } from "@/lib/workStore";
+import { listWorks, toPublicWork } from "@/lib/workStore";
 
 // s-maxage: Vercel's Edge Network serves this straight from cache for the
 // window below regardless of visitor count -- 10 or 10,000 concurrent
@@ -15,6 +15,10 @@ import { listWorks } from "@/lib/workStore";
 const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" };
 
 export async function GET() {
+  // Public, unauthenticated, edge-cached — never return raw ANAWork objects
+  // here (see toPublicWork's doc comment: a 29/09/2026 incident leaked an
+  // RPC provider key that had ended up in validationNote). Detailed,
+  // cleaned-but-admin-only diagnostics live at GET /api/admin/works instead.
   const works = await listWorks();
-  return NextResponse.json(works, { headers: CACHE_HEADERS });
+  return NextResponse.json(works.map(toPublicWork), { headers: CACHE_HEADERS });
 }

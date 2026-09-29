@@ -12,6 +12,7 @@
     "test:contracts:coverage": "hardhat coverage",
     "typechain": "hardhat typechain",
     "db:migrate": "ts-node --transpile-only scripts/db-migrate.ts",
+    "redact:secrets": "ts-node --transpile-only scripts/redact-persisted-secrets.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",

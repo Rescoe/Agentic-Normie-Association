@@ -18,16 +18,63 @@ jobs:
     timeout-minutes: 8
 
     steps:
-      - name: POST /api/keeper/orchestrator
+      # Retry/success decision here mirrors src/lib/orchestratorAttempt.ts's
+      # classifyOrchestratorAttempt() (documented + unit-tested there — bash
+      # itself isn't unit-testable) — keep the two in sync by hand if this changes.
+      - name: POST /api/keeper/orchestrator (with bounded retries on transient failure)
         run: |
-          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
-            -X POST "${{ vars.ANA_APP_URL }}/api/keeper/orchestrator" \
-            -H "Content-Type: application/json" \
-            -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
-            -d '{}')
-          echo "HTTP $STATUS"
-          cat /tmp/response.json | python3 -m json.tool 2>/dev/null || cat /tmp/response.json
-          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
-            echo "Orchestrator reported at least one failed task (HTTP $STATUS) — see task results above"
-            exit 1
-          fi
+          set -u
+          MAX_ATTEMPTS=3
+          RETRY_DELAY_SECONDS=15
+          attempt=1
+
+          while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+            echo "Attempt $attempt/$MAX_ATTEMPTS"
+
+            # --connect-timeout: cap the TCP/TLS handshake itself.
+            # --max-time: cap the whole request — must exceed the orchestrator's
+            #   own per-task timeout (45s) plus Vercel's ~60s function cap, since
+            #   even a killed-mid-flight invocation can take close to 60s to give
+            #   up; 75s leaves margin without letting a truly hung request stall
+            #   the job for its full 8-minute ceiling.
+            # curl's own --retry only retries TRANSPORT-level failures (timeouts,
+            # connection resets, a handful of 5xx codes) — never a 2xx/207 HTTP
+            # response whose JSON body says ok:false, which is why the real
+            # retry loop is this bash while-loop, not curl's flag.
+            STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+              --connect-timeout 10 \
+              --max-time 75 \
+              -X POST "${{ vars.ANA_APP_URL }}/api/keeper/orchestrator" \
+              -H "Content-Type: application/json" \
+              -H "x-cron-secret: ${{ secrets.ANA_CRON_SECRET }}" \
+              -d '{}') || STATUS=000
+
+            echo "HTTP $STATUS"
+            cat /tmp/response.json 2>/dev/null | python3 -m json.tool 2>/dev/null || cat /tmp/response.json 2>/dev/null
+
+            # A hard transport/HTTP failure (no body, or a status outside the
+            # 2xx/207 range the orchestrator itself ever returns) is always
+            # transient-worth-retrying. A well-formed response is only "done"
+            # once its own `ok` field says so — 207 (partial failure) is a
+            # deliberate non-2xx-but-not-transport-error signal from the
+            # orchestrator and must not be treated as success just because
+            # curl completed.
+            OK=$(python3 -c "import json,sys; d=json.load(open('/tmp/response.json')); print('true' if d.get('ok') else 'false')" 2>/dev/null) || OK="false"
+
+            if [ "$STATUS" -eq 200 ] && [ "$OK" = "true" ]; then
+              echo "Orchestrator tick succeeded (all due tasks ok)"
+              exit 0
+            fi
+
+            if [ "$STATUS" -eq 207 ]; then
+              echo "Orchestrator reported a partial failure (HTTP 207, ok=$OK) — see task results above; not retried (this is a real per-task failure, not a transient transport issue)"
+              exit 1
+            fi
+
+            echo "Transient-looking failure (HTTP $STATUS) — will retry" >&2
+            attempt=$((attempt + 1))
+            [ "$attempt" -le "$MAX_ATTEMPTS" ] && sleep "$RETRY_DELAY_SECONDS"
+          done
+
+          echo "Orchestrator unreachable after $MAX_ATTEMPTS attempts (HTTP $STATUS)" >&2
+          exit 1

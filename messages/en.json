@@ -102,7 +102,12 @@
     "statePublishing": "Publishing",
     "statePublished": "Published",
     "stateRejected": "Rejected",
+    "stateNeedsRethink": "Paused — rethink",
+    "stateBlockedTechnical": "Paused — technical",
     "inProgress": "In progress",
+    "paused": "Paused",
+    "pausedCreative": "This piece hit the same creative wall a few times in a row — a new Author will pick it up with a fresh brief shortly. Not a rejection.",
+    "pausedTechnical": "This piece is paused by a technical issue on ANA's side (not a creative decision or a vote outcome) — it will resume once the underlying issue is addressed.",
     "memorial": "memorial",
     "progress": "Progress",
     "proposedByLabel": "Proposed by",
@@ -1964,8 +1969,12 @@
       "briefing": "Brief in progress",
       "creating": "Creating",
       "validating": "Validating",
-      "publishing": "Publishing on-chain…"
+      "publishing": "Publishing on-chain…",
+      "needsRethink": "Paused — rethink",
+      "blockedTechnical": "Paused — technical issue"
     },
+    "pausedCreative": "This piece hit the same creative wall a few times in a row — a new Author will pick it up with a fresh brief shortly. Not a rejection.",
+    "pausedTechnical": "Paused by a technical issue on ANA's side (not a creative decision or a vote outcome) — it will resume once the underlying issue is addressed.",
     "roles": {
       "rapporteur": "Rapporteur",
       "author": "Author",
@@ -1995,7 +2004,21 @@
       "available": "{available}/{totalEditions} available · {price} ETH",
       "connectWallet": "Connect your wallet",
       "confirming": "Confirming…",
-      "mintCta": "Mint · {price} ETH"
+      "mintCta": "Mint · {price} ETH",
+      "reverted": "Transaction reverted on-chain — no edition was minted."
+    },
+    "claim": {
+      "readError": "Couldn't verify eligibility — try again shortly.",
+      "notInitialized": "Collection not activated yet.",
+      "loading": "Checking eligibility…",
+      "allClaimed": "Free edition claimed for all your Normies",
+      "eligible": "Free edition · Normie #{tokenId}",
+      "cta": "Claim free",
+      "confirming": "Confirming…",
+      "cancelled": "Cancelled",
+      "failed": "Claim failed — check you own this Normie in ANA",
+      "reverted": "Transaction reverted on-chain — no edition was claimed.",
+      "claimed": "Claimed — check your wallet"
     },
     "notConfigured": "WorkRegistry not configured.",
     "loadingWorks": "Loading works…",

@@ -17,8 +17,11 @@ import {
   getActiveWorks, listWorks, getWork, updateWork, advanceState, addVote,
   hasVoted, buildWorkHtml, createWork, getFoundingWork,
   VOTE_WINDOW_MS, CELEBRATION_VOTE_WINDOW_MS, nextInDispatchRotation,
-  type ANAWork, type WorkVote,
+  type ANAWork, type WorkVote, type WorkState, type OperationalErrorCode,
 } from "@/lib/workStore";
+import { redactSecrets } from "@/lib/redact";
+import { decideInitAction, decidePostInitVerification, shouldRepublish, type PostInitVerification } from "@/lib/publishDecisions";
+import { isTechnicalPause } from "@/lib/workPauseState";
 import { addMessage, closeSalon, reopenSalon, getSalon, createSalon, openCritiqueWindow, AGORA_SALON_ID } from "@/lib/salonStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { publishWork, deployCollection, initializeCollection } from "@/server/relayer/workPublisher";
@@ -27,6 +30,7 @@ import { registerMemorialOnChain, addReservedClaimsOnChain, addHonoredTokenIdsOn
 import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { diagnoseGroqResult, isTransientGroqError, classifyGroqHttpFailure, type GroqCallOutcome, type GroqErrorCode } from "@/lib/groqDiagnostics";
 import { oneMinAiCode } from "@/lib/oneMinAi";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
@@ -50,6 +54,65 @@ const MODEL_FAST   = "openai/gpt-oss-120b";
 // members approved it: provider outages and malformed LLM output are not
 // collective artistic decisions.
 const MAX_PIPELINE_FAILS = 4;
+
+// ─── Operational failure classification ────────────────────────────────────────
+//
+// Step functions still return `boolean | string` (a wide refactor of every
+// step's signature isn't worth the risk here) — but a failure string can
+// optionally be prefixed "CODE::" to carry a stable OperationalErrorCode
+// through to enterBlockedTechnical() below, instead of every infra failure
+// collapsing into an opaque "UNKNOWN". Unprefixed strings (existing code
+// that hasn't been touched) still work exactly as before, just classified as
+// UNKNOWN — this is additive, not a breaking convention change.
+const OPERATIONAL_ERROR_CODES: OperationalErrorCode[] = [
+  "RPC_READ_UNKNOWN", "RPC_READ_TIMEOUT", "RPC_RATE_LIMIT",
+  "TX_SEND_REJECTED", "TX_REVERTED", "POST_TX_VERIFICATION_FAILED", "ONCHAIN_MISMATCH",
+  "LLM_EMPTY_CONTENT", "LLM_RATE_LIMIT", "LLM_PROVIDER_ERROR", "LLM_PARSE_ERROR", "UNKNOWN",
+];
+
+// resumeTechnical (POST handler) refuses to resume into a state that's
+// missing data it structurally needs — e.g. resuming into PUBLISHING without
+// an artworkText would just immediately re-fail with a different, more
+// confusing error. Deliberately permissive on PUBLISHING's curator/rapporteur
+// ids: the memorial publishing path (stepPublishingMemorial) defaults both to
+// authorTokenId when absent, and stepPublishing's own guard already reports
+// a precise error for the non-memorial case if they're genuinely missing.
+const REQUIRED_FIELDS_BY_STATE: Partial<Record<WorkState, Array<keyof ANAWork>>> = {
+  BRIEFING:   ["rapporteurTokenId"],
+  CREATING:   ["authorTokenId", "brief"],
+  VALIDATING: ["curatorTokenId", "artworkText"],
+  PUBLISHING: ["authorTokenId", "artworkText"],
+};
+
+function opFail(code: OperationalErrorCode, message: string): string {
+  return `${code}::${message}`;
+}
+
+function parseOpFailure(raw: string): { code: OperationalErrorCode; message: string } {
+  const sep = raw.indexOf("::");
+  if (sep > 0) {
+    const candidate = raw.slice(0, sep);
+    if ((OPERATIONAL_ERROR_CODES as string[]).includes(candidate)) {
+      return { code: candidate as OperationalErrorCode, message: raw.slice(sep + 2) };
+    }
+  }
+  return { code: "UNKNOWN", message: raw };
+}
+
+/** Best-effort classification for a raw provider/relayer error message that
+ * has no explicit opFail() code attached (e.g. bubbling up from workPublisher.ts,
+ * which returns plain strings). Never trusts message content for anything
+ * beyond picking a code — the message itself is still redacted downstream by
+ * workStore.updateWork(). */
+function classifyChainError(message: string): OperationalErrorCode {
+  const m = message.toLowerCase();
+  if (m.includes("reverted")) return "TX_REVERTED";
+  if (m.includes("missing or invalid parameters") || m.includes("out of gas") || m.includes("intrinsic gas")) return "TX_SEND_REJECTED";
+  if (m.includes("timeout") || m.includes("timed out")) return "RPC_READ_TIMEOUT";
+  if (m.includes("rate limit") || m.includes("429")) return "RPC_RATE_LIMIT";
+  if (m.includes("verification") || m.includes("post-init")) return "POST_TX_VERIFICATION_FAILED";
+  return "UNKNOWN";
+}
 
 // The collection contract accepts any non-negative uint256 price. Normies are
 // therefore free to choose their exact price; this parser only protects the
@@ -194,6 +257,49 @@ async function groq(
     console.error("[work-lifecycle] groq error:", e);
     return null;
   }
+}
+
+/**
+ * Typed sibling of groq() above — used where losing the actual failure cause
+ * to a bare `false`/`null` was the root cause of a work silently pausing
+ * with a useless diagnostic (see groqDiagnostics.ts's doc comment: the
+ * "Unburned Roots' Reverie" incident, 29/09/2026). One bounded retry on a
+ * transient failure only (rate limit / provider error) — a genuinely empty
+ * response or a token-budget cutoff would just reproduce on retry with the
+ * same prompt, so retrying those would only burn quota for nothing.
+ */
+async function groqTyped(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; task?: import("@/lib/llmLedger").LlmTask } = {},
+): Promise<GroqCallOutcome> {
+  const model = opts.model ?? MODEL;
+
+  const attempt = async (): Promise<GroqCallOutcome> => {
+    try {
+      const res = await groqFetch({
+        model,
+        messages,
+        max_tokens:  opts.maxTokens ?? 300,
+        temperature: opts.temp      ?? 0.7,
+      });
+      await recordLlmCall({ provider: "groq", model, task: opts.task ?? "other", success: res.ok });
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        console.error(`[work-lifecycle] Groq ${res.status}: ${bodyText.slice(0, 500)}`);
+        return { ok: false, code: classifyGroqHttpFailure(res.status), providerStatus: res.status };
+      }
+      const data = await res.json() as GroqChatResponse;
+      return diagnoseGroqResult(data, { expectJson: !!opts.expectJson });
+    } catch (e) {
+      console.error("[work-lifecycle] groqTyped error:", e);
+      return { ok: false, code: "PROVIDER_ERROR" };
+    }
+  };
+
+  const first = await attempt();
+  if (first.ok || !isTransientGroqError(first.code)) return first;
+  console.warn(`[work-lifecycle] groqTyped: transient ${first.code}, retrying once`);
+  return attempt();
 }
 
 // ─── Announce in salon ────────────────────────────────────────────────────────
@@ -877,6 +983,8 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
 
   const isHtml = detectHtmlForm(work);
   let artworkText: string | null;
+  let creatingFailureCode:   GroqErrorCode | undefined;
+  let creatingFailureDetail: string | undefined;
 
   if (isHtml) {
     // ── Generative / visual art ────────────────────────────────────────────────
@@ -985,7 +1093,14 @@ Generate ONLY the complete HTML, no explanations before or after.`,
 
         const rethink = await trackSimilarFailure(work, reason);
         if (rethink) {
-          await enterNeedsRethink(work, reason, "technical");
+          // A deterministic structural check (missing setup(), forbidden API,
+          // ...) failing the same way 3 times running is the model failing a
+          // hard technical requirement, not a curator taste call — pause as
+          // BLOCKED_TECHNICAL (resumable by an admin once addressed), never
+          // NEEDS_RETHINK. Distinct from a curator's own creative rejection
+          // of the same submitted HTML (stepValidating → rejectOrRevise),
+          // which stays NEEDS_RETHINK("creative") since that IS a taste call.
+          await enterBlockedTechnical(work, "CREATING", opFail("LLM_PARSE_ERROR", reason), (work.similarFailureStreak ?? 0) + 1);
           return true;
         }
 
@@ -1009,7 +1124,7 @@ Generate ONLY the complete HTML, no explanations before or after.`,
           ? "a manifesto (strong voice, imperatives, radical vision)"
           : "a poem or prose piece (150-250 words)";
 
-    artworkText = await groq(
+    const textOutcome = await groqTyped(
       [
         { role: "system", content: buildSystemPrompt(author, others, { longForm: true }) },
         {
@@ -1026,11 +1141,32 @@ ${selfCritiqueLine}
 No introduction, no meta-commentary. Just the artwork itself.`,
         },
       ],
-      { maxTokens: scaledTokens(work.artForm === "haiku" ? 80 : work.artForm === "sonnet" ? 350 : 450, work.ambitionLevel), temp: 0.95, task: "creating" }
+      // Haiku base was 80 -- at "quick" ambition (×0.6) that's 48 tokens for
+      // openai/gpt-oss-120b, a reasoning model that can spend its ENTIRE
+      // budget deliberating before ever writing message.content, leaving it
+      // empty (confirmed root cause, 29/09/2026 incident: "Unburned Roots'
+      // Reverie" stalled exactly this way). 400 leaves real room for
+      // reasoning tokens ahead of the three-line poem itself.
+      { maxTokens: scaledTokens(work.artForm === "haiku" ? 400 : work.artForm === "sonnet" ? 350 : 450, work.ambitionLevel), temp: 0.95, task: "creating", expectJson: false }
     );
+    if (textOutcome.ok) {
+      artworkText = textOutcome.content;
+    } else {
+      artworkText = null;
+      creatingFailureCode   = textOutcome.code;
+      creatingFailureDetail = `Groq text generation failed: ${textOutcome.code}${textOutcome.finishReason ? ` (finish_reason=${textOutcome.finishReason})` : ""}${textOutcome.providerStatus ? ` (HTTP ${textOutcome.providerStatus})` : ""}`;
+    }
   }
 
-  if (!artworkText) return false;
+  if (!artworkText) {
+    return opFail(
+      creatingFailureCode === "RATE_LIMITED" ? "LLM_RATE_LIMIT"
+        : creatingFailureCode === "TOKEN_LIMIT_REACHED" || creatingFailureCode === "EMPTY_CONTENT" ? "LLM_EMPTY_CONTENT"
+        : creatingFailureCode === "PARSE_ERROR" ? "LLM_PARSE_ERROR"
+        : "LLM_PROVIDER_ERROR",
+      creatingFailureDetail ?? "no artwork text produced",
+    );
+  }
 
   await updateWork(work.id, { artworkText, artworkAt: Date.now() });
   await advanceState(work.id, "VALIDATING", `Work created by ${author.name}`);
@@ -1071,33 +1207,59 @@ async function trackSimilarFailure(work: ANAWork, reason: string): Promise<boole
   return streak >= 3;
 }
 
+// Only ever called for a genuine CREATIVE impasse (three similar curator
+// rejections) — see workStore.ts's WorkState doc comment on why an
+// infrastructure failure must never land here. Kept accepting a `kind`
+// param only for backward-compatible reads of rows written before
+// BLOCKED_TECHNICAL existed; no code path below passes "technical" anymore.
 async function enterNeedsRethink(work: ANAWork, reason: string, kind: "technical" | "creative"): Promise<void> {
   await updateWork(work.id, { needsRethinkReason: kind, validationNote: reason.slice(0, 500) });
   await advanceState(work.id, "NEEDS_RETHINK", `3 similar failures in a row (${kind}) — pausing for a rethink`);
   await addMessage({
     salonId: work.salonId ?? AGORA_SALON_ID, tokenId: 0, name: "ANA", imageUrl: "",
-    content: kind === "technical"
-      ? `⏸️ "${work.title}" hit the same technical limitation three times in a row. Flagging for human review before trying again.`
-      : `⏸️ "${work.title}" hit the same creative wall three times in a row. Pausing for a rethink — a new Author and a fresh brief will pick it up next.`,
+    content: `⏸️ "${work.title}" hit the same creative wall three times in a row. Pausing for a rethink — a new Author and a fresh brief will pick it up next.`,
     isLlm: true, timestamp: Date.now(), topic: "art",
   }).catch(() => null);
-  if (kind === "technical") {
-    const { promoteOrCreateFromSynthesis } = await import("@/lib/devRequests");
-    await promoteOrCreateFromSynthesis(
-      `Recurring technical validation failure on generative works: ${reason.slice(0, 200)}`,
-      work.salonId ?? AGORA_SALON_ID,
-    ).catch(() => null);
-  }
 }
 
 /**
- * Resumes a NEEDS_RETHINK work. A "technical" pause stays paused — a human
- * dev-request was already opened on entry (enterNeedsRethink above), and
- * resuming automatically would just reproduce the same structural failure;
- * an admin's existing retryGenerative action (POST handler) is the deliberate
- * manual resume path once the underlying issue is actually fixed. A
- * "creative" pause resumes on its own: a different Author (round-robin,
- * excluding the one who kept hitting the same wall) gets a fresh brief.
+ * A genuine infrastructure incident (RPC/LLM/relayer) pausing a work — NEVER
+ * a verdict on artistic merit or the member vote that approved it. Preserves
+ * `pausedFromState` so resumeTechnical() (admin action, POST handler below)
+ * can put the work back exactly where it stalled, not at a fixed state.
+ */
+async function enterBlockedTechnical(
+  work: ANAWork, stalledAt: WorkState, rawReason: string, failCount: number,
+): Promise<void> {
+  const { code, message } = parseOpFailure(rawReason);
+  await updateWork(work.id, {
+    pausedFromState:         stalledAt,
+    operationalErrorCode:    code,
+    operationalErrorMessage: message,
+    operationalFailCount:    failCount,
+    lastAttemptAt:           Date.now(),
+    validationNote:          message,
+  });
+  await advanceState(work.id, "BLOCKED_TECHNICAL", `${failCount} consecutive operational failures at ${stalledAt} (${code}) — paused, not a creative or vote decision`);
+  await addMessage({
+    salonId: work.salonId ?? AGORA_SALON_ID, tokenId: 0, name: "ANA", imageUrl: "",
+    content: `⏸️ "${work.title}" hit a technical limitation (infrastructure, not a creative or vote decision) and is paused for review. An admin can reconcile or resume it once the underlying issue is fixed.`,
+    isLlm: true, timestamp: Date.now(), topic: "art",
+  }).catch(() => null);
+  const { promoteOrCreateFromSynthesis } = await import("@/lib/devRequests");
+  await promoteOrCreateFromSynthesis(
+    `Recurring operational failure (${code}) at ${stalledAt}: ${message.slice(0, 200)}`,
+    work.salonId ?? AGORA_SALON_ID,
+  ).catch(() => null);
+}
+
+/**
+ * Resumes a NEEDS_RETHINK work. Only a "creative" pause resumes on its own: a
+ * different Author (round-robin, excluding the one who kept hitting the same
+ * wall) gets a fresh brief. A legacy "technical" pause (rows written before
+ * BLOCKED_TECHNICAL existed) stays paused — the admin's resumeTechnical
+ * action (POST handler below) is the manual resume path for those, same as
+ * for a genuine BLOCKED_TECHNICAL work.
  */
 async function stepNeedsRethink(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   if (work.needsRethinkReason !== "creative") return false;
@@ -1522,7 +1684,9 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
 
   // If already published (work.onChainWorkId saved), skip straight to init retry.
   // This covers the case where publishWork succeeded but initializeCollection failed.
-  if (onChainWorkId == null) {
+  // shouldRepublish() (publishDecisions.ts) is the single source of truth for
+  // "does this work still need WorkRegistry.publish()" — never re-derived ad hoc.
+  if (shouldRepublish({ onChainWorkId, txHash: work.txHash })) {
     // ── Step 1: Deploy collection BEFORE publishing so its address is in the certificate ──
     // HTML/generative artworks always need a collection — that's where the actual artwork
     // (artworkContent) lives on-chain. Without it the gallery/certificate have nothing real
@@ -1598,7 +1762,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
       } else {
         console.error(`[work-lifecycle] publish error for "${work.title}": ${errMsg}`);
       }
-      return `publishWork failed: ${errMsg.slice(0, 200)}`;
+      return opFail(classifyChainError(errMsg), `publishWork failed: ${errMsg.slice(0, 200)}`);
     }
 
     // Guard: if event parsing failed and workId is undefined, treat as failure so we
@@ -1607,7 +1771,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
       const errMsg = "publishWork tx succeeded but WorkPublished event not decoded — will retry";
       console.error(`[work-lifecycle] ${errMsg} (tx: ${result.txHash})`);
       await updateWork(work.id, { validationNote: errMsg });
-      return errMsg;
+      return opFail("POST_TX_VERIFICATION_FAILED", errMsg);
     }
 
     // Save progress without advancing state — init must succeed first.
@@ -1626,19 +1790,33 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
   // Stays in PUBLISHING (returns false) if this fails so the next cycle retries.
   if (collectionAddress && onChainWorkId != null) {
     // Check on-chain first — avoids re-calling initialize() if the tx succeeded
-    // but the Lambda died before we received the receipt.
-    let alreadyInitialized = false;
+    // but the Lambda died before we received the receipt. A failed read is
+    // "unknown", NEVER coerced to false: calling initialize() on a
+    // collection we simply couldn't confirm the state of risks a second real
+    // transaction for what may already be a completed, correct init (26/09
+    // external audit finding — this exact ambiguity was previously resolved
+    // by guessing "not initialized").
+    let alreadyInitialized: boolean | "unknown" = "unknown";
     try {
       alreadyInitialized = await client.readContract({
         address:      collectionAddress as `0x${string}`,
         abi:          ANA_EDITIONS_ABI,
         functionName: "initialized",
       }) as boolean;
-    } catch (e) {
-      console.warn(`[work-lifecycle] could not read initialized flag: ${e instanceof Error ? e.message : String(e)}`);
+    } catch {
+      alreadyInitialized = "unknown";
     }
 
-    if (alreadyInitialized) {
+    // decideInitAction() (publishDecisions.ts) is the single source of truth
+    // for whether initialize() may be called — a failed/unknown read always
+    // retries without calling it, never guesses "not initialized".
+    const initDecision = decideInitAction(alreadyInitialized);
+    if (initDecision === "retry-unknown") {
+      return opFail("RPC_READ_UNKNOWN",
+        `could not read initialized() before deciding whether to call initialize() — retrying next cycle`);
+    }
+
+    if (initDecision === "skip-init") {
       console.log(`[work-lifecycle] collection already initialized on-chain — skipping init (workId=${onChainWorkId})`);
     } else {
       // HTML/generative artworks must be stored as a data URI so ANAEditions.tokenURI
@@ -1659,7 +1837,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
         const errMsg = initResult.error ?? "initializeCollection failed (unknown)";
         console.warn(`[work-lifecycle] init failed, will retry next cycle: ${errMsg}`);
         await updateWork(work.id, { validationNote: `initCollection: ${errMsg.slice(0, 280)}` });
-        return `initializeCollection failed: ${errMsg.slice(0, 200)}`;
+        return opFail(classifyChainError(errMsg), `initializeCollection failed: ${errMsg.slice(0, 200)}`);
       }
       console.log(`[work-lifecycle] collection initialized — workId=${onChainWorkId}`);
     }
@@ -1671,23 +1849,43 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
     // mismatch). Checked every time this branch runs, not just right after a
     // fresh initResult, so a work that was "already initialized" per the
     // early check above still gets the same verification before PUBLISHED.
+    let verification: PostInitVerification = {
+      initialized: "unknown", onChainWorkId: "unknown", expectedWorkId: onChainWorkId, artworkContentLength: "unknown",
+    };
     try {
       const [onChainInitialized, onChainWorkIdOnCollection, onChainArtwork] = await Promise.all([
         client.readContract({ address: collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "initialized" }) as Promise<boolean>,
         client.readContract({ address: collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "workId" }) as Promise<bigint>,
         client.readContract({ address: collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "artworkContent" }) as Promise<string>,
       ]);
-      if (!onChainInitialized || Number(onChainWorkIdOnCollection) !== onChainWorkId || !onChainArtwork) {
-        const errMsg = `post-init verification failed (initialized=${onChainInitialized}, workId=${onChainWorkIdOnCollection} expected ${onChainWorkId}, artworkContent length=${onChainArtwork?.length ?? 0})`;
-        console.error(`[work-lifecycle] ${errMsg} for "${work.title}" — staying in PUBLISHING`);
-        await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
-        return errMsg;
-      }
+      verification = {
+        initialized: onChainInitialized, onChainWorkId: Number(onChainWorkIdOnCollection),
+        expectedWorkId: onChainWorkId, artworkContentLength: onChainArtwork?.length ?? 0,
+      };
     } catch (e) {
-      const errMsg = `post-init verification read failed: ${e instanceof Error ? e.message : String(e)}`;
+      console.warn(`[work-lifecycle] post-init verification read failed for "${work.title}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // decidePostInitVerification() (publishDecisions.ts) is the single source
+    // of truth: any read failing/timing out must stay retryable, never look
+    // like a genuine on-chain mismatch or a confirmed success.
+    const verdict = decidePostInitVerification(verification);
+    if (verdict === "retry-unknown") {
+      const errMsg = "post-init verification read failed — staying in PUBLISHING, retrying next cycle";
+      console.error(`[work-lifecycle] ${errMsg} for "${work.title}"`);
+      await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
+      return opFail("RPC_READ_UNKNOWN", errMsg);
+    }
+    if (verdict === "mismatch") {
+      const errMsg = `post-init verification failed (initialized=${verification.initialized}, workId=${verification.onChainWorkId} expected ${verification.expectedWorkId}, artworkContent length=${verification.artworkContentLength})`;
       console.error(`[work-lifecycle] ${errMsg} for "${work.title}" — staying in PUBLISHING`);
       await updateWork(work.id, { validationNote: errMsg.slice(0, 300) });
-      return errMsg;
+      // A transient verification miss after an already-confirmed tx is a
+      // recoverable operational incident, never a creative rethink — see
+      // enterBlockedTechnical(). Same code covers the rarer case where this
+      // keeps failing and turns out to be a genuine on-chain divergence;
+      // reconcileWork (admin action) is what actually confirms that.
+      return opFail("POST_TX_VERIFICATION_FAILED", errMsg);
     }
   }
 
@@ -1996,6 +2194,9 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
       case "VALIDATING":   return await stepValidating(work, personas);
       case "PUBLISHING":   return await stepPublishing(work);
       case "NEEDS_RETHINK": return await stepNeedsRethink(work, personas);
+      // Admin-resume only (resumeTechnical, POST handler below) — never
+      // auto-advances, same as a legacy technical NEEDS_RETHINK.
+      case "BLOCKED_TECHNICAL": return false;
       default:             return false;
     }
   } catch (e) {
@@ -2083,6 +2284,8 @@ export async function POST(req: NextRequest) {
     forceReject?: string;
     retryGenerative?: string;
     forceVoteResult?: { workId: string; result: "pass" | "fail" };
+    resumeTechnical?: string;
+    reconcileWork?: { workId: string; dryRun?: boolean };
   } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
@@ -2127,6 +2330,108 @@ export async function POST(req: NextRequest) {
     await advanceState(target.id, "CREATING", "Retried by admin — re-running CREATING with current prompts/validation");
     console.log(`[work-lifecycle] admin retried generative work ${target.id} "${target.title}" — salon reopened`);
     return NextResponse.json({ retried: target.id, title: target.title, state: "CREATING" });
+  }
+
+  // Admin-only general technical-pause resume: puts a BLOCKED_TECHNICAL work
+  // (or a legacy NEEDS_RETHINK("technical") one) back at exactly the state it
+  // stalled at, preserving votes/brief/artwork/tx/on-chain ids — only the
+  // operational bookkeeping is reset. Refuses anything ambiguous: no
+  // recorded/derivable pausedFromState, or the destination state is missing
+  // data it structurally needs (see REQUIRED_FIELDS_BY_STATE below).
+  if (body.resumeTechnical) {
+    if (!isAdminCall) return NextResponse.json({ error: "resumeTechnical requires a valid admin signature" }, { status: 403 });
+    const target = await getWork(body.resumeTechnical);
+    if (!target) return NextResponse.json({ error: `Work ${body.resumeTechnical} not found` }, { status: 404 });
+
+    if (!isTechnicalPause(target)) {
+      return NextResponse.json({ error: `Work is ${target.state} — resumeTechnical only applies to BLOCKED_TECHNICAL (or a legacy technical NEEDS_RETHINK)` }, { status: 409 });
+    }
+
+    const destination = target.pausedFromState
+      ?? [...target.stateHistory].reverse().find(h => h.state !== "BLOCKED_TECHNICAL" && h.state !== "NEEDS_RETHINK")?.state;
+    if (!destination) {
+      return NextResponse.json({ error: "Cannot determine which state to resume into (no pausedFromState and none derivable from history) — refusing an ambiguous resume" }, { status: 409 });
+    }
+
+    const missing = REQUIRED_FIELDS_BY_STATE[destination]?.filter(f => target[f] == null) ?? [];
+    if (missing.length > 0) {
+      return NextResponse.json({ error: `Refusing to resume into ${destination} — missing required data: ${missing.join(", ")}` }, { status: 409 });
+    }
+
+    await updateWork(target.id, {
+      pausedFromState:          undefined,
+      operationalErrorCode:     undefined,
+      operationalErrorMessage:  undefined,
+      operationalFailCount:     0,
+      nextRetryAt:              undefined,
+      pipelineFailCount:        0,
+      similarFailureStreak:     0,
+      needsRethinkReason:       undefined,
+      validationNote:           undefined,
+    });
+    if (target.salonId && target.salonId !== AGORA_SALON_ID) {
+      await reopenSalon(target.salonId).catch(() => null);
+    }
+    await advanceState(target.id, destination, "Resumed by admin after a technical pause — no vote, brief, artwork or on-chain data changed");
+    console.log(`[work-lifecycle] admin resumed ${target.id} "${target.title}" → ${destination}`);
+    return NextResponse.json({ resumed: target.id, title: target.title, state: destination });
+  }
+
+  // Admin-only, idempotent, read-only-unless-matched: re-reads WorkRegistry/
+  // ANAEditions on-chain state and, ONLY if it already matches what the DB
+  // expects, marks the work PUBLISHED — never sends a transaction, never
+  // republishes, never re-initializes. dryRun (default true) reports what it
+  // found without writing anything; pass { dryRun: false } to apply.
+  if (body.reconcileWork) {
+    if (!isAdminCall) return NextResponse.json({ error: "reconcileWork requires a valid admin signature" }, { status: 403 });
+    const { workId, dryRun = true } = body.reconcileWork;
+    const target = await getWork(workId);
+    if (!target) return NextResponse.json({ error: `Work ${workId} not found` }, { status: 404 });
+
+    if (target.state === "PUBLISHED") {
+      return NextResponse.json({ ok: true, alreadyPublished: true, workId: target.id });
+    }
+    if (!target.collectionAddress || target.onChainWorkId == null) {
+      return NextResponse.json({ error: "Nothing to reconcile — this work has no collectionAddress/onChainWorkId (never reached publish on-chain)" }, { status: 409 });
+    }
+
+    let onChain: { initialized: boolean; workId: number; artworkContentLength: number };
+    try {
+      const [initialized, onChainWorkIdOnCollection, artworkContent] = await Promise.all([
+        client.readContract({ address: target.collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "initialized" }) as Promise<boolean>,
+        client.readContract({ address: target.collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "workId" }) as Promise<bigint>,
+        client.readContract({ address: target.collectionAddress as `0x${string}`, abi: ANA_EDITIONS_ABI, functionName: "artworkContent" }) as Promise<string>,
+      ]);
+      onChain = { initialized, workId: Number(onChainWorkIdOnCollection), artworkContentLength: artworkContent?.length ?? 0 };
+    } catch (e) {
+      const msg = redactSecrets(e instanceof Error ? e.message : String(e));
+      return NextResponse.json({ ok: false, error: `on-chain read failed — try again later: ${msg}` }, { status: 502 });
+    }
+
+    const matched = onChain.initialized && onChain.workId === target.onChainWorkId && onChain.artworkContentLength > 0;
+
+    if (dryRun) {
+      return NextResponse.json({ ok: true, dryRun: true, workId: target.id, matched, onChain, expected: { onChainWorkId: target.onChainWorkId } });
+    }
+    if (!matched) {
+      return NextResponse.json({ ok: false, error: "On-chain state does not match the DB record — refusing to reconcile (no write performed)", onChain, expected: { onChainWorkId: target.onChainWorkId } }, { status: 409 });
+    }
+
+    await updateWork(target.id, {
+      validationNote:          undefined,
+      operationalErrorCode:    undefined,
+      operationalErrorMessage: undefined,
+      operationalFailCount:    0,
+      pausedFromState:         undefined,
+    });
+    await advanceState(target.id, "PUBLISHED", `Reconciled by admin — on-chain publish+init already confirmed (workId=${target.onChainWorkId}), no new transaction sent`);
+    if (target.salonId && target.salonId !== AGORA_SALON_ID) {
+      const creativeTeam = [target.authorTokenId, target.curatorTokenId, target.rapporteurTokenId].filter((id): id is number => id != null);
+      await openCritiqueWindow(target.salonId, creativeTeam, CRITIQUE_WINDOW_MS).catch(() => null);
+      await closeSalon(target.salonId, 0).catch(() => null);
+    }
+    console.log(`[work-lifecycle] admin reconciled ${target.id} "${target.title}" → PUBLISHED (no tx sent)`);
+    return NextResponse.json({ ok: true, reconciled: true, workId: target.id, state: "PUBLISHED" });
   }
 
   if (!process.env.GROQ_API_KEY) {
@@ -2252,18 +2557,19 @@ export async function POST(req: NextRequest) {
     // VOTE_OPEN and then genuinely fails at e.g. PUBLISHING isn't mistaken
     // for "still voting".
     let pausedForReview = false;
-    if (!advanced && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK") {
+    if (!advanced && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK" && stalledAt !== "BLOCKED_TECHNICAL") {
       // Any other non-advancing step counts — even steps that only return false
       // on failure (no descriptive string) must not block the pipeline forever.
       const reason    = error ?? `no progress at ${stalledAt} (step returned false — likely a transient LLM/data issue)`;
       const failCount = (work.pipelineFailCount ?? 0) + 1;
       if (failCount >= MAX_PIPELINE_FAILS) {
-        await updateWork(work.id, { validationNote: reason.slice(0, 300), pipelineFailCount: failCount });
-        await enterNeedsRethink(work, `${stalledAt}: ${reason}`, "technical");
+        // Infrastructure paused this, not the community or a creative dead
+        // end — BLOCKED_TECHNICAL, never NEEDS_RETHINK (see workStore.ts).
+        await enterBlockedTechnical(work, stalledAt as WorkState, reason, failCount);
         pausedForReview = true;
-        console.warn(`[work-lifecycle] "${work.title}" paused for technical review after ${failCount} consecutive failures at ${stalledAt}`);
+        console.warn(`[work-lifecycle] "${work.title}" paused (BLOCKED_TECHNICAL) after ${failCount} consecutive failures at ${stalledAt}`);
       } else {
-        await updateWork(work.id, { pipelineFailCount: failCount });
+        await updateWork(work.id, { pipelineFailCount: failCount, lastAttemptAt: Date.now() });
       }
     } else if (work.pipelineFailCount) {
       // Progressed past the failing step — clear the counter for the next state.

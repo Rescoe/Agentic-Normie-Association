@@ -38,6 +38,7 @@ import {
   ROLE_LABELS,
 } from "@/lib/contracts";
 import { buildAdminAuthMessage, ADMIN_AUTH_HEADERS, ADMIN_AUTH_MAX_AGE_MS } from "@/lib/adminAuth";
+import { isTechnicalPause } from "@/lib/workPauseState";
 import { ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
 
 /** Type for the function passed down to sections that call admin-gated API routes. */
@@ -1212,6 +1213,11 @@ type ANAWorkFull = ANAWorkSummary & {
   publishedAt?: number;
   revisionCount?: number;
   pipelineFailCount?: number;
+  needsRethinkReason?: "technical" | "creative";
+  pausedFromState?: string;
+  operationalErrorCode?: string;
+  operationalErrorMessage?: string;
+  operationalFailCount?: number;
   critiqueSummary?: string;
   rapporteurName?: string;
   authorName?: string;
@@ -1236,7 +1242,10 @@ const STATE_COLOR: Record<string, string> = {
   PUBLISHING:   "text-teal-600",
   PUBLISHED:    "text-green-600",
   REJECTED:     "text-red-600",
+  NEEDS_RETHINK:      "text-amber-600",
+  BLOCKED_TECHNICAL:  "text-orange-700",
 };
+
 
 function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [works,   setWorks]   = useState<ANAWorkFull[]>([]);
@@ -1253,10 +1262,24 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
+      // Public endpoint (toPublicWork DTO — no validationNote/operational*
+      // diagnostics, see workStore.ts) so this auto-polls on mount without
+      // ever prompting a wallet signature. Full diagnostics are loaded
+      // separately, on explicit click, by loadDiagnostics() below — same
+      // lazy-auth pattern as every mutating action in this section.
       const r = await fetch("/api/works");
       if (r.ok) setWorks(await r.json() as ANAWorkFull[]);
     } finally { setLoading(false); }
   }, []);
+
+  const [diagLoading, setDiagLoading] = useState(false);
+  const loadDiagnostics = useCallback(async () => {
+    setDiagLoading(true);
+    try {
+      const r = await fetch("/api/admin/works", { headers: await getAdminHeaders() });
+      if (r.ok) setWorks(await r.json() as ANAWorkFull[]);
+    } finally { setDiagLoading(false); }
+  }, [getAdminHeaders]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -1399,8 +1422,47 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   const lcResults = (Array.isArray(lcResult?.results) ? lcResult!.results : []) as LcWorkResult[];
 
   const activeWorks = works.filter(w =>
-    ["PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING"].includes(w.state)
+    ["PROPOSED","VOTE_OPEN","VOTE_TALLIED","BRIEFING","CREATING","VALIDATING","PUBLISHING","NEEDS_RETHINK","BLOCKED_TECHNICAL"].includes(w.state)
   );
+  const interventionWorks = activeWorks.filter(w => w.state === "NEEDS_RETHINK" || w.state === "BLOCKED_TECHNICAL");
+
+  const [reconcilingId, setReconcilingId] = useState<string | null>(null);
+  const [reconcileResult, setReconcileResult] = useState<Record<string, unknown> | null>(null);
+  const runReconcile = async (workId: string, dryRun: boolean) => {
+    if (!dryRun && !confirm("Appliquer la réconciliation (passage PUBLISHED) ? Aucune transaction on-chain ne sera envoyée — lecture seule puis écriture en base.")) return;
+    setReconcilingId(workId);
+    setReconcileResult(null);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify({ reconcileWork: { workId, dryRun } }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      setReconcileResult({ workId, ...d });
+      if (r.ok && !dryRun) void refresh();
+    } catch (e) {
+      setReconcileResult({ workId, error: e instanceof Error ? e.message : String(e) });
+    } finally { setReconcilingId(null); }
+  };
+
+  const [resumingId, setResumingId] = useState<string | null>(null);
+  const resumeTechnical = async (workId: string) => {
+    if (!confirm("Reprendre cette œuvre depuis sa pause technique ? Vote, brief, textes et données on-chain sont préservés — seuls les compteurs opérationnels sont remis à zéro.")) return;
+    setResumingId(workId);
+    try {
+      const r = await fetch("/api/keeper/work-lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify({ resumeTechnical: workId }),
+      });
+      const d = await r.json() as Record<string, unknown>;
+      if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
+      else void refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally { setResumingId(null); }
+  };
 
   return (
     <div className="space-y-4">
@@ -1418,6 +1480,14 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
           className="font-mono text-xs border border-[--border] px-4 py-2.5 hover:bg-[--bg-card] disabled:opacity-40"
         >
           {loading ? "…" : "↻ Rafraîchir"}
+        </button>
+        <button
+          onClick={() => void loadDiagnostics()}
+          disabled={diagLoading}
+          title="Charge validationNote et les diagnostics opérationnels (signature admin requise) — non chargés par défaut pour ne jamais demander une signature au simple affichage de la page"
+          className="font-mono text-xs border border-orange-300 text-orange-700 px-4 py-2.5 hover:bg-orange-50/20 disabled:opacity-40 disabled:cursor-wait"
+        >
+          {diagLoading ? "…" : "🔎 Diagnostics (admin)"}
         </button>
         <button
           onClick={() => void triggerGenerativeWork()}
@@ -1465,11 +1535,92 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
         </div>
       )}
 
-      {/* Active works */}
-      {activeWorks.length > 0 ? (
+      {/* Intervention requise — NEEDS_RETHINK (creative) & BLOCKED_TECHNICAL (infra) */}
+      {interventionWorks.length > 0 && (
         <div className="space-y-2">
-          <p className="font-mono text-xs text-[--fg-muted]">{activeWorks.length} œuvre(s) active(s)</p>
-          {activeWorks.map(w => (
+          <p className="font-mono text-xs text-orange-700 font-bold">⚠ {interventionWorks.length} œuvre(s) en intervention requise</p>
+          {interventionWorks.map(w => (
+            <div key={w.id} className="border border-orange-300 bg-orange-50/10 p-4 space-y-1.5">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-bold text-sm">{w.title}</p>
+                <span className={`font-mono text-xs font-bold shrink-0 ${STATE_COLOR[w.state] ?? ""}`}>{w.state}</span>
+              </div>
+              <p className="font-mono text-[10px] text-[--fg-muted]">
+                {w.state === "NEEDS_RETHINK"
+                  ? (w.needsRethinkReason === "technical"
+                      ? "Pause technique héritée (ancien format) — même traitement qu'une pause BLOCKED_TECHNICAL."
+                      : "Impasse créative — reprise automatique prévue (nouvel Auteur, brief neuf) au prochain cycle.")
+                  : `Pause technique — état d'origine : ${w.pausedFromState ?? "inconnu"}${w.operationalErrorCode ? ` · code : ${w.operationalErrorCode}` : ""}${w.operationalFailCount ? ` · ${w.operationalFailCount} échec(s) consécutif(s)` : ""}`}
+              </p>
+              {w.validationNote && (
+                <p className="font-mono text-xs text-red-600">⚠ {w.validationNote}</p>
+              )}
+              {!w.validationNote && (
+                <p className="font-mono text-[10px] text-[--fg-muted] italic">
+                  Diagnostic non chargé — clique « 🔎 Diagnostics (admin) » ci-dessus pour voir le détail nettoyé.
+                </p>
+              )}
+              {w.collectionAddress && (
+                <p className="font-mono text-[10px] text-[--fg-muted]">
+                  collectionAddr : <a href={basescanAddr(w.collectionAddress)} target="_blank" rel="noopener noreferrer" className="text-teal-600 underline">{w.collectionAddress.slice(0,10)}… ↗</a>
+                  {w.onChainWorkId != null && <> · onChainWorkId : <span className="text-green-600">#{w.onChainWorkId}</span></>}
+                </p>
+              )}
+              <div className="flex items-center gap-2 flex-wrap pt-1">
+                {isTechnicalPause(w) && !!w.collectionAddress && w.onChainWorkId != null && (
+                  <>
+                    <button
+                      onClick={() => void runReconcile(w.id, true)}
+                      disabled={reconcilingId === w.id}
+                      title="Relit WorkRegistry/ANAEditions on-chain et montre si ça correspond — aucune écriture"
+                      className="font-mono text-[10px] text-teal-700 border border-teal-300 px-2 py-1 hover:bg-teal-50/20 disabled:opacity-40"
+                    >
+                      {reconcilingId === w.id ? "…" : "🔍 Réconcilier (dry-run)"}
+                    </button>
+                    <button
+                      onClick={() => void runReconcile(w.id, false)}
+                      disabled={reconcilingId === w.id}
+                      title="Si l'état on-chain correspond déjà, passe la fiche à PUBLISHED — aucune transaction envoyée"
+                      className="font-mono text-[10px] text-teal-900 border border-teal-500 px-2 py-1 hover:bg-teal-50/30 disabled:opacity-40"
+                    >
+                      {reconcilingId === w.id ? "…" : "✅ Appliquer la réconciliation"}
+                    </button>
+                  </>
+                )}
+                {isTechnicalPause(w) && (
+                  <button
+                    onClick={() => void resumeTechnical(w.id)}
+                    disabled={resumingId === w.id}
+                    title="Reprend depuis l'état d'avant la pause — vote, brief, textes et données on-chain préservés"
+                    className="font-mono text-[10px] text-purple-700 border border-purple-300 px-2 py-1 hover:bg-purple-50/20 disabled:opacity-40"
+                  >
+                    {resumingId === w.id ? "…" : "▶️ Reprendre"}
+                  </button>
+                )}
+                <button
+                  onClick={() => void forceReject(w.id)}
+                  disabled={rejectingId === w.id}
+                  className="font-mono text-[10px] text-red-600 border border-red-300 px-2 py-1 hover:bg-red-50/20 disabled:opacity-40"
+                >
+                  {rejectingId === w.id ? "…" : "⛔ Forcer REJECTED"}
+                </button>
+              </div>
+              {reconcileResult && reconcileResult.workId === w.id && (
+                <pre className="font-mono text-[10px] text-[--fg-muted] border border-[--border] bg-[--bg] p-2 overflow-auto max-h-40 whitespace-pre-wrap">
+                  {JSON.stringify(reconcileResult, null, 2)}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Active works — NEEDS_RETHINK/BLOCKED_TECHNICAL are rendered above
+          (Intervention requise), not duplicated here. */}
+      {(() => { const inProgressWorks = activeWorks.filter(w => w.state !== "NEEDS_RETHINK" && w.state !== "BLOCKED_TECHNICAL"); return inProgressWorks.length > 0 ? (
+        <div className="space-y-2">
+          <p className="font-mono text-xs text-[--fg-muted]">{inProgressWorks.length} œuvre(s) active(s)</p>
+          {inProgressWorks.map(w => (
             <div key={w.id} className={`border p-4 space-y-1.5 ${w.state === "PUBLISHING" && w.validationNote ? "border-orange-300" : "border-[--border]"}`}>
               <div className="flex items-start justify-between gap-3">
                 <p className="font-bold text-sm">
@@ -1603,7 +1754,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
         </div>
       ) : (
         !loading && <p className="font-mono text-xs text-[--fg-muted]">Aucune œuvre active en cours.</p>
-      )}
+      ); })()}
 
       {/* Published & rejected */}
       {works.filter(w => w.state === "PUBLISHED" || w.state === "REJECTED").length > 0 && (
@@ -1725,11 +1876,14 @@ function WorkTestPipelineSection({ getAdminHeaders }: { getAdminHeaders: GetAdmi
   const [resetting,  setResetting]  = useState(false);
 
   const fetchWork = useCallback(async (id: string): Promise<ANAWorkFull | null> => {
-    const r = await fetch("/api/works");
+    // This whole test pipeline is already an explicit admin action (the
+    // button below signs for propose-work etc.) — safe to use the full
+    // diagnostics endpoint directly, unlike WorkStatusSection's auto-polling refresh().
+    const r = await fetch("/api/admin/works", { headers: await getAdminHeaders() });
     if (!r.ok) return null;
     const all = await r.json() as ANAWorkFull[];
     return all.find(w => w.id === id) ?? null;
-  }, []);
+  }, [getAdminHeaders]);
 
   const appendLog = useCallback((log: StepLog) => {
     setLogs(prev => [...prev, log]);

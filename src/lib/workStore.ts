@@ -6,7 +6,8 @@
  *     → VALIDATING → PUBLISHING → PUBLISHED
  *   (or → REJECTED at any vote/validation step)
  *
- * Storage: separate Neon kv_store row ("work-store" key, not mixed with salon store).
+ * Storage: one Neon kv_store row per work (`work:<id>`). Salon data uses
+ * relational tables; published certificates are additionally recorded on Base.
  * The HTML artifact stored on-chain is built by buildWorkHtml() — no IPFS, all on Base.
  */
 
@@ -14,6 +15,7 @@ import fs   from "fs";
 import path from "path";
 import { revalidateTag } from "next/cache";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { cleanDiagnosticText } from "@/lib/redact";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,16 +31,45 @@ export type WorkState =
   | "REJECTED"
   // Circuit breaker (Sept 2026 pérennisation pass): a work that fails
   // similarly 3 times in a row pauses here instead of looping CREATING <->
-  // VALIDATING forever — see stepNeedsRethink() in work-lifecycle. Not a
-  // rejection: the work resumes automatically (new author + fresh brief) once
-  // the cause looks like a creative mismatch, or waits on a human dev-request
-  // if the cause looks technical (a structural validator failure).
-  | "NEEDS_RETHINK";
+  // VALIDATING forever — see stepNeedsRethink() in work-lifecycle. As of the
+  // 29/09/2026 incident review, NEEDS_RETHINK is reserved for a genuine
+  // CREATIVE impasse (three similar curator rejections) — it resumes
+  // automatically (new author + fresh brief). An infrastructure failure
+  // (RPC/LLM/relayer) never lands here anymore; it goes to BLOCKED_TECHNICAL
+  // below instead. needsRethinkReason can still read "technical" on rows
+  // written before this change — treated the same as BLOCKED_TECHNICAL by
+  // every UI/admin surface, never auto-resumed.
+  | "NEEDS_RETHINK"
+  // An operational/infrastructure failure (RPC read/write, LLM provider,
+  // relayer) — NEVER a verdict on the work's artistic merit or on the
+  // member vote that approved it. Distinct from NEEDS_RETHINK precisely so a
+  // Vercel timeout or a flaky RPC read can never look like — or be logged
+  // as — "the community rejected this". See pausedFromState/operational*
+  // fields below and reconcileWork/resumeTechnical in work-lifecycle's admin
+  // actions for the two recovery paths (fix-in-place vs. resume-and-retry).
+  | "BLOCKED_TECHNICAL";
 
 export const ACTIVE_STATES: WorkState[] = [
   "PROPOSED", "VOTE_OPEN", "VOTE_TALLIED",
-  "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING", "NEEDS_RETHINK",
+  "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING", "NEEDS_RETHINK", "BLOCKED_TECHNICAL",
 ];
+
+// Stable, cleaned-only error codes for BLOCKED_TECHNICAL works — never a raw
+// provider error string. See src/lib/redact.ts for why raw text is never
+// safe to persist/expose directly.
+export type OperationalErrorCode =
+  | "RPC_READ_UNKNOWN"          // a read (e.g. initialized()) failed/threw — treated as UNKNOWN, never coerced to false
+  | "RPC_READ_TIMEOUT"
+  | "RPC_RATE_LIMIT"
+  | "TX_SEND_REJECTED"          // the node rejected the tx before/without executing it (e.g. gas cap, malformed params)
+  | "TX_REVERTED"                // tx was mined but reverted on-chain
+  | "POST_TX_VERIFICATION_FAILED" // tx confirmed, but re-reading on-chain state afterwards didn't match expectations
+  | "ONCHAIN_MISMATCH"          // reconcileWork found a genuine, persistent divergence between DB and chain
+  | "LLM_EMPTY_CONTENT"
+  | "LLM_RATE_LIMIT"
+  | "LLM_PROVIDER_ERROR"
+  | "LLM_PARSE_ERROR"
+  | "UNKNOWN";
 
 /**
  * Creative capacity grows with the association without allowing an unlimited
@@ -122,7 +153,24 @@ export interface ANAWork {
   pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — pauses for technical review past MAX_PIPELINE_FAILS
   // Circuit breaker bookkeeping (see NEEDS_RETHINK state above).
   similarFailureStreak?: number;
+  // "technical" is legacy (rows written before BLOCKED_TECHNICAL existed) —
+  // no code path sets it anymore, but old rows keep it for display/history.
   needsRethinkReason?:   "technical" | "creative";
+
+  // ── BLOCKED_TECHNICAL bookkeeping (see WorkState doc above) ──────────────
+  // The state this work was in when the operational failure paused it —
+  // resumeTechnical() (admin action) returns it here, never to a fixed state,
+  // so e.g. a PUBLISHING-stage failure resumes at PUBLISHING, not CREATING.
+  pausedFromState?:          WorkState;
+  operationalErrorCode?:     OperationalErrorCode;
+  // Already redacted (see redact.ts) before it is ever assigned — safe to
+  // read back, but still admin-only in the API surface (not in the public
+  // /api/works DTO) since "safe to persist" isn't the same bar as "meant for
+  // a public audience".
+  operationalErrorMessage?:  string;
+  operationalFailCount?:     number;
+  lastAttemptAt?:            number;
+  nextRetryAt?:              number;
 
   // Post-publication community critique (non-creator Normies react/debate in the
   // work's archived salon for a limited window) — see openCritiqueWindow() in
@@ -181,11 +229,11 @@ export interface ANAWork {
   memorialKind?:            "batch" | "requested" | "milestone";
   memorialTier?:            1 | 2 | 3; // "requested" only
   // "milestone" only — a collective monument for every burn ANA has honored
-  // up to a 1000-burn threshold (see milestone-memorial/route.ts). burnedTokenIds
+  // up to a 100-burn threshold (see milestone-memorial/route.ts). burnedTokenIds
   // on a milestone work is only a small representative sample (personas/flavor
   // for the LLM prompt) — memorialTotalBurnedAtMilestone is the true count the
   // piece actually honors, and memorialMilestoneNumber which threshold this is
-  // (1 = first 1000 burns, 2 = first 2000, ...), used to gate re-triggering.
+  // (1 = first 100 burns, 2 = first 200, ...), used to gate re-triggering.
   memorialMilestoneNumber?:          number;
   memorialTotalBurnedAtMilestone?:   number;
   memorialPublicSupply?:    number;
@@ -214,6 +262,78 @@ export interface ANAWork {
   // a delivery that already succeeded on a PUBLISHING retry. Absence doesn't
   // mean delivery failed forever: the requester can always self-claim.
   requesterEditionDelivered?: boolean;
+}
+
+// ─── Public DTO (allow-list) ──────────────────────────────────────────────────
+//
+// GET /api/works is unauthenticated and cached at the edge — anything on
+// ANAWork reaches every visitor. The 29/09/2026 incident (a raw Alchemy RPC
+// URL, key included, sitting in validationNote and served verbatim here) was
+// caused by returning ANAWork objects directly. This is an ALLOW-list, not a
+// blocklist: a new ANAWork field is private by default and must be added
+// here deliberately before it reaches the public API, rather than leaking
+// automatically the way validationNote did.
+//
+// Every field below is either read directly by src/app/[locale]/works/WorksClient.tsx
+// or src/components/WorkInProgress.tsx today, or is a safe enum/summary value
+// (never a raw external error string). Diagnostic-only fields
+// (validationNote, pipelineFailCount, similarFailureStreak, vote*Outputs/
+// Errors/Retries, operationalErrorMessage/Code, operationalFailCount,
+// lastAttemptAt, nextRetryAt, pausedFromState, dispatch/arbiter ids,
+// reservedClaim*/honoredTokenIdsAdded/requesterEditionDelivered) stay
+// admin-only — see /api/admin/works.
+export type PublicANAWork = Pick<ANAWork,
+  | "id" | "proposedBy" | "proposedByName" | "proposedAt"
+  | "title" | "proposal" | "suggestedForm" | "state"
+  | "votes" | "voteOpenedAt" | "voteClosedAt" | "voteResult"
+  | "yesCount" | "noCount" | "absCount" | "totalVoters"
+  | "rapporteurTokenId" | "authorTokenId" | "curatorTokenId"
+  | "rapporteurName" | "authorName" | "curatorName"
+  | "artForm" | "ambitionLevel" | "editionPrice" | "editionSupply"
+  | "brief" | "briefAt" | "artworkText" | "artworkAt" | "revisionCount"
+  | "needsRethinkReason"
+  | "critiqueSummary" | "critiqueSummaryAt"
+  | "txHash" | "onChainWorkId" | "publishedAt" | "collectionAddress" | "editionTokenId"
+  | "salonId" | "isBurnMemorial" | "burnedTokenId" | "celebrationIds"
+  | "isFoundingWork" | "foundingContext" | "allElectedRoles"
+  | "drawPixels" | "drawCanvasW" | "drawCanvasH" | "cartelText"
+  | "burnedTokenIds" | "memorialKind" | "memorialTier"
+  | "memorialMilestoneNumber" | "memorialTotalBurnedAtMilestone"
+  | "memorialPublicSupply" | "memorialRequesterSupply"
+  | "memorialOpenEnded" | "memorialClaimDurationSeconds" | "onChainMemorialId"
+  | "pausedFromState"
+> & { stateHistory: StateHistoryEntry[] };
+
+const PUBLIC_WORK_FIELDS: Array<keyof PublicANAWork> = [
+  "id", "proposedBy", "proposedByName", "proposedAt",
+  "title", "proposal", "suggestedForm", "state", "stateHistory",
+  "votes", "voteOpenedAt", "voteClosedAt", "voteResult",
+  "yesCount", "noCount", "absCount", "totalVoters",
+  "rapporteurTokenId", "authorTokenId", "curatorTokenId",
+  "rapporteurName", "authorName", "curatorName",
+  "artForm", "ambitionLevel", "editionPrice", "editionSupply",
+  "brief", "briefAt", "artworkText", "artworkAt", "revisionCount",
+  "needsRethinkReason",
+  "critiqueSummary", "critiqueSummaryAt",
+  "txHash", "onChainWorkId", "publishedAt", "collectionAddress", "editionTokenId",
+  "salonId", "isBurnMemorial", "burnedTokenId", "celebrationIds",
+  "isFoundingWork", "foundingContext", "allElectedRoles",
+  "drawPixels", "drawCanvasW", "drawCanvasH", "cartelText",
+  "burnedTokenIds", "memorialKind", "memorialTier",
+  "memorialMilestoneNumber", "memorialTotalBurnedAtMilestone",
+  "memorialPublicSupply", "memorialRequesterSupply",
+  "memorialOpenEnded", "memorialClaimDurationSeconds", "onChainMemorialId",
+  "pausedFromState",
+];
+
+/** Strips a work down to the public allow-list above — see PublicANAWork's doc comment. */
+export function toPublicWork(work: ANAWork): PublicANAWork {
+  const out = {} as PublicANAWork;
+  for (const field of PUBLIC_WORK_FIELDS) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (out as any)[field] = work[field];
+  }
+  return out;
 }
 
 interface DispatchRotation {
@@ -490,14 +610,30 @@ export async function getSalonWorkOutcomes(): Promise<Record<string, SalonWorkOu
   return map;
 }
 
+// Free-text fields that can carry a raw external error message (RPC/LLM/
+// relayer) and therefore must never be persisted un-redacted — this is the
+// single choke point every updateWork() call goes through, so a call site
+// forgetting to clean its own error string (there are dozens across
+// work-lifecycle/route.ts and the relayer publishers) can't reintroduce the
+// 29/09/2026 secret-leak incident. Never includes artworkText/brief/proposal:
+// those are creative content, not diagnostics, and must reach storage
+// byte-for-byte.
+const DIAGNOSTIC_TEXT_FIELDS = ["validationNote", "operationalErrorMessage"] as const;
+
 export async function updateWork(id: string, updates: Partial<ANAWork>): Promise<void> {
-  await writeOneWork(id, w => Object.assign(w, updates));
+  const cleaned: Partial<ANAWork> = { ...updates };
+  for (const field of DIAGNOSTIC_TEXT_FIELDS) {
+    const value = cleaned[field];
+    if (typeof value === "string") (cleaned as Record<string, unknown>)[field] = cleanDiagnosticText(value);
+  }
+  await writeOneWork(id, w => Object.assign(w, cleaned));
 }
 
 export async function advanceState(id: string, newState: WorkState, note?: string): Promise<void> {
+  const cleanNote = note ? cleanDiagnosticText(note) : note;
   const updated = await writeOneWork(id, w => {
     w.state = newState;
-    w.stateHistory.push({ state: newState, at: Date.now(), note });
+    w.stateHistory.push({ state: newState, at: Date.now(), note: cleanNote });
   });
   if (updated) console.log(`[workStore] ${id} → ${newState}${note ? ` (${note})` : ""}`);
   // A pixel-drawing memorial reaching PUBLISHED is exactly the case

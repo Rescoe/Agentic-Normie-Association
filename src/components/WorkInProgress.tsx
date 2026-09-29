@@ -9,7 +9,8 @@ import { getNormieImageUrl } from "@/lib/normiesApi";
 
 type WorkState =
   | "PROPOSED" | "VOTE_OPEN" | "VOTE_TALLIED" | "BRIEFING"
-  | "CREATING" | "VALIDATING" | "PUBLISHING" | "PUBLISHED" | "REJECTED";
+  | "CREATING" | "VALIDATING" | "PUBLISHING" | "PUBLISHED" | "REJECTED"
+  | "NEEDS_RETHINK" | "BLOCKED_TECHNICAL";
 
 interface ActiveWork {
   id:                string;
@@ -31,12 +32,22 @@ interface ActiveWork {
   brief?:            string;
   artworkText?:      string;
   isBurnMemorial?:   boolean;
+  // Present only for a paused work (see workStore.ts) — never a raw
+  // diagnostic string, just enough to label the pause honestly without
+  // implying an artistic rejection.
+  needsRethinkReason?: "technical" | "creative";
+  pausedFromState?:    WorkState;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+// A paused work (NEEDS_RETHINK/BLOCKED_TECHNICAL) must stay visible here — it
+// is neither published nor rejected, and hiding it (the 29/09/2026 incident:
+// "Unburned Roots' Reverie" vanished from every public/admin view the moment
+// it paused) makes a real, still-in-progress piece look lost.
 const ACTIVE_STATES: WorkState[] = [
   "PROPOSED", "VOTE_OPEN", "VOTE_TALLIED", "BRIEFING", "CREATING", "VALIDATING", "PUBLISHING",
+  "NEEDS_RETHINK", "BLOCKED_TECHNICAL",
 ];
 
 const STATE_STEPS: WorkState[] = [
@@ -55,6 +66,8 @@ function useStateLabels(): Record<WorkState, string> {
     PUBLISHING:   t("statePublishing"),
     PUBLISHED:    t("statePublished"),
     REJECTED:     t("stateRejected"),
+    NEEDS_RETHINK:     t("stateNeedsRethink"),
+    BLOCKED_TECHNICAL: t("stateBlockedTechnical"),
   };
 }
 
@@ -152,23 +165,34 @@ function WorkCard({
   stateLabels: Record<WorkState, string>;
 }) {
   const t = useTranslations("workInProgress");
-  const stepIdx  = STATE_STEPS.indexOf(work.state);
-  const progress = Math.round(((stepIdx + 1) / STATE_STEPS.length) * 100);
+  const isPaused = work.state === "NEEDS_RETHINK" || work.state === "BLOCKED_TECHNICAL";
+  // A paused work's progress bar freezes at whatever step it was at before
+  // pausing (pausedFromState) rather than showing 0% — it hasn't lost its
+  // place, it's just stalled there.
+  const stepIdx  = STATE_STEPS.indexOf(isPaused ? (work.pausedFromState ?? work.state) : work.state);
+  const progress = Math.round((((stepIdx < 0 ? 0 : stepIdx) + 1) / STATE_STEPS.length) * 100);
 
   return (
-    <div className="border border-[--border] bg-[--bg-card]">
+    <div className={`border bg-[--bg-card] ${isPaused ? "border-orange-300" : "border-[--border]"}`}>
       {/* Header */}
       <div className="border-b border-[--border] px-5 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse shrink-0" />
+          <span className={`w-2 h-2 rounded-full shrink-0 ${isPaused ? "bg-orange-500" : "bg-purple-500 animate-pulse"}`} />
           <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">
-            {t("inProgress")}
+            {isPaused ? t("paused") : t("inProgress")}
           </p>
         </div>
-        <span className="font-mono text-xs border border-purple-400 text-purple-600 px-2 py-0.5">
+        <span className={`font-mono text-xs border px-2 py-0.5 ${isPaused ? "border-orange-400 text-orange-600" : "border-purple-400 text-purple-600"}`}>
           {stateLabels[work.state]}
         </span>
       </div>
+      {isPaused && (
+        <p className="px-5 pt-3 font-mono text-xs text-orange-700">
+          {work.state === "NEEDS_RETHINK" && work.needsRethinkReason !== "technical"
+            ? t("pausedCreative")
+            : t("pausedTechnical")}
+        </p>
+      )}
 
       <div className="p-5 space-y-4">
         {/* Title + proposal */}
