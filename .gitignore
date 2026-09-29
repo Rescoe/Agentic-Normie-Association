@@ -26,6 +26,7 @@ Thumbs.db
 
 # Runtime data (local persistence — not for git)
 .salon-data.json
+.ana-news.json
 data/*
 !data/works.json
 !data/salon.json
