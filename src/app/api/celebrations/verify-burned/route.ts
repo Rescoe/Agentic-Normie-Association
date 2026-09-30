@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
   const addr = process.env.NORMIES_CONTRACT_ADDRESS as `0x${string}` | undefined;
   let burned = false;
   if (!addr) {
-    return NextResponse.json({ burned: false, error: "NORMIES_CONTRACT_ADDRESS non configuré" });
+    return NextResponse.json({ burned: false, error: "NORMIES_CONTRACT_ADDRESS is not configured." });
   }
   try {
     await mainnetClient.readContract({

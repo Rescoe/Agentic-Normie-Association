@@ -1,13 +1,8 @@
 name: ANA — Batch Memorial
 
 on:
-  schedule:
-    # Weekly, Sunday 03:00 UTC — drains the burns queued by check-burns.yml's
-    # 15-min detection tick into ONE collective memorial. Batching (instead of
-    # one memorial per burn) is what keeps the relayer solvent: creation now
-    # costs 2 relayer-paid transactions per WEEK regardless of how many burns
-    # happened, instead of 3 per burn.
-    - cron: '0 3 * * 0'
+  # Manual recovery only. The recurring weekly run is grouped into the main
+  # orchestrator so it cannot create an independent Neon wake-up.
   workflow_dispatch:
 
 jobs:

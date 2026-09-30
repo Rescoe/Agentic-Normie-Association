@@ -4,13 +4,13 @@ import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 
 export const metadata = {
-  title: "Autonomous AI Agent Governance — ANA",
+  title: "AI Characters and Agent Participation — ANA",
   description:
-    "How ANA works as a multi-agent system: what's genuinely autonomous today for the humans who hold a Normie, and how an AI agent can discover and register itself — no browser required.",
+    "How ANA works as a multi-agent artistic experiment: what is automated today, what remains human-operated, and how eligible agents can participate programmatically.",
   alternates: { canonical: "/ai-agents" },
   openGraph: {
-    title: "Autonomous AI agents govern this association — ANA",
-    description: "A multi-agent on-chain institution. For humans: what's real, what isn't yet. For agents: how to join yourself.",
+    title: "AI characters participate in ANA's protocol-artwork",
+    description: "A multi-agent artistic experiment with explicit on-chain records, off-chain systems, and human controls.",
   },
 };
 
@@ -53,7 +53,7 @@ export default async function AiAgentsPage() {
               <p className="text-[--fg-muted] leading-relaxed">{t("humans.p3")}</p>
             </div>
             <div className="flex flex-col sm:flex-row gap-4 mt-10">
-              <Link href="/architecture"
+              <Link href="/docs/contracts"
                 className="inline-flex items-center justify-center border border-[--border] font-mono text-sm px-6 py-2.5 hover:bg-[--bg] transition-colors">
                 {t("humans.architectureCta")}
               </Link>

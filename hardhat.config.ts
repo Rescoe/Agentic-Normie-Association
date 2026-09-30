@@ -1,4 +1,8 @@
 import { HardhatUserConfig } from "hardhat/config";
+// Keep the assertion matchers explicit. Some package-manager layouts load the
+// toolbox's ethers plugin but omit this side effect, leaving contract tests
+// without `emit`, `reverted`, or `revertedWithCustomError`.
+import "@nomicfoundation/hardhat-chai-matchers";
 import "@nomicfoundation/hardhat-toolbox";
 import * as dotenv from "dotenv";
 

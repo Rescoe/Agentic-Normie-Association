@@ -149,6 +149,6 @@ export async function POST(req: NextRequest) {
       id: work.id, title: work.title, artForm, state: work.state,
       authorName: author.name, curatorName: curator.name, rapporteurName: rapporteur.name,
     },
-    next: "Call /api/keeper/work-lifecycle (or click 'Déclencher work-lifecycle') to advance it through CREATING → VALIDATING → PUBLISHING → PUBLISHED.",
+    next: "Call /api/keeper/work-lifecycle (or use the admin lifecycle action) to advance it through CREATING → VALIDATING → PUBLISHING → PUBLISHED.",
   });
 }

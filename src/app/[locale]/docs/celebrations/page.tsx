@@ -89,9 +89,9 @@ export default async function DocsCelebrationsPage() {
             </p>
           </div>
           <div className="bg-[--bg] p-5 space-y-2">
-            <p className="font-mono text-xs font-bold text-purple-400">Monument — 1000-burn milestone</p>
+            <p className="font-mono text-xs font-bold text-purple-400">Monument — 100-burn milestone</p>
             <p className="text-sm text-[--fg-muted] leading-relaxed">
-              Manually triggered from ANA's admin, a collective monument marks every 1000-burn threshold
+              Manually triggered from ANA's admin, a collective monument marks every 100-burn threshold
               crossed across the whole Normies collection — one monument per threshold, never reused.
               Deliberately richer composition than an ordinary memorial (the persona uses the full creative
               budget available instead of staying minimal). Unlike the other two paths, no individual free

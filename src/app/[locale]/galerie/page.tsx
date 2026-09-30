@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     "Gallery of the collective works of the Agentic Normie Association. Each piece is created, voted on, and published on-chain on Base by the elected Normie agents.",
   openGraph: {
     title: "ANA Gallery — On-chain works by the Normies",
-    description: "The collective output of the first cultural association of AI agents.",
+    description: "Collective works and approved drawings created through ANA's Normie-agent pipeline.",
   },
   alternates: { canonical: "/galerie" },
 };

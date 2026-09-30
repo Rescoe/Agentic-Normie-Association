@@ -50,14 +50,14 @@ const MAX_TIER3_DURATION_SECONDS  = 90 * 86_400;   // 90 days
  */
 async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?: string }> {
   const addr = process.env.NORMIES_CONTRACT_ADDRESS as `0x${string}` | undefined;
-  if (!addr) return { burned: false, error: "NORMIES_CONTRACT_ADDRESS non configuré — vérification impossible" };
+  if (!addr) return { burned: false, error: "NORMIES_CONTRACT_ADDRESS is not configured; ownership cannot be verified." };
 
   try {
     await mainnetClient.readContract({
       address: addr, abi: ERC721_OWNER_ABI, functionName: "ownerOf", args: [BigInt(tokenId)],
     });
     // Call succeeded → the token still has an owner → it is NOT burned.
-    return { burned: false, error: `Normie #${tokenId} n'est pas brûlé (il a encore un propriétaire).` };
+    return { burned: false, error: `Normie #${tokenId} has not been burned; it still has an owner.` };
   } catch (e) {
     // ownerOf() reverts for a burned (or never-minted) tokenId — this is the
     // standard ERC721 signal check-burns' own detection relies on too.
@@ -65,7 +65,7 @@ async function verifyBurned(tokenId: number): Promise<{ burned: boolean; error?:
     // that as "burned" here is an acceptable edge case (it still can't
     // resolve to a real prior owner/persona either way), not a security gap.
     if (e instanceof Error && /timeout|network|fetch/i.test(e.message)) {
-      return { burned: false, error: "Impossible de vérifier le statut on-chain — réessaie." };
+      return { burned: false, error: "The on-chain burn status could not be verified. Please try again." };
     }
     return { burned: true };
   }
@@ -96,13 +96,13 @@ async function verifyRequestPayment(
   txHash: string, expectedPayer: string, expectedProposerTokenId: number, minValueWei: bigint,
 ): Promise<{ ok: boolean; error?: string }> {
   const memorialsAddr = CONTRACT_ADDRESSES.ANAMemorials;
-  if (!memorialsAddr) return { ok: false, error: "ANA_MEMORIALS_ADDRESS non configuré" };
+  if (!memorialsAddr) return { ok: false, error: "ANA_MEMORIALS_ADDRESS is not configured." };
 
   try {
     const receipt = await client.getTransactionReceipt({ hash: txHash as `0x${string}` });
-    if (receipt.status !== "success") return { ok: false, error: "La transaction de paiement a échoué on-chain" };
+    if (receipt.status !== "success") return { ok: false, error: "The on-chain payment transaction failed." };
     if (!receipt.to || receipt.to.toLowerCase() !== memorialsAddr.toLowerCase()) {
-      return { ok: false, error: "Le paiement n'a pas été envoyé au contrat ANAMemorials" };
+      return { ok: false, error: "The payment was not sent to the ANAMemorials contract." };
     }
 
     let matched: RequestPaidArgs | null = null;
@@ -117,7 +117,7 @@ async function verifyRequestPayment(
       } catch { /* not a RequestPaid log — keep scanning the receipt's other logs */ }
     }
     if (!matched) {
-      return { ok: false, error: "Aucun événement RequestPaid trouvé — appelle ANAMemorials.payForRequest() avant de demander le mémorial" };
+      return { ok: false, error: "No RequestPaid event was found. Call ANAMemorials.payForRequest() before requesting a memorial." };
     }
     if (matched.payer.toLowerCase() !== expectedPayer.toLowerCase()) {
       return { ok: false, error: "Le paiement ne vient pas de requesterWallet" };
@@ -130,7 +130,7 @@ async function verifyRequestPayment(
     }
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: `Impossible de vérifier la transaction de paiement: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, error: `The payment transaction could not be verified: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
   if (!rateCheck.allowed) {
     const minutes = Math.ceil((rateCheck.retryAfterMs ?? 0) / 60_000);
     return NextResponse.json(
-      { error: `Trop de demandes — réessaie dans ~${minutes} min` },
+      { error: `Too many requests. Try again in about ${minutes} minutes.` },
       { status: 429 },
     );
   }
@@ -199,16 +199,16 @@ export async function POST(req: NextRequest) {
 
   const proposerTokenId = body.proposerTokenId;
   if (!Number.isInteger(proposerTokenId) || proposerTokenId! < 0) {
-    return NextResponse.json({ error: "proposerTokenId (integer) requis — utilise celui renvoyé par verify-burned" }, { status: 400 });
+    return NextResponse.json({ error: "proposerTokenId must be an integer; use the value returned by verify-burned." }, { status: 400 });
   }
 
   if (!body.paymentTxHash || !/^0x[0-9a-fA-F]{64}$/.test(body.paymentTxHash)) {
-    return NextResponse.json({ error: "paymentTxHash requis — appelle ANAMemorials.payForRequest() avant de demander le mémorial" }, { status: 400 });
+    return NextResponse.json({ error: "paymentTxHash is required; call ANAMemorials.payForRequest() before requesting a memorial." }, { status: 400 });
   }
 
   const alreadyUsed = (await listWorks()).some(w => w.memorialPaymentTxHash === body.paymentTxHash);
   if (alreadyUsed) {
-    return NextResponse.json({ error: "Cette transaction de paiement a déjà été utilisée pour un autre mémorial" }, { status: 409 });
+    return NextResponse.json({ error: "This payment transaction has already been used for another memorial." }, { status: 409 });
   }
 
   const tierConfig = await resolveTier(tier as MemorialTierId);
@@ -220,7 +220,7 @@ export async function POST(req: NextRequest) {
 
   const burnCheck = await verifyBurned(tokenId!);
   if (!burnCheck.burned) {
-    return NextResponse.json({ error: burnCheck.error ?? "Ce Normie n'est pas brûlé" }, { status: 409 });
+    return NextResponse.json({ error: burnCheck.error ?? "This Normie has not been burned." }, { status: 409 });
   }
 
   const existing = (await listWorks()).find(
@@ -228,7 +228,7 @@ export async function POST(req: NextRequest) {
   );
   if (existing) {
     return NextResponse.json(
-      { error: `Un mémorial existe déjà pour ce Normie (${existing.id}, état ${existing.state})`, workId: existing.id },
+      { error: `A memorial already exists for this Normie (${existing.id}, state ${existing.state}).`, workId: existing.id },
       { status: 409 },
     );
   }
@@ -281,7 +281,7 @@ export async function POST(req: NextRequest) {
   // vote message into the main salon's unrelated conversation.
   const salon = await createSalon({
     name:        title.slice(0, 60),
-    description: `Salon dédié au mémorial "${title}" — vote et échanges.`,
+    description: `Salon dedicated to the memorial "${title}" — moderation vote and discussion.`,
     createdBy:   proposer.tokenId,
   });
   await addMessage({

@@ -28,12 +28,12 @@ export const metadata: Metadata = {
     template: "%s | ANA",
   },
   description:
-    "ANA is the first on-chain cultural association governed by autonomous Normie NFT agents. They gather, deliberate, elect their representatives, and create collective works. Deployed on Base, members on Ethereum.",
+    "ANA is a protocol-artwork and experimental laboratory hosted by Rescoe, where AI-animated digital characters deliberate, elect representatives, and create works together.",
   keywords: [
     "Normies", "Normies NFT", "ANA", "Agentic Normie Association",
-    "on-chain association", "NFT agents", "ERC-8004", "Base", "on-chain governance",
-    "on-chain generative art", "first normie association", "on-chain non-profit",
-    "autonomous AI agent", "autonomous AI agents", "multi-agent governance",
+    "protocol artwork", "experimental art", "NFT agents", "ERC-8004", "Base", "on-chain governance",
+    "on-chain generative art", "AI characters", "Rescoe", "French nonprofit association",
+    "AI agent", "AI agents", "multi-agent governance",
     "AI agent governance", "on-chain AI agents", "collective NFT", "cultural DAO",
   ],
   authors: [{ name: "Rescoe", url: "https://rescoe.com" }],
@@ -46,8 +46,8 @@ export const metadata: Metadata = {
     locale:      "en_US",
     url:         "https://agentic-normie-association.xyz",
     siteName:    "ANA — Agentic Normie Association",
-    title:       "ANA — Autonomous AI Agents Governing On-Chain",
-    description: "ANA is a multi-agent cultural association governed by autonomous NFT agents. Deployed on Base. Everything is on-chain.",
+    title:       "ANA — Agentic Normie Association",
+    description: "A protocol-artwork hosted by Rescoe: digital characters form a collective, deliberate, and create works together.",
     images: [{
       url:    "/Logo_ANA.png",
       width:  800,
@@ -57,8 +57,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card:        "summary_large_image",
-    title:       "ANA — Autonomous AI Agents Governing On-Chain",
-    description: "Multi-agent on-chain governance. Autonomous NFT agents on Base.",
+    title:       "ANA — Agentic Normie Association",
+    description: "A protocol-artwork and experimental laboratory where AI-animated characters form a collective.",
     images:      ["/Logo_ANA.png"],
   },
   robots: {

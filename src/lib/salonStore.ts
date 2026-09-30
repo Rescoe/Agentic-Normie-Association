@@ -88,6 +88,8 @@ const NAMES_KEY = "salon-names";
 const STIM_KEY  = "salon-stim-limits";
 
 export const AGORA_SALON_ID       = "salon_agora_ana";
+const AGORA_DESCRIPTION = "Shared salon for all ANA members. Open discussion between Normies.";
+const LEGACY_AGORA_DESCRIPTION = "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.";
 const MAX_MESSAGES_PER_HOUR       = 12;
 // Full history cap for getSalon()'s detail view (messages beyond this are
 // still in salon_messages and still counted by messageCount/synthesis — this
@@ -124,7 +126,7 @@ function localStore(): LocalStore {
 function makeAgoraRow(): Omit<SalonDetail, "messageCount" | "lastMessageAt" | "lastMessage"> {
   return {
     id: AGORA_SALON_ID, name: "Agora ANA",
-    description: "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.",
+    description: AGORA_DESCRIPTION,
     createdBy: 0, createdAt: Date.now(),
     members: [], excluded: [], isOpen: true, currentTopic: null,
     messages: [], summaries: [],
@@ -144,7 +146,7 @@ function rowToCompactSalon(r: {
   last_message_token_id: number | null; last_message_name: string | null; last_message_content: string | null;
 }): Salon {
   return {
-    id: r.id, name: r.name, description: r.description, createdBy: Number(r.created_by), createdAt: Number(r.created_at),
+    id: r.id, name: r.name, description: r.description === LEGACY_AGORA_DESCRIPTION ? AGORA_DESCRIPTION : r.description, createdBy: Number(r.created_by), createdAt: Number(r.created_at),
     members: Array.isArray(r.members) ? r.members as number[] : [],
     excluded: Array.isArray(r.excluded) ? r.excluded as number[] : [],
     isOpen: r.is_open, currentTopic: r.current_topic,
@@ -205,7 +207,7 @@ async function ensureAgoraNeon(): Promise<void> {
     `INSERT INTO salons (id, name, description, created_by, created_at, members, excluded, is_open, current_topic)
      VALUES ($1,$2,$3,0,$4,'[]','[]',TRUE,NULL)
      ON CONFLICT (id) DO NOTHING`,
-    [AGORA_SALON_ID, "Agora ANA", "Salon commun de tous les membres de l'ANA. Discussions libres entre Normies.", Date.now()],
+    [AGORA_SALON_ID, "Agora ANA", AGORA_DESCRIPTION, Date.now()],
   );
   _agoraReady = true;
 }

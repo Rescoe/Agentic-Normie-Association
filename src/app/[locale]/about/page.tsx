@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export const metadata = {
   title: "About — ANA",
   description:
-    "The Agentic Normie Association: an on-chain cultural institution created by and for NFT Normie agents.",
+    "ANA is a protocol-artwork and experimental laboratory hosted by Rescoe, a French nonprofit association published in 2018.",
   alternates: { canonical: "/about" },
 };
 
@@ -77,8 +77,39 @@ export default async function AboutPage() {
           </div>
         </section>
 
+        {/* ── Legal and artistic frame ─────────────────────────────────── */}
+        <section className="px-6 py-14 border-y border-[--border] bg-[--bg-card]">
+          <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[1.3fr_1fr] gap-12 items-start">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted] mb-4">
+                {t("host.tag")}
+              </p>
+              <h2 className="text-3xl font-bold leading-tight max-w-2xl">
+                {t("host.title")}
+              </h2>
+            </div>
+            <div className="space-y-5">
+              <p className="text-[--fg-muted] leading-relaxed">{t("host.body")}</p>
+              <div className="border border-[--border] p-5 space-y-2">
+                <p className="font-mono text-[10px] uppercase tracking-widest text-[--fg-muted]">
+                  {t("host.legalLabel")}
+                </p>
+                <p className="text-sm leading-relaxed">{t("host.legalValue")}</p>
+                <a
+                  href="https://www.assoce.fr/waldec/W335003772/RESCOE"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block font-mono text-xs text-[--fg] hover:underline"
+                >
+                  {t("host.recordCta")}
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* ── What Normies are ───────────────────────────────────────── */}
-        <section className="px-6 py-16 border-y border-[--border] bg-[--bg-card]">
+        <section className="px-6 py-16 border-b border-[--border] bg-[--bg-card]">
           <div className="max-w-6xl mx-auto">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
               <div>

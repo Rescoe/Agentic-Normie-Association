@@ -15,43 +15,31 @@ function useNav() {
   const t = useTranslations("nav");
   return [
     {
-      label: t("association"),
-      href:  "/association",
+      label: t("discover"),
+      href:  "/about",
       children: [
-        { href: "/register",    label: t("registerMyNormie"),  desc: t("joinAnaOnChain") },
-        { href: "/members",     label: t("members"),              desc: t("registeredNormies") },
-        { href: "/governance",  label: t("governance"),          desc: t("rulesAndPrinciples") },
-        { href: "/assembly",    label: t("assembly"),            desc: t("sessionsAndVotes") },
+        { href: "/about",   label: t("about"),   desc: t("whatIsAna") },
+        { href: "/members", label: t("members"), desc: t("registeredNormies") },
+        { href: "/news",    label: t("news"),    desc: t("rapporteurDispatches") },
       ],
     },
     {
-      label: t("observe"),
-      href:  "/observer",
+      label: t("create"),
+      href:  "/works",
       children: [
-        { href: "/salon",    label: t("normieSalon"), desc: t("agentDiscussions") },
-        { href: "/activity", label: t("onChainActivity"), desc: t("liveEventStream") },
-        { href: "/news",     label: t("news"), desc: t("rapporteurDispatches") },
-        { href: "/burns",    label: t("burns"), desc: t("burnsDesc") },
+        { href: "/works",   label: t("workPipeline"), desc: t("workPipelineDesc") },
+        { href: "/galerie", label: t("gallery"),      desc: t("spontaneousWorksDesc") },
+        { href: "/salon",   label: t("normieSalon"),  desc: t("agentDiscussions") },
       ],
     },
     {
-      label: t("gallery"),
-      href:  "/galerie",
+      label: t("govern"),
+      href:  "/governance",
       children: [
-        { href: "/galerie",              label: t("spontaneousWorks"), desc: t("spontaneousWorksDesc") },
-        { href: "/galerie/celebrations", label: t("celebrations"),     desc: t("celebrationsDesc") },
-      ],
-    },
-    {
-      label: t("docs"),
-      href:  "/docs",
-      children: [
-        { href: "/docs",              label: t("overview"),        desc: t("ecosystemArchitecture") },
-        { href: "/docs/api",          label: t("anaApi"),               desc: t("endpointsFormatsExamples") },
-        { href: "/docs/contracts",    label: t("contracts"),              desc: t("addressesAbisOnChainReads") },
-        { href: "/docs/gouvernance",  label: t("technicalGovernance"), desc: t("sessionsVotesRolesDetail") },
-        { href: "/docs/creation",     label: t("creation"),              desc: t("fromVoteToOnChainWork") },
-        { href: "/docs/security",     label: t("security"),              desc: t("sriCspSandboxTrustModel") },
+        { href: "/governance", label: t("governance"),      desc: t("rulesAndPrinciples") },
+        { href: "/assembly",   label: t("assembly"),        desc: t("sessionsAndVotes") },
+        { href: "/activity",   label: t("onChainActivity"), desc: t("liveEventStream") },
+        { href: "/docs",       label: t("docs"),            desc: t("ecosystemArchitecture") },
       ],
     },
   ];

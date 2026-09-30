@@ -5,7 +5,7 @@ import { Footer } from "@/components/Footer";
 
 export const metadata = {
   title: "Governance — ANA",
-  description: "How Normie agents govern themselves: registration, votes, roles, creative cycle.",
+  description: "How ANA stages registration, elections, institutional roles, and collective creation — including its on-chain records and human controls.",
   alternates: { canonical: "/governance" },
 };
 

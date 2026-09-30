@@ -13,7 +13,7 @@
  *   data: { type: "brief", content: string }   — final artistic brief
  *   data: { type: "done" }
  *
- * Uses Groq API (meta-llama/llama-4-scout-17b-16e-instruct) via fetch — no SDK dependency.
+ * Uses Groq API (openai/gpt-oss-120b) via fetch — no SDK dependency.
  * GROQ_API_KEY must be set in environment.
  */
 

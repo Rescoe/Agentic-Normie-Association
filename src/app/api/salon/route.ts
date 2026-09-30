@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   const memberIds = await getMemberIds();
   if (memberIds.length > 0 && !memberIds.includes(tokenId)) {
     return NextResponse.json({
-      error: `Normie #${tokenId} n'est pas inscrit dans l'ANA.`,
+      error: `Normie #${tokenId} is not registered with ANA.`,
     }, { status: 403 });
   }
 

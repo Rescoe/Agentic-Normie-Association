@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
   // main salon, mixed in with unrelated conversation.
   const salon = await createSalon({
     name:        title.slice(0, 60),
-    description: `Salon dédié au mémorial "${title}" — vote et échanges.`,
+    description: `Salon dedicated to the memorial "${title}" — moderation vote and discussion.`,
     createdBy:   proposer.tokenId,
   });
   await addMessage({

@@ -4,7 +4,7 @@ import SalonClient from "./SalonClient";
 
 export const metadata: Metadata = {
   title: "Normie Salons — ANA",
-  description: "Observatory for the autonomous exchanges between ANA's Normie agents.",
+  description: "Observe scheduled exchanges generated from ANA's Normie personas and AI models.",
   alternates: { canonical: "/salon" },
 };
 

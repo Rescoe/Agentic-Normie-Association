@@ -58,7 +58,7 @@ describe("WorkRegistry", function () {
   let curator:      SignerWithAddress; // tokenId 20
   let rapporteur:   SignerWithAddress; // tokenId 30
 
-  const IPFS_HASH = "bafyreib2rxk3rybk3aobmv5f27ub4e6vkzfcfobwn2x2oa2k3q4g6l7yq";
+  const CONTENT = "data:text/html;base64,PGh0bWw+PGJvZHk+QU5BPC9ib2R5PjwvaHRtbD4=";
 
   beforeEach(async function () {
     [owner, relayer, moduleOwner, author, curator, rapporteur] =
@@ -105,15 +105,15 @@ describe("WorkRegistry", function () {
   describe("publish()", function () {
     it("publishes a work when called by the Rapporteur", async function () {
       await expect(
-        workRegistry.connect(rapporteur).publish(IPFS_HASH, 10, 20, 30)
+        workRegistry.connect(rapporteur).publish(CONTENT, 10, 20, 30)
       )
         .to.emit(workRegistry, "WorkPublished")
-        .withArgs(0n, IPFS_HASH, 10n, 30n, anyValue);
+        .withArgs(0n, CONTENT, 10n, 30n, anyValue);
 
       expect(await workRegistry.getWorkCount()).to.equal(1n);
 
       const work = await workRegistry.getWork(0);
-      expect(work.ipfsHash).to.equal(IPFS_HASH);
+      expect(work.content).to.equal(CONTENT);
       expect(work.authorTokenId).to.equal(10n);
       expect(work.curatorTokenId).to.equal(20n);
       expect(work.rapporteurTokenId).to.equal(30n);
@@ -122,24 +122,24 @@ describe("WorkRegistry", function () {
 
     it("reverts if caller is not the Rapporteur", async function () {
       await expect(
-        workRegistry.connect(author).publish(IPFS_HASH, 10, 20, 30)
+        workRegistry.connect(author).publish(CONTENT, 10, 20, 30)
       ).to.be.revertedWithCustomError(workRegistry, "NotRapporteur");
     });
 
-    it("reverts if ipfsHash is empty", async function () {
+    it("reverts if content is empty", async function () {
       await expect(
         workRegistry.connect(rapporteur).publish("", 10, 20, 30)
-      ).to.be.revertedWithCustomError(workRegistry, "EmptyHash");
+      ).to.be.revertedWithCustomError(workRegistry, "EmptyContent");
     });
 
     it("reverts if a participant is not a member", async function () {
       await expect(
-        workRegistry.connect(rapporteur).publish(IPFS_HASH, 999, 20, 30)
+        workRegistry.connect(rapporteur).publish(CONTENT, 999, 20, 30)
       ).to.be.revertedWithCustomError(workRegistry, "ParticipantNotMember");
     });
 
     it("increments workId for each publication", async function () {
-      await workRegistry.connect(rapporteur).publish(IPFS_HASH, 10, 20, 30);
+      await workRegistry.connect(rapporteur).publish(CONTENT, 10, 20, 30);
       await workRegistry.connect(rapporteur).publish("bafyother", 10, 20, 30);
 
       const work0 = await workRegistry.getWork(0);
@@ -153,7 +153,7 @@ describe("WorkRegistry", function () {
 
   describe("archive()", function () {
     beforeEach(async function () {
-      await workRegistry.connect(rapporteur).publish(IPFS_HASH, 10, 20, 30);
+      await workRegistry.connect(rapporteur).publish(CONTENT, 10, 20, 30);
     });
 
     it("archives a work", async function () {

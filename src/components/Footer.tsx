@@ -1,18 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 
-// FactoryRegistry dropped (23/09 audit — confirmed dead, never read at
-// runtime, only ever written to by deploy scripts). ANAMemorials added in
-// its place — the contract that actually matters for quick Basescan access
-// now (celebrations/memorials). Its address isn't NEXT_PUBLIC_-prefixed
-// (Vercel rejected that name), so it's fetched client-side from
-// /api/memorials/list instead, same pattern used everywhere else this
-// address is needed in the browser.
+// Keep the footer static. Fetching a contract address here used to call
+// /api/memorials/list on every public page; a cache miss on that route reads
+// Neon. Contract discovery belongs in the dedicated documentation, not in a
+// global component that every visitor loads.
 const STATIC_CONTRACTS = [
   { name: "AssociationCore",      addr: CONTRACT_ADDRESSES.AssociationCore      },
   { name: "ConstituentAssembly",  addr: CONTRACT_ADDRESSES.ConstituentAssembly  },
@@ -22,46 +18,34 @@ const STATIC_CONTRACTS = [
 
 export function Footer() {
   const t = useTranslations("footer");
-
-  const [memorialsAddr, setMemorialsAddr] = useState("");
-  useEffect(() => {
-    fetch("/api/memorials/list")
-      .then(r => r.json())
-      .then((d: { contractAddress?: string }) => setMemorialsAddr(d.contractAddress ?? ""))
-      .catch(() => setMemorialsAddr(""));
-  }, []);
-
-  const CONTRACTS = [
-    ...STATIC_CONTRACTS,
-    ...(memorialsAddr ? [{ name: "ANAMemorials", addr: memorialsAddr }] : []),
-  ].filter(c => c.addr);
+  const CONTRACTS = STATIC_CONTRACTS.filter(c => c.addr);
 
   const NAV_GROUPS = [
     {
       label: t("theAssociation"),
       links: [
         { href: "/about",        label: t("about") },
-        { href: "/governance",   label: t("governance") },
-        { href: "/architecture", label: t("architecture") },
-        { href: "/roadmap",      label: t("roadmap") },
+        { href: "/members",      label: t("foundingMembers") },
+        { href: "/news",         label: "News" },
+        { href: "/register",     label: t("registerMyNormie") },
       ],
     },
     {
       label: t("participate"),
       links: [
-        { href: "/register", label: t("registerMyNormie") },
-        { href: "/members",  label: t("foundingMembers") },
-        { href: "/assembly", label: t("constituentAssembly") },
-        { href: "/galerie",    label: t("works") },
-        { href: "/news",       label: "News" },
+        { href: "/works",    label: "Work pipeline" },
+        { href: "/galerie",  label: t("works") },
+        { href: "/salon",    label: "Normie Salon" },
+        { href: "/galerie/celebrations", label: "Memorials" },
       ],
     },
     {
-      label: t("external"),
+      label: "Govern & verify",
       links: [
-        { href: "https://normies.art",               label: "Normies.art ↗",  external: true },
-        { href: "https://x.com/RoubziArt",           label: "@RoubziArt ↗",   external: true },
-        { href: "https://basescan.org",              label: "Basescan ↗",     external: true },
+        { href: "/governance", label: t("governance") },
+        { href: "/assembly",   label: t("constituentAssembly") },
+        { href: "/activity",   label: "On-chain activity" },
+        { href: "/docs",       label: "Documentation" },
       ],
     },
   ];

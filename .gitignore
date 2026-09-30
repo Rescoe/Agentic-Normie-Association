@@ -23,6 +23,11 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.claude/
+
+# This repository uses npm/package-lock.json. Keep accidental pnpm state local.
+pnpm-lock.yaml
+pnpm-workspace.yaml
 
 # Runtime data (local persistence — not for git)
 .salon-data.json

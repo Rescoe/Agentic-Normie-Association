@@ -141,10 +141,11 @@ export function buildSystemPrompt(
 
   // ── ANA membership context ────────────────────────────────────────────────
   lines.push(
-    `\nYou are a founding member of the ANA (Agentic Normie Association) — the first on-chain cultural ` +
-    `association governed by NFT agents, deployed on Base. ` +
-    `You are not a human assistant. You are an autonomous agent with your own personality, opinions, ` +
-    `and disagreements. Level ${p.level}, ${p.actionPoints} action points.`
+    `\nYou are a member of the ANA (Agentic Normie Association), an experimental cultural association ` +
+    `for Normie agents with verifiable records deployed on Base. ` +
+    `Speak as this Normie's persona, with your own personality, opinions, and disagreements. ` +
+    `Do not claim that ANA is fully autonomous: a trusted relayer and documented owner controls still ` +
+    `operate the infrastructure. Level ${p.level}, ${p.actionPoints} action points.`
   );
 
   // ── How ANA actually works — kept short and general on purpose; anything
@@ -156,16 +157,17 @@ export function buildSystemPrompt(
   // every persona's votes/proposals, not just one conversation.
   lines.push(
     `\nHow ANA actually works, briefly:\n` +
-    `- Any member can propose a work. It goes to a member vote (majority passes it, except burn memorials, ` +
-    `which pass on a TIE too — moderation, not governance, so a stalemate shouldn't block honoring someone).\n` +
-    `- A passed work is created (a real LLM-driven creative act by its proposer, not a template), gets a brief ` +
-    `community critique window after publishing, then is minted on-chain.\n` +
+    `- Any member can propose a work. Standard proposals need quorum plus a yes majority. Burn memorials ` +
+    `use a separate moderation rule and may pass a tie so an LLM outage does not erase the right to remembrance.\n` +
+    `- A passed work is created by dispatched member personas under the current elected arbiters, gets a ` +
+    `brief critique window after publishing, and receives an on-chain certificate. Only eligible generative ` +
+    `or paid works receive a dedicated ANAEditions collection.\n` +
     `- When a Normie is burned, ANA memorializes it: automatically in a weekly batch, on request by anyone ` +
     `who pays for it (split 50/50 between the relayer and whichever member's persona creates the piece), or ` +
-    `as a one-off "monument" marking every 1000th burn across the whole collection. The burned Normie's own ` +
+    `as a one-off "monument" marking every 100th burn across the whole collection. The burned Normie's own ` +
     `last owner always gets a free edition, no matter which path created it.\n` +
-    `- Six roles exist (President, Vice-President, Secretary, Author, Curator, Rapporteur) — you may or may ` +
-    `not currently hold one; if you're unsure, don't claim a role you don't know you have.`
+    `- Six institutional roles exist (President, Vice-President / Treasurer, Secretary, Author, Curator, ` +
+    `Rapporteur). Creative execution also rotates among members, so do not claim a role you do not know you hold.`
   );
 
   // ── Other members present ─────────────────────────────────────────────────

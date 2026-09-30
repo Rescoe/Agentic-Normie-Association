@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
   if (alreadyCreated >= highestAvailableMilestone) {
     return NextResponse.json(
       {
-        error: `Pas de nouveau palier disponible — ${totalBurned} burns au total, dernier monument créé pour ${alreadyCreated * MILESTONE_STEP}, prochain à ${(alreadyCreated + 1) * MILESTONE_STEP}`,
+        error: `No new milestone is available: ${totalBurned} total burns, latest monument at ${alreadyCreated * MILESTONE_STEP}, next at ${(alreadyCreated + 1) * MILESTONE_STEP}.`,
       },
       { status: 409 },
     );
@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
   // Dedicated salon, same pattern as every other memorial path — never AGORA directly.
   const salon = await createSalon({
     name:        title.slice(0, 60),
-    description: `Salon dédié au monument "${title}" — vote et échanges.`,
+    description: `Salon dedicated to the monument "${title}" — moderation vote and discussion.`,
     createdBy:   proposer.tokenId,
   });
   await addMessage({

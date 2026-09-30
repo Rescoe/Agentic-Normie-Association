@@ -5,6 +5,13 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  async redirects() {
+    return [
+      { source: "/architecture", destination: "/docs/contracts", permanent: true },
+      { source: "/data",         destination: "/docs/api",       permanent: true },
+      { source: "/roadmap",      destination: "/about",          permanent: true },
+    ];
+  },
   images: {
     remotePatterns: [
       {
@@ -14,9 +21,11 @@ const nextConfig = {
       },
     ],
   },
-  // pino-pretty is an optional peer dep of pino (server-side logging).
-  // Keep it external so Next.js doesn't try to bundle it.
-  serverExternalPackages: ["pino", "pino-pretty"],
+  // Next 14 keeps this option under `experimental`; the top-level name is a
+  // Next 15 API and was silently ignored with a build warning.
+  experimental: {
+    serverComponentsExternalPackages: ["pino", "pino-pretty"],
+  },
   webpack(config) {
     // Optional/React-Native peer deps pulled in by @metamask/sdk that don't
     // exist in a browser context — tell webpack to return an empty module.
