@@ -1218,6 +1218,8 @@ type ANAWorkFull = ANAWorkSummary & {
   operationalErrorCode?: string;
   operationalErrorMessage?: string;
   operationalFailCount?: number;
+  technicalRetryCount?: number;
+  nextRetryAt?: number;
   critiqueSummary?: string;
   rapporteurName?: string;
   authorName?: string;
@@ -1294,7 +1296,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
-      else { void refresh(); } // workStore now reads Neon directly, no cache to wait out
+      else { void loadDiagnostics(); }
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally { setRejectingId(null); }
@@ -1440,7 +1442,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
       });
       const d = await r.json() as Record<string, unknown>;
       setReconcileResult({ workId, ...d });
-      if (r.ok && !dryRun) void refresh();
+      if (r.ok && !dryRun) void loadDiagnostics();
     } catch (e) {
       setReconcileResult({ workId, error: e instanceof Error ? e.message : String(e) });
     } finally { setReconcilingId(null); }
@@ -1458,7 +1460,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
       });
       const d = await r.json() as Record<string, unknown>;
       if (!r.ok) alert((d.error as string) ?? `HTTP ${r.status}`);
-      else void refresh();
+      else void loadDiagnostics();
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally { setResumingId(null); }
@@ -1552,6 +1554,12 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                       : "Impasse créative — reprise automatique prévue (nouvel Auteur, brief neuf) au prochain cycle.")
                   : `Pause technique — état d'origine : ${w.pausedFromState ?? "inconnu"}${w.operationalErrorCode ? ` · code : ${w.operationalErrorCode}` : ""}${w.operationalFailCount ? ` · ${w.operationalFailCount} échec(s) consécutif(s)` : ""}`}
               </p>
+              {w.nextRetryAt && isTechnicalPause(w) && (
+                <p className="font-mono text-[10px] text-orange-700">
+                  Reprise automatique prévue : {new Date(w.nextRetryAt).toLocaleString("fr-FR")}
+                  {w.technicalRetryCount ? ` · tentative autonome n°${w.technicalRetryCount + 1}` : ""}
+                </p>
+              )}
               {w.validationNote && (
                 <p className="font-mono text-xs text-red-600">⚠ {w.validationNote}</p>
               )}

@@ -37,6 +37,7 @@ interface ActiveWork {
   // implying an artistic rejection.
   needsRethinkReason?: "technical" | "creative";
   pausedFromState?:    WorkState;
+  nextRetryAt?:        number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -187,11 +188,14 @@ function WorkCard({
         </span>
       </div>
       {isPaused && (
-        <p className="px-5 pt-3 font-mono text-xs text-orange-700">
-          {work.state === "NEEDS_RETHINK" && work.needsRethinkReason !== "technical"
+        <div className="px-5 pt-3 font-mono text-xs text-orange-700 space-y-1">
+          <p>{work.state === "NEEDS_RETHINK" && work.needsRethinkReason !== "technical"
             ? t("pausedCreative")
-            : t("pausedTechnical")}
-        </p>
+            : t("pausedTechnical")}</p>
+          {work.nextRetryAt && (
+            <p>{t("nextRetry", { date: new Date(work.nextRetryAt).toLocaleString() })}</p>
+          )}
+        </div>
       )}
 
       <div className="p-5 space-y-4">

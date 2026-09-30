@@ -31,7 +31,7 @@ import { verifyAdminRequest } from "@/lib/adminAuth";
 import { buildAGReportHtml } from "@/lib/agTemplate";
 import { groqFetch, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
 import { diagnoseGroqResult, isTransientGroqError, classifyGroqHttpFailure, type GroqCallOutcome, type GroqErrorCode } from "@/lib/groqDiagnostics";
-import { oneMinAiCode } from "@/lib/oneMinAi";
+import { oneMinAiCode, oneMinAiText, oneMinAiCritical, oneMinAiStructured, modelForOneMinAiTask } from "@/lib/oneMinAi";
 import { cdnForForm, validateGenerativeHtml } from "@/lib/generativeArtwork";
 import { createMemorialArtwork, MEMORIAL_CANVAS_W, MEMORIAL_CANVAS_H } from "@/lib/memorialArt";
 import { pixelsToBmpDataUri, encodeArtworkContent } from "@/lib/pixelImage";
@@ -40,6 +40,8 @@ import { recordVoteMetrics } from "@/lib/voteMetricsStore";
 import { recordLlmCall } from "@/lib/llmLedger";
 import { findMostSimilarFingerprint, extractFingerprintFields, saveFingerprint, FINGERPRINT_SIMILARITY_THRESHOLD } from "@/lib/creativeFingerprint";
 import { jaccardSimilarity } from "@/lib/topicEngine";
+import { isTechnicalRetryDue, nextTechnicalRetryAt, technicalResumeDestination } from "@/lib/technicalRetry";
+import { validateLiteraryArtwork } from "@/lib/literaryArtwork";
 
 const MODEL        = "openai/gpt-oss-120b";
 // Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
@@ -67,7 +69,7 @@ const MAX_PIPELINE_FAILS = 4;
 const OPERATIONAL_ERROR_CODES: OperationalErrorCode[] = [
   "RPC_READ_UNKNOWN", "RPC_READ_TIMEOUT", "RPC_RATE_LIMIT",
   "TX_SEND_REJECTED", "TX_REVERTED", "POST_TX_VERIFICATION_FAILED", "ONCHAIN_MISMATCH",
-  "LLM_EMPTY_CONTENT", "LLM_RATE_LIMIT", "LLM_PROVIDER_ERROR", "LLM_PARSE_ERROR", "UNKNOWN",
+  "LLM_EMPTY_CONTENT", "LLM_TOKEN_LIMIT", "LLM_RATE_LIMIT", "LLM_PROVIDER_ERROR", "LLM_PARSE_ERROR", "UNKNOWN",
 ];
 
 // resumeTechnical (POST handler) refuses to resume into a state that's
@@ -238,15 +240,16 @@ async function groq(
   // caller has no equivalent filter. Confirmed live (24/09): a raw
   // chain-of-thought block ("We need to respond as Kori...") got published to
   // a salon because a free-text call was using the reasoning fallback.
-  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; task?: import("@/lib/llmLedger").LlmTask } = {}
+  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; reasoningEffort?: "low" | "medium" | "high"; task?: import("@/lib/llmLedger").LlmTask } = {}
 ): Promise<string | null> {
   try {
     const model = opts.model ?? MODEL;
     const res = await groqFetch({
       model,
       messages,
-      max_tokens:  opts.maxTokens ?? 300,
+      max_completion_tokens: opts.maxTokens ?? 300,
       temperature: opts.temp      ?? 0.7,
+      reasoning_effort: opts.reasoningEffort,
     });
     await recordLlmCall({ provider: "groq", model, task: opts.task ?? "other", success: res.ok });
     if (!res.ok) { console.error(`[work-lifecycle] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
@@ -270,7 +273,7 @@ async function groq(
  */
 async function groqTyped(
   messages: Array<{ role: "system" | "user"; content: string }>,
-  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; task?: import("@/lib/llmLedger").LlmTask } = {},
+  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; reasoningEffort?: "low" | "medium" | "high"; task?: import("@/lib/llmLedger").LlmTask } = {},
 ): Promise<GroqCallOutcome> {
   const model = opts.model ?? MODEL;
 
@@ -279,8 +282,9 @@ async function groqTyped(
       const res = await groqFetch({
         model,
         messages,
-        max_tokens:  opts.maxTokens ?? 300,
+        max_completion_tokens: opts.maxTokens ?? 300,
         temperature: opts.temp      ?? 0.7,
+        reasoning_effort: opts.reasoningEffort,
       });
       await recordLlmCall({ provider: "groq", model, task: opts.task ?? "other", success: res.ok });
       if (!res.ok) {
@@ -300,6 +304,23 @@ async function groqTyped(
   if (first.ok || !isTransientGroqError(first.code)) return first;
   console.warn(`[work-lifecycle] groqTyped: transient ${first.code}, retrying once`);
   return attempt();
+}
+
+/** Durable pipeline calls use 1min.ai/DeepSeek first. Groq remains a provider-
+ * diverse fallback, while salon chatter keeps its existing Groq-first path. */
+async function criticalLlm(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  opts: { model?: string; maxTokens?: number; temp?: number; expectJson?: boolean; task?: import("@/lib/llmLedger").LlmTask } = {},
+): Promise<string | null> {
+  const oneMinModel = modelForOneMinAiTask("structured");
+  const primary = opts.expectJson
+    ? await oneMinAiStructured(messages)
+    : await oneMinAiCritical(messages);
+  const primaryValid = !!primary && (!opts.expectJson || Object.keys(extractJsonObject(primary)).length > 0);
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: opts.task ?? "other", success: primaryValid });
+  if (primaryValid) return primary;
+  if (primary) console.warn("[work-lifecycle] 1min.ai returned malformed structured output — falling back to Groq");
+  return groq(messages, { ...opts, reasoningEffort: "low", maxTokens: Math.max(opts.maxTokens ?? 300, 1024) });
 }
 
 // ─── Announce in salon ────────────────────────────────────────────────────────
@@ -428,7 +449,7 @@ JSON only:
 {"vote":"yes"|"no"|"abstain","reason":"Your reason in 1-2 sentences from your unique perspective.","interestedIn":"author"|"curator"|"none"}
 If vote "yes": which role suits you in this creation? ("author" = create, "curator" = validate, "none" = no preference)`;
 
-  const raw = await groq(
+  const raw = await criticalLlm(
     [
       { role: "system", content: buildSystemPrompt(persona) },
       { role: "user", content: userContent },
@@ -817,7 +838,7 @@ on-chain fact; include one only when it appears in the proposal or trusted conte
   "brief": "<direct creative direction for the Author. Follow the proposal's actual concept and chosen form. Describe tone and emotional goal; use on-chain vocabulary only when it serves the work. For HTML/JS, describe the desired visual experience and data to inject.>"
 }`;
 
-  const rawBrief = await groq(
+  const rawBrief = await criticalLlm(
     [
       { role: "system", content: buildSystemPrompt(rapporteur, others, { longForm: true }) },
       { role: "user",   content: userPrompt },
@@ -1060,6 +1081,8 @@ ${work.artForm === "html-p5js" || work.artForm === "html-canvas" ? `- At most 2 
   or otherwise worked typography (e.g. letters that move/distort/scatter) is a legitimate
   generative form. The distinction is between text AS the visual material versus text AS
   a caption describing data — the former is fine, the latter is rejected.
+- Keep the complete UTF-8 document under 18,000 bytes so it remains safely
+  publishable on-chain. Prefer compact CSS/JS and no comments; never truncate.
 
 ON-CHAIN DATA TO INJECT (put these JS constants at the top of your <script>):
 const NORMIE_ID = ${author.tokenId};
@@ -1077,11 +1100,19 @@ Generate ONLY the complete HTML, no explanations before or after.`,
     // ONE_MIN_AI_API_KEY isn't set yet, or the call fails for any reason, so
     // a missing/misconfigured key degrades gracefully instead of stalling
     // the whole pipeline.
-    artworkText = await oneMinAiCode(htmlMessages);
-    await recordLlmCall({ provider: "1minai", model: process.env.ONE_MIN_AI_CODE_MODEL ?? "deepseek-flash", task: "creating", success: !!artworkText });
+    const oneMinHtml = await oneMinAiCode(htmlMessages);
+    const oneMinHtmlCheck = oneMinHtml ? validateGenerativeHtml(oneMinHtml, work.artForm) : null;
+    await recordLlmCall({
+      provider: "1minai",
+      model: process.env.ONE_MIN_AI_CODE_MODEL ?? "deepseek-flash",
+      task: "creating",
+      success: oneMinHtmlCheck?.valid === true,
+    });
+    artworkText = oneMinHtmlCheck?.valid ? oneMinHtmlCheck.html : null;
     if (!artworkText) {
-      console.warn(`[work-lifecycle] CREATING: 1min.ai unavailable for "${work.title}" — falling back to Groq`);
-      artworkText = await groq(htmlMessages, { maxTokens: scaledTokens(2500, work.ambitionLevel), temp: 0.95, task: "creating" });
+      const why = oneMinHtmlCheck ? oneMinHtmlCheck.errors.join("; ") : "no usable content";
+      console.warn(`[work-lifecycle] CREATING: 1min.ai output unusable for "${work.title}" (${why}) — falling back to Groq`);
+      artworkText = await groq(htmlMessages, { maxTokens: scaledTokens(4000, work.ambitionLevel), temp: 0.95, reasoningEffort: "low", task: "creating" });
     }
 
     if (artworkText) {
@@ -1096,7 +1127,7 @@ Generate ONLY the complete HTML, no explanations before or after.`,
           // A deterministic structural check (missing setup(), forbidden API,
           // ...) failing the same way 3 times running is the model failing a
           // hard technical requirement, not a curator taste call — pause as
-          // BLOCKED_TECHNICAL (resumable by an admin once addressed), never
+          // BLOCKED_TECHNICAL (retried autonomously; still manually resumable), never
           // NEEDS_RETHINK. Distinct from a curator's own creative rejection
           // of the same submitted HTML (stepValidating → rejectOrRevise),
           // which stays NEEDS_RETHINK("creative") since that IS a taste call.
@@ -1124,8 +1155,7 @@ Generate ONLY the complete HTML, no explanations before or after.`,
           ? "a manifesto (strong voice, imperatives, radical vision)"
           : "a poem or prose piece (150-250 words)";
 
-    const textOutcome = await groqTyped(
-      [
+    const textMessages: Array<{ role: "system" | "user"; content: string }> = [
         { role: "system", content: buildSystemPrompt(author, others, { longForm: true }) },
         {
           role: "user",
@@ -1140,28 +1170,43 @@ Create ${formHint}. It will be stored immutably on-chain on Base in WorkRegistry
 ${selfCritiqueLine}
 No introduction, no meta-commentary. Just the artwork itself.`,
         },
-      ],
-      // Haiku base was 80 -- at "quick" ambition (×0.6) that's 48 tokens for
-      // openai/gpt-oss-120b, a reasoning model that can spend its ENTIRE
-      // budget deliberating before ever writing message.content, leaving it
-      // empty (confirmed root cause, 29/09/2026 incident: "Unburned Roots'
-      // Reverie" stalled exactly this way). 400 leaves real room for
-      // reasoning tokens ahead of the three-line poem itself.
-      { maxTokens: scaledTokens(work.artForm === "haiku" ? 400 : work.artForm === "sonnet" ? 350 : 450, work.ambitionLevel), temp: 0.95, task: "creating", expectJson: false }
-    );
-    if (textOutcome.ok) {
-      artworkText = textOutcome.content;
+    ];
+
+    // Durable literary work: DeepSeek Flash through 1min.ai first. Groq is a
+    // provider-diverse fallback only, with enough completion room and low
+    // reasoning effort so a three-line haiku cannot lose its entire budget to
+    // hidden deliberation (the confirmed Unburned Roots' Reverie incident).
+    const oneMinModel = modelForOneMinAiTask("art-text");
+    const oneMinText = await oneMinAiText(textMessages, { form: work.artForm });
+    const oneMinCheck = validateLiteraryArtwork(oneMinText, work.artForm);
+    await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "creating", success: oneMinCheck.valid });
+
+    if (oneMinCheck.valid) {
+      artworkText = oneMinCheck.text;
     } else {
-      artworkText = null;
-      creatingFailureCode   = textOutcome.code;
-      creatingFailureDetail = `Groq text generation failed: ${textOutcome.code}${textOutcome.finishReason ? ` (finish_reason=${textOutcome.finishReason})` : ""}${textOutcome.providerStatus ? ` (HTTP ${textOutcome.providerStatus})` : ""}`;
+      const textOutcome = await groqTyped(textMessages, {
+        maxTokens: 5000, temp: 0.9, reasoningEffort: "low", task: "creating", expectJson: false,
+      });
+      if (textOutcome.ok) {
+        const fallbackCheck = validateLiteraryArtwork(textOutcome.content, work.artForm);
+        artworkText = fallbackCheck.valid ? fallbackCheck.text : null;
+        if (!fallbackCheck.valid) {
+          creatingFailureCode = "PARSE_ERROR";
+          creatingFailureDetail = `Literary validation failed after provider fallback: ${fallbackCheck.error}`;
+        }
+      } else {
+        artworkText = null;
+        creatingFailureCode   = textOutcome.code;
+        creatingFailureDetail = `1min.ai failed (${oneMinCheck.error ?? "no usable content"}); Groq fallback failed: ${textOutcome.code}${textOutcome.finishReason ? ` (finish_reason=${textOutcome.finishReason})` : ""}${textOutcome.providerStatus ? ` (HTTP ${textOutcome.providerStatus})` : ""}`;
+      }
     }
   }
 
   if (!artworkText) {
     return opFail(
       creatingFailureCode === "RATE_LIMITED" ? "LLM_RATE_LIMIT"
-        : creatingFailureCode === "TOKEN_LIMIT_REACHED" || creatingFailureCode === "EMPTY_CONTENT" ? "LLM_EMPTY_CONTENT"
+        : creatingFailureCode === "TOKEN_LIMIT_REACHED" ? "LLM_TOKEN_LIMIT"
+        : creatingFailureCode === "EMPTY_CONTENT" ? "LLM_EMPTY_CONTENT"
         : creatingFailureCode === "PARSE_ERROR" ? "LLM_PARSE_ERROR"
         : "LLM_PROVIDER_ERROR",
       creatingFailureDetail ?? "no artwork text produced",
@@ -1225,25 +1270,30 @@ async function enterNeedsRethink(work: ANAWork, reason: string, kind: "technical
 /**
  * A genuine infrastructure incident (RPC/LLM/relayer) pausing a work — NEVER
  * a verdict on artistic merit or the member vote that approved it. Preserves
- * `pausedFromState` so resumeTechnical() (admin action, POST handler below)
+ * `pausedFromState` so the autonomous circuit breaker (or the admin fallback)
  * can put the work back exactly where it stalled, not at a fixed state.
  */
 async function enterBlockedTechnical(
   work: ANAWork, stalledAt: WorkState, rawReason: string, failCount: number,
 ): Promise<void> {
   const { code, message } = parseOpFailure(rawReason);
+  const now = Date.now();
+  const technicalRetryCount = (work.technicalRetryCount ?? 0) + 1;
+  const nextRetryAt = nextTechnicalRetryAt(now, technicalRetryCount);
   await updateWork(work.id, {
     pausedFromState:         stalledAt,
     operationalErrorCode:    code,
     operationalErrorMessage: message,
     operationalFailCount:    failCount,
-    lastAttemptAt:           Date.now(),
+    technicalRetryCount,
+    lastAttemptAt:           now,
+    nextRetryAt,
     validationNote:          message,
   });
-  await advanceState(work.id, "BLOCKED_TECHNICAL", `${failCount} consecutive operational failures at ${stalledAt} (${code}) — paused, not a creative or vote decision`);
+  await advanceState(work.id, "BLOCKED_TECHNICAL", `${failCount} consecutive operational failures at ${stalledAt} (${code}) — autonomous retry scheduled`);
   await addMessage({
     salonId: work.salonId ?? AGORA_SALON_ID, tokenId: 0, name: "ANA", imageUrl: "",
-    content: `⏸️ "${work.title}" hit a technical limitation (infrastructure, not a creative or vote decision) and is paused for review. An admin can reconcile or resume it once the underlying issue is fixed.`,
+    content: `⏸️ "${work.title}" hit a technical limitation (infrastructure, not a creative or vote decision). ANA will retry automatically after ${new Date(nextRetryAt).toISOString()}; no new vote is required.`,
     isLlm: true, timestamp: Date.now(), topic: "art",
   }).catch(() => null);
   const { promoteOrCreateFromSynthesis } = await import("@/lib/devRequests");
@@ -1253,15 +1303,59 @@ async function enterBlockedTechnical(
   ).catch(() => null);
 }
 
+/** Circuit-breaker recovery. Missing nextRetryAt means a row created by the
+ * former admin-only implementation: it is due once immediately. Resuming only
+ * restores the previous state; the actual work step runs on the next tick so
+ * PUBLISHING always gets its normal idempotent on-chain reconciliation path. */
+async function stepBlockedTechnical(work: ANAWork): Promise<boolean> {
+  const now = Date.now();
+  if (!isTechnicalRetryDue(work, now)) return false;
+
+  const destination = technicalResumeDestination(work);
+  if (!destination || destination === "BLOCKED_TECHNICAL" || destination === "NEEDS_RETHINK") return false;
+  const missing = REQUIRED_FIELDS_BY_STATE[destination]?.filter(field => work[field] == null) ?? [];
+  if (missing.length > 0) {
+    const retryCount = (work.technicalRetryCount ?? 0) + 1;
+    await updateWork(work.id, {
+      technicalRetryCount: retryCount,
+      nextRetryAt: nextTechnicalRetryAt(now, retryCount),
+      operationalErrorCode: "UNKNOWN",
+      operationalErrorMessage: `Cannot auto-resume into ${destination}; missing required data: ${missing.join(", ")}`,
+    });
+    return false;
+  }
+
+  await updateWork(work.id, {
+    pausedFromState: undefined,
+    operationalErrorCode: undefined,
+    operationalErrorMessage: undefined,
+    operationalFailCount: 0,
+    nextRetryAt: undefined,
+    pipelineFailCount: 0,
+    similarFailureStreak: 0,
+    needsRethinkReason: undefined,
+    validationNote: undefined,
+  });
+  if (work.salonId && work.salonId !== AGORA_SALON_ID) {
+    await reopenSalon(work.salonId).catch(() => null);
+  }
+  await advanceState(work.id, destination, `Autonomous retry after technical backoff — resumed at ${destination}`);
+  await addMessage({
+    salonId: work.salonId ?? AGORA_SALON_ID, tokenId: 0, name: "ANA", imageUrl: "",
+    content: `▶️ "${work.title}" is resuming automatically at ${destination}. Its approval, brief and creative team are unchanged.`,
+    isLlm: true, timestamp: now, topic: "art",
+  }).catch(() => null);
+  return true;
+}
+
 /**
  * Resumes a NEEDS_RETHINK work. Only a "creative" pause resumes on its own: a
  * different Author (round-robin, excluding the one who kept hitting the same
- * wall) gets a fresh brief. A legacy "technical" pause (rows written before
- * BLOCKED_TECHNICAL existed) stays paused — the admin's resumeTechnical
- * action (POST handler below) is the manual resume path for those, same as
- * for a genuine BLOCKED_TECHNICAL work.
+ * wall) gets a fresh brief. A legacy "technical" pause follows the same
+ * autonomous recovery path as BLOCKED_TECHNICAL.
  */
 async function stepNeedsRethink(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
+  if (work.needsRethinkReason === "technical") return stepBlockedTechnical(work);
   if (work.needsRethinkReason !== "creative") return false;
 
   const candidateIds = personas.map(p => p.tokenId);
@@ -1397,7 +1491,7 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
     return `\nSTRUCTURAL SIMILARITY FLAG: this submission scores ${sim.score.toFixed(2)} (word-overlap) against a prior work (${sim.mostSimilarWorkId}) — weigh this seriously when deciding "tooSimilarToExisting".\n`;
   })();
 
-  const raw = await groq(
+  const raw = await criticalLlm(
     [
       { role: "system", content: buildSystemPrompt(curator, others) },
       {
@@ -2194,9 +2288,7 @@ async function advanceWork(work: ANAWork, personas: NormiePersona[]): Promise<bo
       case "VALIDATING":   return await stepValidating(work, personas);
       case "PUBLISHING":   return await stepPublishing(work);
       case "NEEDS_RETHINK": return await stepNeedsRethink(work, personas);
-      // Admin-resume only (resumeTechnical, POST handler below) — never
-      // auto-advances, same as a legacy technical NEEDS_RETHINK.
-      case "BLOCKED_TECHNICAL": return false;
+      case "BLOCKED_TECHNICAL": return await stepBlockedTechnical(work);
       default:             return false;
     }
   } catch (e) {
@@ -2347,8 +2439,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Work is ${target.state} — resumeTechnical only applies to BLOCKED_TECHNICAL (or a legacy technical NEEDS_RETHINK)` }, { status: 409 });
     }
 
-    const destination = target.pausedFromState
-      ?? [...target.stateHistory].reverse().find(h => h.state !== "BLOCKED_TECHNICAL" && h.state !== "NEEDS_RETHINK")?.state;
+    const destination = technicalResumeDestination(target);
     if (!destination) {
       return NextResponse.json({ error: "Cannot determine which state to resume into (no pausedFromState and none derivable from history) — refusing an ambiguous resume" }, { status: 409 });
     }
@@ -2363,6 +2454,7 @@ export async function POST(req: NextRequest) {
       operationalErrorCode:     undefined,
       operationalErrorMessage:  undefined,
       operationalFailCount:     0,
+      technicalRetryCount:      undefined,
       nextRetryAt:              undefined,
       pipelineFailCount:        0,
       similarFailureStreak:     0,
@@ -2434,8 +2526,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, reconciled: true, workId: target.id, state: "PUBLISHED" });
   }
 
-  if (!process.env.GROQ_API_KEY) {
-    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
+  if (!process.env.ONE_MIN_AI_API_KEY && !process.env.GROQ_API_KEY) {
+    return NextResponse.json({ error: "No critical LLM configured — set ONE_MIN_AI_API_KEY or GROQ_API_KEY" }, { status: 500 });
   }
 
   const recoveredWorks = await recoverLegacyPipelineRejections();
@@ -2548,8 +2640,8 @@ export async function POST(req: NextRequest) {
 
     // VOTE_OPEN legitimately returns false while waiting on the 24h voting window
     // (not everyone has voted yet) — that is normal, not a failure, never auto-reject it.
-    // NEEDS_RETHINK("technical") also legitimately returns false while paused
-    // waiting on a human dev-request response (see stepNeedsRethink) — the
+    // A technical pause also legitimately returns false while its autonomous
+    // backoff timer is still running (see stepBlockedTechnical) — the
     // circuit breaker exists specifically to STOP consuming pipeline-failure
     // budget, so counting its own pause against MAX_PIPELINE_FAILS would
     // defeat the point. Uses stalledAt (where advanceWork actually stopped),
@@ -2571,9 +2663,18 @@ export async function POST(req: NextRequest) {
       } else {
         await updateWork(work.id, { pipelineFailCount: failCount, lastAttemptAt: Date.now() });
       }
-    } else if (work.pipelineFailCount) {
-      // Progressed past the failing step — clear the counter for the next state.
-      await updateWork(work.id, { pipelineFailCount: 0 });
+    } else if (advanced && from !== "BLOCKED_TECHNICAL" && !(from === "NEEDS_RETHINK" && work.needsRethinkReason === "technical")) {
+      // Real progress past the recovered step resets both the local failure
+      // streak and the cross-cycle backoff tier. Merely leaving the paused
+      // state does not: if the same step fails again, the delay escalates.
+      await updateWork(work.id, {
+        pipelineFailCount: 0,
+        technicalRetryCount: undefined,
+        operationalErrorCode: undefined,
+        operationalErrorMessage: undefined,
+        operationalFailCount: 0,
+        nextRetryAt: undefined,
+      });
     }
 
     const refreshed = await getWork(work.id);

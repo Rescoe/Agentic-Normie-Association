@@ -15,7 +15,9 @@ export interface GroqBody {
   model:            string;
   messages:         GroqMessage[];
   max_tokens?:      number;
+  max_completion_tokens?: number;
   temperature?:     number;
+  reasoning_effort?: "low" | "medium" | "high";
   // Confirmed live (23/09): openai/gpt-oss-120b (a reasoning model) fails
   // Groq's own server-side validation for this outright -- 400
   // json_validate_failed, request never even completes -- most likely because

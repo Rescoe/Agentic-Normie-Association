@@ -18,10 +18,9 @@ import { ASSOCIATION_CORE_ABI, CONSTITUENT_ASSEMBLY_ABI, CONTRACT_ADDRESSES, ROL
 import { createWork, getActiveWorks, listWorks, maxConcurrentCreativeWorks } from "@/lib/workStore";
 import { buildPersona, buildSystemPrompt, sampleOtherMembers, type NormiePersona } from "@/lib/normiesPersona";
 import { baseRpcTransport } from "@/lib/baseRpc";
-import { extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { groqFetch, extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { oneMinAiStructured, modelForOneMinAiTask } from "@/lib/oneMinAi";
 import { recordLlmCall } from "@/lib/llmLedger";
-
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const client = createPublicClient({
   chain:     base,
@@ -65,7 +64,7 @@ export interface ProposedWorkResult {
 
 /** Core logic, callable directly (in-process) or via the route's POST handler. Throws on failure. */
 export async function runProposeWork(forcedProposerId: number | null): Promise<ProposedWorkResult> {
-  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY not configured");
+  if (!process.env.ONE_MIN_AI_API_KEY && !process.env.GROQ_API_KEY) throw new Error("No proposal LLM configured");
 
   const memberIds = await getMemberIds();
   if (memberIds.length === 0) throw new Error("No member found on AssociationCore");
@@ -114,27 +113,7 @@ export async function runProposeWork(forcedProposerId: number | null): Promise<P
     "a work with strict formal constraints (OuLiPo style)",
   ][Math.floor(Math.random() * 10)];
 
-  const res = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization:  `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    // No response_format: {type:"json_object"} -- confirmed live (23/09):
-    // openai/gpt-oss-120b (a reasoning model) fails Groq's own server-side
-    // validation for that mode outright (400 json_validate_failed). Asking
-    // for JSON in the prompt instead and parsing leniently with
-    // extractJsonObject() below, same fix as autoVote.ts's groqJson().
-    body: JSON.stringify({
-      model:       "openai/gpt-oss-120b",
-      // Was 350 -- confirmed live (23/09): this call billed 350 real output
-      // tokens on Groq's dashboard yet came back with empty content, because
-      // this model can spend the whole budget on internal reasoning before
-      // ever emitting the final JSON. Bumped for headroom; extractContentOrReasoning()
-      // below also falls back to the reasoning field if content is still empty.
-      max_tokens:  900,
-      temperature: 0.97,
-      messages: [
+  const messages = [
         { role: "system", content: buildSystemPrompt(proposer, others) },
         {
           role: "user",
@@ -163,19 +142,26 @@ Respond with ONLY the raw JSON object below, always in English — no reasoning,
   "suggestedForm": "haiku"|"sonnet"|"poem"|"prose"|"manifesto"|"html-canvas"|"html-p5js"|"html-threejs"|"html-webgl"
 }`,
         },
-      ],
-    }),
-  }).catch(() => null);
+  ] as Array<{ role: "system" | "user"; content: string }>;
 
-  if (!res) throw new Error("Groq request failed (network error)");
-  await recordLlmCall({ provider: "groq", model: "openai/gpt-oss-120b", task: "propose-work", success: res.ok });
-  if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 500)}`);
+  const oneMinModel = modelForOneMinAiTask("structured");
+  let raw = await oneMinAiStructured(messages);
+  let parsed = raw ? extractJsonObject(raw) as { title?: string; proposal?: string; suggestedForm?: string } : {};
+  const primaryValid = !!parsed.title && !!parsed.proposal;
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "propose-work", success: primaryValid });
 
-  const data = await res.json() as GroqChatResponse;
-  const raw  = extractContentOrReasoning(data);
-  if (!raw) throw new Error(`LLM returned empty response (finish_reason=${data.choices[0]?.finish_reason ?? "?"})`);
-
-  const parsed = extractJsonObject(raw) as { title?: string; proposal?: string; suggestedForm?: string };
+  if (!primaryValid) {
+    const res = await groqFetch({
+      model: "openai/gpt-oss-120b", messages,
+      max_completion_tokens: 1800, temperature: 0.97, reasoning_effort: "low",
+    });
+    await recordLlmCall({ provider: "groq", model: "openai/gpt-oss-120b", task: "propose-work", success: res.ok });
+    if (!res.ok) throw new Error(`Proposal LLM providers unavailable (Groq ${res.status})`);
+    const data = await res.json() as GroqChatResponse;
+    raw = extractContentOrReasoning(data);
+    parsed = raw ? extractJsonObject(raw) as { title?: string; proposal?: string; suggestedForm?: string } : {};
+  }
+  if (!raw) throw new Error("Proposal LLM returned empty response");
   if (!parsed.title || !parsed.proposal) throw new Error(`LLM response missing title or proposal: ${raw.slice(0, 200)}`);
 
   const VALID_FORMS = new Set(["haiku", "sonnet", "poem", "prose", "manifesto", "html-canvas", "html-p5js", "html-threejs", "html-webgl"]);

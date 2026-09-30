@@ -43,7 +43,7 @@ describe("toPublicWork — allow-list DTO (P0 secret-leak fix)", () => {
       "operationalErrorMessage", "operationalErrorCode", "operationalFailCount",
       "pipelineFailCount", "similarFailureStreak",
       "voteInvalidOutputs", "voteProviderErrors", "voteRetries",
-      "lastAttemptAt", "nextRetryAt", "rapporteurArbiterTokenId",
+      "lastAttemptAt", "rapporteurArbiterTokenId",
     ]) {
       expect(pub[field]).toBeUndefined();
     }
@@ -56,6 +56,7 @@ describe("toPublicWork — allow-list DTO (P0 secret-leak fix)", () => {
     expect(pub.state).toBe("BLOCKED_TECHNICAL");
     expect(pub.stateHistory).toHaveLength(1);
     expect(pub.proposedByName).toBe("Kori");
+    expect(pub.nextRetryAt).toBeTypeOf("number");
   });
 
   it("a stateHistory note is passed through as stored — already redacted at write time by workStore.advanceState(), not re-redacted here", () => {

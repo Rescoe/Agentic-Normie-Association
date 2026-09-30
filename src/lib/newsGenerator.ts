@@ -6,6 +6,7 @@ import { listWorks, type ANAWork } from "./workStore";
 import { buildPersona, buildSystemPrompt } from "./normiesPersona";
 import { getBurnedTokens } from "./normiesApi";
 import { groqFetch, extractContentOrReasoning, extractJsonObject, type GroqChatResponse } from "./groq";
+import { oneMinAiStructured, modelForOneMinAiTask } from "./oneMinAi";
 import { recordLlmCall } from "./llmLedger";
 import { getSeenNewsEventIds, markNewsEventsSeen, persistNewsItems, ensureCategoryBaseline, type ANANewsItem, type NewsMedia, type NewsLink } from "./newsStore";
 import {
@@ -244,15 +245,23 @@ export async function generateNews(): Promise<{ generated: number; reason?: stri
 
   const persona = await buildPersona(rapporteur.tokenId);
   const prompt = `${buildSystemPrompt(persona, [], { longForm: true })}\n\nYou are ANA's elected Rapporteur and institutional correspondent. Turn each FACT below into one concise public news item in English. Stay strictly factual: never invent a person, result, date, price, transaction or claim — and never write a URL, address, or price yourself, those are attached separately. Write for humans unfamiliar with ANA. socialText must stand alone on X or Bluesky, be at most 260 characters, and avoid generic hype. Return strict JSON only:\n{"items":[{"sourceEventId":"exact id","title":"max 90 chars","body":"2-3 factual sentences","socialText":"max 260 chars, no URL needed — one is appended automatically"}]}\n\nFACTS:\n${unseen.map(f => JSON.stringify({ id: f.id, type: f.type, fact: f.fact })).join("\n")}`;
-  const response = await groqFetch({
-    model: MODEL,
-    messages: [{ role: "system", content: "You are the elected Rapporteur of ANA. Strict JSON, English only." }, { role: "user", content: prompt }],
-    max_tokens: 900, temperature: 0.55,
-  });
-  await recordLlmCall({ provider: "groq", model: MODEL, task: "news", success: response.ok });
-  if (!response.ok) return { generated: 0, reason: `LLM ${response.status}` };
-  const data = await response.json() as GroqChatResponse;
-  const parsed = extractJsonObject(extractContentOrReasoning(data));
+  const messages = [{ role: "system" as const, content: "You are the elected Rapporteur of ANA. Strict JSON, English only." }, { role: "user" as const, content: prompt }];
+  const oneMinModel = modelForOneMinAiTask("news");
+  let raw = await oneMinAiStructured(messages, { task: "news" });
+  let parsed = raw ? extractJsonObject(raw) : {};
+  const primaryValid = Array.isArray(parsed.items) && parsed.items.length > 0;
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "news", success: primaryValid });
+
+  if (!primaryValid) {
+    const response = await groqFetch({
+      model: MODEL, messages, max_completion_tokens: 1800, temperature: 0.55, reasoning_effort: "low",
+    });
+    await recordLlmCall({ provider: "groq", model: MODEL, task: "news", success: response.ok });
+    if (!response.ok) return { generated: 0, reason: `LLM providers unavailable (Groq ${response.status})` };
+    const data = await response.json() as GroqChatResponse;
+    raw = extractContentOrReasoning(data);
+    parsed = extractJsonObject(raw);
+  }
   const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
   const factMap = new Map(unseen.map(f => [f.id, f]));
   const now = Date.now();

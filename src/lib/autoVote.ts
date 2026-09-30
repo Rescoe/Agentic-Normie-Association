@@ -26,10 +26,10 @@ import { buildPersona, type NormiePersona } from "@/lib/normiesPersona";
 import { addMessage, createSalon, closeSalon, listSalons, AGORA_SALON_ID } from "@/lib/salonStore";
 import { runProposeWork } from "@/lib/proposeWork";
 import { baseRpcTransport } from "@/lib/baseRpc";
-import { extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { groqFetch, extractJsonObject, extractContent, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { oneMinAiCritical, oneMinAiStructured, modelForOneMinAiTask } from "@/lib/oneMinAi";
 import { recordLlmCall } from "@/lib/llmLedger";
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL    = "openai/gpt-oss-120b";
 const MODEL_F  = "openai/gpt-oss-120b";
 
@@ -100,27 +100,24 @@ export interface VoteDecision {
 // ─── LLM helpers ──────────────────────────────────────────────────────────────
 
 async function groqText(prompt: string, fast = false): Promise<string> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) throw new Error("GROQ_API_KEY not configured");
-  const r = await fetch(GROQ_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model:      fast ? MODEL_F : MODEL,
-      messages:   [{ role: "user", content: prompt }],
-      max_tokens: 150,
-      temperature: 0.7,
-    }),
+  const messages = [{ role: "user" as const, content: prompt }];
+  const oneMinModel = modelForOneMinAiTask("structured");
+  const primary = await oneMinAiCritical(messages);
+  const primaryValid = !!primary && /CANDIDATE\s*:/i.test(primary);
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "candidacy", success: primaryValid });
+  if (primaryValid) return primary;
+
+  const r = await groqFetch({
+    model: fast ? MODEL_F : MODEL, messages,
+    max_completion_tokens: 1024, temperature: 0.7, reasoning_effort: "low",
   });
   await recordLlmCall({ provider: "groq", model: fast ? MODEL_F : MODEL, task: "candidacy", success: r.ok });
-  if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
+  if (!r.ok) throw new Error(`Candidacy LLM providers unavailable (Groq ${r.status})`);
   const d = await r.json() as GroqChatResponse;
   return extractContent(d);
 }
 
 async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string, unknown>> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) throw new Error("GROQ_API_KEY not configured");
   // No response_format: { type: "json_object" } here on purpose. Confirmed live:
   // openai/gpt-oss-120b (a reasoning model) returns Groq's own 400
   // json_validate_failed for that mode -- its raw output apparently doesn't
@@ -129,18 +126,20 @@ async function groqJson(prompt: string, maxTokens = 200): Promise<Record<string,
   // normal response. Falling back to plain text + our own lenient extraction
   // below, the same approach decideCandidacy()/groqText() already use
   // successfully with this exact model.
-  const r = await fetch(GROQ_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model:       MODEL,
-      messages:    [{ role: "user", content: prompt }],
-      max_tokens:  maxTokens,
-      temperature: 0.6,
-    }),
+  const messages = [{ role: "user" as const, content: prompt }];
+  const oneMinModel = modelForOneMinAiTask("structured");
+  const primary = await oneMinAiStructured(messages);
+  const primaryJson = primary ? extractJsonObject(primary) : {};
+  const primaryValid = Object.keys(primaryJson).length > 0;
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "vote", success: primaryValid });
+  if (primaryValid) return primaryJson;
+
+  const r = await groqFetch({
+    model: MODEL, messages,
+    max_completion_tokens: Math.max(maxTokens, 1400), temperature: 0.6, reasoning_effort: "low",
   });
   await recordLlmCall({ provider: "groq", model: MODEL, task: "vote", success: r.ok });
-  if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 500)}`);
+  if (!r.ok) throw new Error(`Vote LLM providers unavailable (Groq ${r.status})`);
   const d = await r.json() as GroqChatResponse;
   return extractJsonObject(extractContentOrReasoning(d));
 }
@@ -356,7 +355,7 @@ export async function runAutoVotePhase(body: AutoVoteBody): Promise<Record<strin
   const mode  = body.mode  ?? "simulate";
 
   if (!CORE || !CA) throw new Error("Contracts not configured");
-  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY missing");
+  if (!process.env.ONE_MIN_AI_API_KEY && !process.env.GROQ_API_KEY) throw new Error("No election LLM configured");
 
   // ── phase=close ──────────────────────────────────────────────────────────
   if (phase === "close") {

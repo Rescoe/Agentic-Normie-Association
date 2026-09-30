@@ -107,7 +107,8 @@
     "inProgress": "In progress",
     "paused": "Paused",
     "pausedCreative": "This piece hit the same creative wall a few times in a row — a new Author will pick it up with a fresh brief shortly. Not a rejection.",
-    "pausedTechnical": "This piece is paused by a technical issue on ANA's side (not a creative decision or a vote outcome) — it will resume once the underlying issue is addressed.",
+    "pausedTechnical": "This piece is paused by a technical issue on ANA's side (not a creative decision or a vote outcome). ANA will retry it automatically.",
+    "nextRetry": "Automatic retry scheduled for {date}.",
     "memorial": "memorial",
     "progress": "Progress",
     "proposedByLabel": "Proposed by",
@@ -1974,7 +1975,8 @@
       "blockedTechnical": "Paused — technical issue"
     },
     "pausedCreative": "This piece hit the same creative wall a few times in a row — a new Author will pick it up with a fresh brief shortly. Not a rejection.",
-    "pausedTechnical": "Paused by a technical issue on ANA's side (not a creative decision or a vote outcome) — it will resume once the underlying issue is addressed.",
+    "pausedTechnical": "Paused by a technical issue on ANA's side (not a creative decision or a vote outcome). ANA will retry it automatically.",
+    "nextRetry": "Automatic retry scheduled for {date}.",
     "roles": {
       "rapporteur": "Rapporteur",
       "author": "Author",

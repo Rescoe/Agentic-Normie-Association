@@ -17,6 +17,8 @@
  */
 
 import { groqFetch, extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "@/lib/groq";
+import { recordLlmCall } from "@/lib/llmLedger";
+import { modelForOneMinAiTask, oneMinAiStructured } from "@/lib/oneMinAi";
 import {
   buildPersona, buildSystemPrompt, personaToPromptBlock, sampleOtherMembers,
   type NormiePersona,
@@ -183,11 +185,22 @@ function rasterize(rawShapes: unknown): Uint8Array {
 // server-side validation for that mode outright (400 json_validate_failed).
 // Prompts ask for JSON directly; callers parse leniently with
 // extractJsonObject() instead of relying on that enforcement.
-async function groq(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens: number): Promise<string | null> {
+async function criticalStructured(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens: number): Promise<string | null> {
+  const oneMinModel = modelForOneMinAiTask("structured");
+  const primary = await oneMinAiStructured(messages);
+  const primaryValid = !!primary && Object.keys(extractJsonObject(primary)).length > 0;
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "creating", success: primaryValid });
+  if (primaryValid) return primary;
+
   try {
     const res = await groqFetch({
-      model: MODEL, messages, max_tokens: maxTokens, temperature: 0.85,
+      model: MODEL,
+      messages,
+      max_completion_tokens: Math.max(maxTokens, 3000),
+      reasoning_effort: "low",
+      temperature: 0.85,
     });
+    await recordLlmCall({ provider: "groq", model: MODEL, task: "creating", success: res.ok });
     if (!res.ok) { console.error(`[memorialArt] Groq ${res.status}: ${(await res.text()).slice(0, 500)}`); return null; }
     const data = await res.json() as GroqChatResponse;
     // Both callers of this helper feed the result through extractJsonObject()
@@ -195,7 +208,7 @@ async function groq(messages: Array<{ role: "system" | "user"; content: string }
     // reasoning-fallback variant here (unlike a plain free-text call).
     return extractContentOrReasoning(data) || null;
   } catch (e) {
-    console.error("[memorialArt] groq error:", e);
+    console.error("[memorialArt] critical LLM error:", e);
     return null;
   }
 }
@@ -227,7 +240,7 @@ Expand it: ADD more shapes (keep the ones above, don't remove or replace them) u
 JSON only:
 {"cartel":"your artist statement","shapes":[...]}`;
 
-  const raw = await groq(
+  const raw = await criticalStructured(
     [
       { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers), { longForm: true }) },
       { role: "user", content: prompt },
@@ -340,7 +353,7 @@ Example of a real, deliberate composition (a different subject — study the den
 JSON only:
 {"cartel":"your artist statement","shapes":[...]}`;
 
-  const raw = await groq(
+  const raw = await criticalStructured(
     [
       { role: "system", content: buildSystemPrompt(proposer, sampleOtherMembers(otherMembers), { longForm: true }) },
       { role: "user", content: userPrompt },

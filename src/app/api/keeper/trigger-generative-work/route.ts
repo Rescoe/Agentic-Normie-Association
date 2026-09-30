@@ -62,8 +62,8 @@ export async function POST(req: NextRequest) {
   if (!isAdminCall) {
     return NextResponse.json({ error: "Unauthorized — a valid admin signature is required" }, { status: 401 });
   }
-  if (!process.env.GROQ_API_KEY) {
-    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
+  if (!process.env.ONE_MIN_AI_API_KEY && !process.env.GROQ_API_KEY) {
+    return NextResponse.json({ error: "No creation LLM configured — set ONE_MIN_AI_API_KEY or GROQ_API_KEY" }, { status: 500 });
   }
 
   let body: { artForm?: string } = {};

@@ -107,11 +107,14 @@ function InProgressWorkCard({ work, getName }: { work: ANAWork; getName: GetName
       </div>
 
       {isPaused && (
-        <p className="text-xs text-orange-600 leading-relaxed">
-          {work.state === "NEEDS_RETHINK" && work.needsRethinkReason !== "technical"
+        <div className="text-xs text-orange-600 leading-relaxed space-y-1">
+          <p>{work.state === "NEEDS_RETHINK" && work.needsRethinkReason !== "technical"
             ? t("pausedCreative")
-            : t("pausedTechnical")}
-        </p>
+            : t("pausedTechnical")}</p>
+          {work.nextRetryAt && (
+            <p>{t("nextRetry", { date: new Date(work.nextRetryAt).toLocaleString() })}</p>
+          )}
+        </div>
       )}
 
       {/* Progress steps — named labels */}

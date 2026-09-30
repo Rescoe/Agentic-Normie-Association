@@ -66,6 +66,7 @@ export type OperationalErrorCode =
   | "POST_TX_VERIFICATION_FAILED" // tx confirmed, but re-reading on-chain state afterwards didn't match expectations
   | "ONCHAIN_MISMATCH"          // reconcileWork found a genuine, persistent divergence between DB and chain
   | "LLM_EMPTY_CONTENT"
+  | "LLM_TOKEN_LIMIT"
   | "LLM_RATE_LIMIT"
   | "LLM_PROVIDER_ERROR"
   | "LLM_PARSE_ERROR"
@@ -159,8 +160,8 @@ export interface ANAWork {
 
   // ── BLOCKED_TECHNICAL bookkeeping (see WorkState doc above) ──────────────
   // The state this work was in when the operational failure paused it —
-  // resumeTechnical() (admin action) returns it here, never to a fixed state,
-  // so e.g. a PUBLISHING-stage failure resumes at PUBLISHING, not CREATING.
+  // autonomous recovery (or the admin fallback) returns it here, never to a
+  // fixed state, so a PUBLISHING failure resumes there, not at CREATING.
   pausedFromState?:          WorkState;
   operationalErrorCode?:     OperationalErrorCode;
   // Already redacted (see redact.ts) before it is ever assigned — safe to
@@ -169,6 +170,7 @@ export interface ANAWork {
   // a public audience".
   operationalErrorMessage?:  string;
   operationalFailCount?:     number;
+  technicalRetryCount?:      number; // number of complete circuit-breaker cycles; selects the autonomous backoff tier
   lastAttemptAt?:            number;
   nextRetryAt?:              number;
 
@@ -279,7 +281,7 @@ export interface ANAWork {
 // (never a raw external error string). Diagnostic-only fields
 // (validationNote, pipelineFailCount, similarFailureStreak, vote*Outputs/
 // Errors/Retries, operationalErrorMessage/Code, operationalFailCount,
-// lastAttemptAt, nextRetryAt, pausedFromState, dispatch/arbiter ids,
+// lastAttemptAt, technicalRetryCount, dispatch/arbiter ids,
 // reservedClaim*/honoredTokenIdsAdded/requesterEditionDelivered) stay
 // admin-only — see /api/admin/works.
 export type PublicANAWork = Pick<ANAWork,
@@ -301,7 +303,7 @@ export type PublicANAWork = Pick<ANAWork,
   | "memorialMilestoneNumber" | "memorialTotalBurnedAtMilestone"
   | "memorialPublicSupply" | "memorialRequesterSupply"
   | "memorialOpenEnded" | "memorialClaimDurationSeconds" | "onChainMemorialId"
-  | "pausedFromState"
+  | "pausedFromState" | "nextRetryAt"
 > & { stateHistory: StateHistoryEntry[] };
 
 const PUBLIC_WORK_FIELDS: Array<keyof PublicANAWork> = [
@@ -323,7 +325,7 @@ const PUBLIC_WORK_FIELDS: Array<keyof PublicANAWork> = [
   "memorialMilestoneNumber", "memorialTotalBurnedAtMilestone",
   "memorialPublicSupply", "memorialRequesterSupply",
   "memorialOpenEnded", "memorialClaimDurationSeconds", "onChainMemorialId",
-  "pausedFromState",
+  "pausedFromState", "nextRetryAt",
 ];
 
 /** Strips a work down to the public allow-list above — see PublicANAWork's doc comment. */

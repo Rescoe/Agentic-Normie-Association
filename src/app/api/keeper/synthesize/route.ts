@@ -27,8 +27,8 @@ async function isAuthorized(req: NextRequest): Promise<boolean> {
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.GROQ_API_KEY) {
-    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
+  if (!process.env.ONE_MIN_AI_API_KEY && !process.env.GROQ_API_KEY) {
+    return NextResponse.json({ error: "No synthesis LLM configured — set ONE_MIN_AI_API_KEY or GROQ_API_KEY" }, { status: 500 });
   }
   if (!(await isAuthorized(req))) {
     return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });

@@ -25,6 +25,7 @@ import { promoteOrCreateFromSynthesis } from "./devRequests";
 import { createTopic, updateTopicPhase, listTopics } from "./topicEngine";
 import { buildSignalsPromptBlock, type ExternalSignal } from "./externalSignals";
 import { groqFetch, extractJsonObject, extractContentOrReasoning, type GroqChatResponse } from "./groq";
+import { oneMinAiStructured, modelForOneMinAiTask } from "./oneMinAi";
 import { recordLlmCall } from "./llmLedger";
 
 const MODEL = "openai/gpt-oss-120b";
@@ -106,19 +107,25 @@ async function callSynthesisLlm(
       `"emergingTopics" should only include genuinely new topics grounded in the transcript or the external signals below — never invent one from nothing. ` +
       `Transcript:\n${transcript.slice(0, 6000)}${signalsBlock}`;
 
+  const messages = [
+    { role: "system" as const, content: "You are the ANA archivist. You produce structured institutional memory from Normie debates. Respond with strict JSON only, always in English." },
+    { role: "user" as const, content: prompt },
+  ];
+  const oneMinModel = modelForOneMinAiTask("structured");
+  const primaryContent = await oneMinAiStructured(messages);
+  const primaryResult = primaryContent ? validateSynthesisShape(extractJsonObject(primaryContent)) : null;
+  await recordLlmCall({ provider: "1minai", model: oneMinModel, task: "synthesis", success: !!primaryResult, retries: repair ? 1 : 0 });
+  if (primaryResult) return primaryResult;
+
   const res = await groqFetch({
-    model: MODEL,
-    messages: [
-      { role: "system", content: "You are the ANA archivist. You produce structured institutional memory from Normie debates. Respond with strict JSON only, always in English." },
-      { role: "user", content: prompt },
-    ],
-    max_tokens: 900, temperature: repair ? 0.2 : 0.4,
+    model: MODEL, messages,
+    max_completion_tokens: 1800, temperature: repair ? 0.2 : 0.4, reasoning_effort: "low",
   });
-  const success = res.ok;
-  await recordLlmCall({ provider: "groq", model: MODEL, task: "synthesis", success, retries: repair ? 1 : 0 });
+  await recordLlmCall({ provider: "groq", model: MODEL, task: "synthesis", success: res.ok, retries: repair ? 1 : 0 });
   if (!res.ok) return null;
   const data = await res.json() as GroqChatResponse;
-  const raw = extractJsonObject(extractContentOrReasoning(data));
+  const content = extractContentOrReasoning(data);
+  const raw = extractJsonObject(content);
   return validateSynthesisShape(raw);
 }
 
