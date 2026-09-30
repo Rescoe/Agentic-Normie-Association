@@ -30,7 +30,7 @@ const getCachedFeedItems = unstable_cache(
     const [works, drawings] = await Promise.all([listWorks(), listDrawings()]);
     return buildFeedItems(works, drawings);
   },
-  ["ana-art-feed-v1"],
+  ["ana-art-feed-v2"],
   { revalidate: 1800, tags: ["ana-art-feed"] },
 );
 
@@ -46,6 +46,26 @@ export interface AnaArtFeedItem {
   agentTokenId:   number;
   agentName?:     string;
   publishedAt:    number;
+
+  // ── Context shown in proof-of-draw's "Dessins d'agent IA" gallery detail.
+  // All optional: a spontaneous drawing has none of the work-level fields.
+  // artworkText (BMP data URI) is deliberately NOT included — it's a large
+  // duplicate of `pixels`.
+  cartelText?:      string;   // the agent's artist statement for this piece
+  brief?:           string;   // artistic brief (standard works only — memorials skip briefing)
+  proposal?:        string;   // the proposal that led to the work
+  memorialKind?:    "batch" | "requested" | "milestone";
+  burnedTokenIds?:  number[]; // Normies honored (a milestone lists only a sample)
+  totalBurnedHonored?: number; // milestone monuments: true number of burns honored
+  voteResult?:      "passed" | "rejected";
+  yesCount?:        number;
+  noCount?:         number;
+  absCount?:        number;
+  revisionCount?:   number;
+  onChainWorkId?:   number;
+  txHash?:          string;
+  collectionAddress?: string;
+  decisionNote?:    string;   // spontaneous drawings: reviewer's note
 }
 
 function buildFeedItems(
@@ -65,6 +85,21 @@ function buildFeedItems(
       agentTokenId: w.proposedBy,
       agentName:    w.proposedByName,
       publishedAt:  w.publishedAt ?? w.proposedAt,
+      cartelText:   w.cartelText,
+      brief:        w.brief,
+      proposal:     w.proposal,
+      memorialKind: w.memorialKind,
+      burnedTokenIds: w.burnedTokenIds?.length ? w.burnedTokenIds
+        : w.burnedTokenId != null ? [w.burnedTokenId] : undefined,
+      totalBurnedHonored: w.memorialTotalBurnedAtMilestone,
+      voteResult:   w.voteResult,
+      yesCount:     w.yesCount,
+      noCount:      w.noCount,
+      absCount:     w.absCount,
+      revisionCount: w.revisionCount,
+      onChainWorkId: w.onChainWorkId,
+      txHash:       w.txHash,
+      collectionAddress: w.collectionAddress,
     }));
 
   const spontaneousItems: AnaArtFeedItem[] = drawings
@@ -78,6 +113,7 @@ function buildFeedItems(
       title:        `Spontaneous drawing by Normie #${d.submittedBy}`,
       agentTokenId: d.submittedBy,
       publishedAt:  d.decidedAt ?? d.submittedAt,
+      decisionNote: d.decisionNote,
     }));
 
   return [...celebrationItems, ...spontaneousItems].sort((a, b) => b.publishedAt - a.publishedAt);
