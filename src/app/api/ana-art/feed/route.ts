@@ -33,7 +33,9 @@ const getCachedFeedItems = unstable_cache(
     return buildFeedItems(works, drawings);
   },
   ["ana-art-feed-v3"],   // v3 : items "poem" ajoutés (le cache v2 ne les connaît pas)
-  { revalidate: 1800, tags: ["ana-art-feed"] },
+  // Interim (note 36 P0) : pas d'expiration courte — le snapshot ne se reconstruit qu'à l'invalidation faite
+  // à la publication (workStore → revalidateTag). À remplacer par des générations + pointeur atomique.
+  { revalidate: 86400, tags: ["ana-art-feed"] },
 );
 
 const CACHE_HEADERS = { "Cache-Control": "private, no-store" };
@@ -118,22 +120,23 @@ function buildFeedItems(
     }));
 
   // Poèmes publiés : l'auteur affiché est le Normie qui a écrit le poème (authorTokenId), pas le proposeur.
-  const POEM_FORMS = new Set(["haiku", "sonnet", "poeme", "prose", "manifeste"]);
-  const POEM_FORM_V2: Record<string, string> = { haiku: "haiku", sonnet: "sonnet", poeme: "poem", prose: "prose", manifeste: "manifesto" };
-  const guessLanguage = (t: string) => (/[àâçéèêëîïôûùüÿœ]|\b(le|la|les|des|et|une?|dans|sur)\b/i.test(t) ? "fr" : "en");
+  // Formes littéraires : on accepte les noms anglais réellement produits ET les anciens noms français
+  const POEM_FORM_V2: Record<string, string> = {
+    haiku: "haiku", sonnet: "sonnet", poem: "poem", poeme: "poem", prose: "prose", manifesto: "manifesto", manifeste: "manifesto",
+  };
   const poemItems: AnaArtFeedItem[] = works
-    .filter(w => w.state === "PUBLISHED" && !!w.artForm && POEM_FORMS.has(w.artForm) && !!w.artworkText?.trim())
+    .filter(w => w.state === "PUBLISHED" && !!w.artForm && !!POEM_FORM_V2[w.artForm] && !!w.artworkText?.trim())
     .map(w => ({
       id:           `ana-work:${w.id}:poem:r1`,
       schemaVersion: 2 as const,
       sourceId:     w.id,
       revision:     1,
-      contentHash:  `sha256:${createHash("sha256").update(w.artworkText!).digest("hex")}`,
+      contentHash:  `sha256:${createHash("sha256").update(`${POEM_FORM_V2[w.artForm!]}:${w.artworkText!.trim().normalize("NFC")}`).digest("hex")}`,
       agentImageUrl: getNormieImageUrl(w.authorTokenId ?? w.proposedBy),
-      language:     guessLanguage(w.artworkText!),
+      language:     "und",   // langue non stockée comme donnée autoritative
       kind:         "poem" as const,
-      text:         w.artworkText!,
-      artForm:      POEM_FORM_V2[w.artForm!] ?? "poem",
+      text:         w.artworkText!.trim().normalize("NFC"),
+      artForm:      POEM_FORM_V2[w.artForm!],
       title:        w.title,
       agentTokenId: w.authorTokenId ?? w.proposedBy,
       agentName:    w.authorName ?? w.proposedByName,
