@@ -30,12 +30,42 @@ export const CDN_SRI: Record<GenerativeForm, { url: string; hash: string } | nul
   "html-threejs": { url: "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js", hash: "sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" },
 };
 
+// p5.sound (the addon exposing p5.SoundFile/Oscillator/Env/FFT/Amplitude/...)
+// is NOT part of p5.min.js — it's a separate file. 29/09-01/10/2026 incident:
+// "Neon Pulse Canvas" used p5.FFT/p5.Oscillator/p5.SoundFile/p5.Env while only
+// the core p5.js CDN tag was present and required, so it passed every
+// existing check and would have crashed at runtime ("p5.SoundFile is not a
+// constructor") the moment someone opened it. Rather than trying to detect
+// "does this code use audio" (fragile — misses anything the regex doesn't
+// anticipate), html-p5js ALWAYS loads p5.sound alongside the core library:
+// the failure class is eliminated structurally instead of pattern-matched.
+// SRI hash from cdnjs's own API for p5.js 1.9.4's addons/p5.sound.min.js,
+// cross-checked against a direct sha512 download (01/10/2026).
+export const P5_SOUND_CDN = {
+  url:  "https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/addons/p5.sound.min.js",
+  hash: "sha384-Ozi5ax1b+B/XBCzskytbAcQlgO0fcBp6gBOgS1SNQgR55vMk33RdVPAAAvB/8kA6",
+};
+
 export const CDN_HOST = "https://cdnjs.cloudflare.com";
 
-export function cdnForForm(artForm?: string): string {
+/** Every CDN URL that must appear in the document for `artForm`, in the
+ * order they should be loaded (p5.sound depends on p5 core being loaded
+ * first). Single source of truth for both the Author's prompt (cdnForForm)
+ * and validateGenerativeHtml's own required-tag check below — the two can
+ * never drift apart. */
+export function requiredCdnUrlsForForm(artForm?: string): Array<{ url: string; hash: string }> {
+  if (artForm === "html-p5js") {
+    const core = CDN_SRI["html-p5js"];
+    return core ? [core, P5_SOUND_CDN] : [];
+  }
   const entry = isGenerativeForm(artForm) ? CDN_SRI[artForm] : undefined;
-  if (!entry) return "";
-  return `<script src="${entry.url}" integrity="${entry.hash}" crossorigin="anonymous"></script>`;
+  return entry ? [entry] : [];
+}
+
+export function cdnForForm(artForm?: string): string {
+  return requiredCdnUrlsForForm(artForm)
+    .map(({ url, hash }) => `<script src="${url}" integrity="${hash}" crossorigin="anonymous"></script>`)
+    .join("\n");
 }
 
 // ─── Forbidden patterns ─────────────────────────────────────────────────────
@@ -133,8 +163,26 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
     if (artForm === "html-p5js") {
       if (!/function\s+setup\s*\(/i.test(trimmed)) errors.push("html-p5js: missing function setup()");
       if (!/createCanvas\s*\(/i.test(trimmed)) errors.push("html-p5js: missing createCanvas() call");
-      const cdn = CDN_SRI["html-p5js"];
-      if (!cdn || !trimmed.includes(cdn.url)) errors.push("html-p5js: missing the pinned p5.js CDN <script> tag");
+      // Both core p5.js AND p5.sound are required (see requiredCdnUrlsForForm's
+      // doc comment) — never conditional on whether audio APIs were detected,
+      // since that detection is exactly what would be fragile/incomplete.
+      for (const { url } of requiredCdnUrlsForForm(artForm)) {
+        if (!trimmed.includes(url)) errors.push(`html-p5js: missing the pinned CDN <script> tag for ${url}`);
+      }
+      // p5.sound's FFT requires a power-of-two bin count (16-1024). Only
+      // catches a literal numeric argument — a variable/expression (e.g.
+      // `new p5.FFT(0, barCount)`) can't be evaluated statically, so a
+      // non-power-of-two value reached that way is NOT caught here. That
+      // class of issue needs semantic review (see stepValidating's technical
+      // review panel in work-lifecycle/route.ts), not a regex.
+      const fftLiteralRe = /new\s+p5\.FFT\s*\(\s*[^,)]*,\s*(\d+)\s*\)/g;
+      let fftMatch: RegExpExecArray | null;
+      while ((fftMatch = fftLiteralRe.exec(trimmed)) !== null) {
+        const bins = Number(fftMatch[1]);
+        if (bins < 16 || bins > 1024 || (bins & (bins - 1)) !== 0) {
+          errors.push(`html-p5js: new p5.FFT(..., ${bins}) — bin count must be a power of two between 16 and 1024`);
+        }
+      }
     } else if (artForm === "html-threejs") {
       if (!/THREE\./.test(trimmed)) errors.push("html-threejs: no THREE.* usage found");
       const cdn = CDN_SRI["html-threejs"];

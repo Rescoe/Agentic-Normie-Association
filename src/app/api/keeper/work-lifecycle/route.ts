@@ -1051,7 +1051,7 @@ STRICT TECHNICAL CONSTRAINTS (on-chain security):
 - Start with <!DOCTYPE html> and <html lang="en">, end with </html>
 - Inline styles in <style>, inline JS in <script> — no inline event-handler attributes
   (no onclick="", onload="", etc. — attach listeners with addEventListener instead)
-${cdn ? `- Use this exact CDN script tag (with SRI hash), placed before your own <script>: ${cdn}` : "- Native Canvas 2D, no CDN needed"}
+${cdn ? `- Use these exact CDN script tag(s) (with SRI hash), placed before your own <script>: ${cdn}` : "- Native Canvas 2D, no CDN needed"}
 - NO fetch(), XMLHttpRequest, import(), eval(), new Function() — everything must run offline
 - NO <iframe> — NEVER access window.ethereum, window.parent, or window.top
 ${work.artForm === "html-p5js" ? `- MANDATORY p5.js contract: define function setup() that calls createCanvas(windowWidth, windowHeight)
@@ -1059,7 +1059,12 @@ ${work.artForm === "html-p5js" ? `- MANDATORY p5.js contract: define function se
 - Reset default margins so the canvas fills the viewport with no black/white bars:
   html,body{margin:0;padding:0;overflow:hidden;background:#0A0A0A} canvas{display:block}
 - Call background(...) on every draw() frame — never leave the canvas uncleared (this is what
-  causes a stuck black screen). Pick colors deliberately; never assume a default fill.` : ""}
+  causes a stuck black screen). Pick colors deliberately; never assume a default fill.
+- p5.sound (p5.SoundFile, p5.Oscillator, p5.Env, p5.FFT, p5.Amplitude, ...) is already loaded
+  alongside core p5.js — audio-reactive pieces are fully supported. If you use p5.FFT, its bin
+  count argument MUST be a literal power of two between 16 and 1024 (e.g. 64, 128, 256), never
+  a computed/random value — an invalid bin count fails validation and an unpredictable one can't
+  be checked at all. If your piece doesn't use audio, simply ignore the p5.sound script tag.` : ""}
 ${work.artForm === "html-threejs" ? `- MANDATORY three.js contract: create a THREE.Scene, a THREE.PerspectiveCamera, and a
   THREE.WebGLRenderer sized to window.innerWidth/innerHeight, appended to document.body
 - Handle window 'resize' to update camera aspect and renderer size — never leave a black canvas` : ""}
@@ -1422,6 +1427,92 @@ async function rejectOrRevise(
   return true;
 }
 
+// ─── Technical review panel (html-* works, before on-chain publication) ──────
+//
+// 01/10/2026: a static check can only catch failure shapes it already knows
+// about (see generativeArtwork.ts's p5.sound fix) — it can never catch a
+// genuinely novel runtime bug (e.g. an FFT analyzer wired to the wrong sound
+// source, so the visualization never reacts to what it's supposed to). This
+// panel asks a few Normies OTHER than the curator/author to read the actual
+// code — not an excerpt — looking specifically for things that would
+// malfunction at runtime, as a last gate before an immutable on-chain
+// publish. Deliberately NOT an LLM call that rewrites the artwork itself:
+// the porteur's explicit instruction (01/10/2026) is that any correction
+// must come from the Normies' own authorship (the Author, via the existing
+// CREATING/revision loop), never a patch applied here or by a human/Claude
+// directly. A reviewer who flags a real problem routes the work back to
+// CREATING through the same rejectOrRevise() the curator itself uses — the
+// Author is the one who actually writes the fix, next cycle.
+const TECHNICAL_REVIEWERS_COUNT = 2;
+
+interface TechnicalReviewVerdict {
+  reviewer: NormiePersona;
+  technicallySound: boolean;
+  issues: string[];
+}
+
+async function technicalReviewOne(work: ANAWork, reviewer: NormiePersona): Promise<TechnicalReviewVerdict | null> {
+  const raw = await criticalLlm(
+    [
+      { role: "system", content: buildSystemPrompt(reviewer) },
+      {
+        role: "user",
+        content: `You are reviewing the CODE of the generative artwork "${work.title}" (${work.artForm}) for TECHNICAL correctness only — not artistic merit, not whether you personally like it. Another Normie already approved it creatively; your job is narrower and more skeptical.
+
+Look specifically for things that would make it crash, freeze, stay blank, or visibly malfunction at runtime:
+- a class or function from a library whose CDN script tag is not present in this exact document (e.g. a p5.sound class like p5.SoundFile/p5.Oscillator/p5.FFT without the p5.sound script tag)
+- an API called with invalid or out-of-range arguments
+- a sensor/analyzer (e.g. an FFT) that is never actually connected to the thing it is supposed to visualize
+- a variable or function used before it is defined
+- any other concrete syntax or logic error you can point to in the code itself
+
+Do NOT flag style, performance, or anything you are merely guessing at — only confident, specific, concrete problems you can quote or point to in the code below.
+
+FULL SOURCE:
+${(work.artworkText ?? "").slice(0, 16000)}
+
+JSON only: {"technicallySound":true|false,"issues":["specific issue 1 quoting or pointing at the exact code", "..."]}`,
+      },
+    ],
+    { model: MODEL_FAST, maxTokens: 500, temp: 0.3, expectJson: true, task: "curation" },
+  );
+  if (!raw) return null;
+  const parsed = extractJsonObject(raw) as { technicallySound?: boolean; issues?: unknown };
+  const issues = Array.isArray(parsed.issues) ? parsed.issues.filter((i): i is string => typeof i === "string").slice(0, 5) : [];
+  return { reviewer, technicallySound: parsed.technicallySound !== false, issues };
+}
+
+/**
+ * Runs the panel and returns the aggregated issues ONLY if at least one
+ * reviewer gave a confident, successfully-parsed "not sound" verdict with a
+ * concrete issue — a failed/unparseable LLM call is treated as "no opinion",
+ * never as a vote against, so a Groq/1min.ai hiccup can never block (or
+ * stall) a publication the curator already approved. This is a best-effort
+ * supplementary safety net, not a hard architectural gate.
+ */
+async function runTechnicalReviewPanel(
+  work: ANAWork, personas: NormiePersona[], exclude: number[],
+): Promise<{ blocked: boolean; reviewers: NormiePersona[]; issues: string[] }> {
+  const pool = personas.filter(p => !exclude.includes(p.tokenId));
+  const reviewers = [...pool].sort(() => Math.random() - 0.5).slice(0, Math.min(TECHNICAL_REVIEWERS_COUNT, pool.length));
+  if (reviewers.length === 0) return { blocked: false, reviewers: [], issues: [] };
+
+  const settled = await Promise.allSettled(reviewers.map(r => technicalReviewOne(work, r)));
+  const verdicts = settled
+    .filter((s): s is PromiseFulfilledResult<TechnicalReviewVerdict | null> => s.status === "fulfilled")
+    .map(s => s.value)
+    .filter((v): v is TechnicalReviewVerdict => v != null);
+
+  const flags = verdicts.filter(v => !v.technicallySound && v.issues.length > 0);
+  if (flags.length === 0) return { blocked: false, reviewers: verdicts.map(v => v.reviewer), issues: [] };
+
+  return {
+    blocked: true,
+    reviewers: flags.map(f => f.reviewer),
+    issues: flags.flatMap(f => f.issues.map(i => `${f.reviewer.name}: ${i}`)),
+  };
+}
+
 async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise<boolean> {
   // Memorials (artForm "pixel-drawing") never reach VALIDATING — moderation
   // for them is the member vote, run right after creation (see
@@ -1534,6 +1625,32 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
   const reclassifyAs = parsed.reclassifyAs;
 
   if (approved) {
+    // One more gate before an IMMUTABLE on-chain publish, for html-* works
+    // only: a small panel of OTHER Normies reads the actual code hunting for
+    // runtime-breaking issues the curator's own (shorter, excerpt-based)
+    // read and the static structural check can't catch between them (see
+    // runTechnicalReviewPanel's doc comment). A flag here never rewrites the
+    // artwork — it routes back to CREATING through the exact same
+    // rejectOrRevise() the curator itself uses, so the Author (a Normie) is
+    // the one who actually fixes it, next cycle.
+    if (isHtml) {
+      const exclude = [curator.tokenId, work.authorTokenId, work.rapporteurTokenId].filter((id): id is number => id != null);
+      const review = await runTechnicalReviewPanel(work, personas, exclude);
+      if (review.blocked) {
+        const reviewerNames = review.reviewers.map(r => r.name).join(" & ");
+        await addMessage({
+          salonId: work.salonId ?? AGORA_SALON_ID, tokenId: review.reviewers[0].tokenId,
+          name: review.reviewers[0].name, imageUrl: review.reviewers[0].imageUrl ?? "",
+          content: `🔍 Technical review of "${work.title}" by ${reviewerNames} found a problem before publication: ${review.issues[0]}`,
+          isLlm: true, timestamp: Date.now(), topic: "art",
+        }).catch(() => null);
+        return await rejectOrRevise(work, personas, review.reviewers[0], `Technical review (${reviewerNames}): ${review.issues.join(" | ")}`, attempt);
+      }
+      if (review.reviewers.length > 0) {
+        console.log(`[work-lifecycle] "${work.title}" passed technical review by ${review.reviewers.map(r => r.name).join(", ")}`);
+      }
+    }
+
     await updateWork(work.id, { validationNote: note });
     await addMessage({
       salonId:   work.salonId ?? AGORA_SALON_ID,

@@ -4,15 +4,22 @@ import {
   buildGenerativeCsp,
   cdnForForm,
   CDN_SRI,
+  P5_SOUND_CDN,
 } from "../src/lib/generativeArtwork";
 
 const P5_CDN = CDN_SRI["html-p5js"]!.url;
+// p5.sound is required alongside core p5.js for every html-p5js document as
+// of the 01/10/2026 fix (see generativeArtwork.ts's requiredCdnUrlsForForm
+// doc comment — "Neon Pulse Canvas" used p5.sound APIs with only the core
+// tag present and would have crashed at runtime).
+const P5_TAGS = `<script src="${P5_CDN}" integrity="${CDN_SRI["html-p5js"]!.hash}" crossorigin="anonymous"></script>
+<script src="${P5_SOUND_CDN.url}" integrity="${P5_SOUND_CDN.hash}" crossorigin="anonymous"></script>`;
 
 function validP5Doc(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-<script src="${P5_CDN}" integrity="${CDN_SRI["html-p5js"]!.hash}" crossorigin="anonymous"></script>
+${P5_TAGS}
 <style>html,body{margin:0;padding:0;overflow:hidden;background:#0A0A0A} canvas{display:block}</style>
 </head>
 <body>
@@ -177,6 +184,73 @@ function windowResized() { resizeCanvas(windowWidth, windowHeight); }
     expect(result.errors.some(e => e.includes("NORMIE_TRAITS"))).to.equal(true);
   });
 
+  it("rejects html-p5js audio code when the p5.sound CDN tag is missing — the 'Neon Pulse Canvas' regression", () => {
+    // p5.sound (SoundFile/Oscillator/Env/FFT) is a separate addon from core
+    // p5.js. A document using it without the addon's own CDN tag would
+    // crash at runtime ("p5.SoundFile is not a constructor") even though it
+    // used to pass every previous check.
+    const audioNoSoundLib = `<!DOCTYPE html>
+<html lang="en">
+<head><script src="${P5_CDN}" integrity="${CDN_SRI["html-p5js"]!.hash}" crossorigin="anonymous"></script></head>
+<body>
+<script>
+const NORMIE_ID = 6848;
+const NORMIE_ARCHETYPE = "Human";
+const NORMIE_TRAITS = [{"trait_type":"Type","value":"Human"}];
+const WORK_TITLE = "Neon Pulse Canvas";
+const CREATED_AT = 1790845716620;
+let hiss;
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  hiss = new p5.SoundFile();
+}
+function draw() { background(10); ellipse(50,50,30,30); }
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+</script>
+</body>
+</html>`;
+    const result = validateGenerativeHtml(audioNoSoundLib, "html-p5js");
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("p5.sound.min.js"))).to.equal(true);
+  });
+
+  it("accepts html-p5js audio code once the p5.sound CDN tag is present", () => {
+    const withSound = validP5Doc().replace(
+      "function setup(){ createCanvas(windowWidth, windowHeight); }",
+      "let hiss; function setup(){ createCanvas(windowWidth, windowHeight); hiss = new p5.SoundFile(); }",
+    );
+    const result = validateGenerativeHtml(withSound, "html-p5js");
+    expect(result.valid, result.errors.join("; ")).to.equal(true);
+  });
+
+  it("rejects a literal p5.FFT bin count that isn't a power of two", () => {
+    const badFft = validP5Doc().replace(
+      "function setup(){ createCanvas(windowWidth, windowHeight); }",
+      "let fft; function setup(){ createCanvas(windowWidth, windowHeight); fft = new p5.FFT(0.0, 70); }",
+    );
+    const result = validateGenerativeHtml(badFft, "html-p5js");
+    expect(result.valid).to.equal(false);
+    expect(result.errors.some(e => e.includes("power of two"))).to.equal(true);
+  });
+
+  it("accepts a literal p5.FFT bin count that is a power of two", () => {
+    const okFft = validP5Doc().replace(
+      "function setup(){ createCanvas(windowWidth, windowHeight); }",
+      "let fft; function setup(){ createCanvas(windowWidth, windowHeight); fft = new p5.FFT(0.0, 64); }",
+    );
+    const result = validateGenerativeHtml(okFft, "html-p5js");
+    expect(result.valid, result.errors.join("; ")).to.equal(true);
+  });
+
+  it("does not flag a variable p5.FFT bin count (documented static-analysis limit — needs semantic review instead)", () => {
+    const varFft = validP5Doc().replace(
+      "function setup(){ createCanvas(windowWidth, windowHeight); }",
+      "let fft, barCount=70; function setup(){ createCanvas(windowWidth, windowHeight); fft = new p5.FFT(0.0, barCount); }",
+    );
+    const result = validateGenerativeHtml(varFft, "html-p5js");
+    expect(result.errors.some(e => e.includes("power of two"))).to.equal(false);
+  });
+
   it("rejects html-canvas artworks without a <canvas> element", () => {
     const noCanvas = `<!DOCTYPE html><html><body><script>console.log("nope");</script></body></html>`;
     const result = validateGenerativeHtml(noCanvas, "html-canvas");
@@ -208,9 +282,10 @@ describe("generativeArtwork — buildGenerativeCsp", () => {
 });
 
 describe("generativeArtwork — cdnForForm", () => {
-  it("returns the pinned p5.js script tag with its SRI hash for html-p5js", () => {
+  it("returns both the pinned p5.js and p5.sound script tags with SRI hashes for html-p5js", () => {
     const tag = cdnForForm("html-p5js");
     expect(tag).to.include(P5_CDN);
+    expect(tag).to.include(P5_SOUND_CDN.url);
     expect(tag).to.include("integrity=");
   });
 
