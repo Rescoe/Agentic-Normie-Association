@@ -52,4 +52,40 @@ describe("redactSecrets — P0 secret-leak fix (29/09/2026 incident)", () => {
     const long = "a".repeat(1000);
     expect(cleanDiagnosticText(long, 50)!.length).toBe(50);
   });
+
+  // 01/10/2026 follow-up incident: the SAME Alchemy key leaked a second time,
+  // through a different path — the raw HTTP response of POST
+  // /api/keeper/work-lifecycle (results[].error), which never went through
+  // this module at all until this fix. These tests lock down the exact shape
+  // that leaked, plus a related gap found during the same sweep: a Postgres
+  // connection string's password was never covered by any pattern.
+  it("redacts a real Alchemy-shaped RPC URL exactly as it appeared in the leaked error", () => {
+    const raw = "publishWork failed: Missing or invalid parameters. URL: https://base-mainnet.g.alchemy.com/v2/alch_FAKEKEYFORTESTONLY1234 Request body: {...}";
+    const cleaned = redactSecrets(raw);
+    expect(cleaned).not.toContain("alch_FAKEKEYFORTESTONLY1234");
+    expect(cleaned).toContain("base-mainnet.g.alchemy.com");
+  });
+
+  it("redacts a password embedded in a postgres:// connection string", () => {
+    const raw = `connect failed: postgres://user:${SECRET}@ep-example-123.us-east-1.aws.neon.tech/db`;
+    const cleaned = redactSecrets(raw);
+    expect(cleaned).not.toContain(SECRET);
+    expect(cleaned).toContain("ep-example-123.us-east-1.aws.neon.tech"); // host stays visible for debugging
+    expect(cleaned).toContain("postgres://user:");
+  });
+
+  describe("every Neon connection-string env var variant db.ts tries", () => {
+    const NAMES = [
+      "NEON_DB_ANA_POSTGRES_URL", "NEON_DB_ANA_POSTGRES_DATABASE_URL",
+      "NEON_DB_ANA_POSTGRES_POSTGRES_URL", "NEON_DB_ANA_DATABASE_URL", "NEON_DB_ANA",
+    ] as const;
+    const originals: Record<string, string | undefined> = {};
+    for (const n of NAMES) originals[n] = process.env[n];
+    afterEach(() => { for (const n of NAMES) process.env[n] = originals[n]; });
+
+    it.each(NAMES)("redacts the exact value of %s", (name) => {
+      process.env[name] = `postgres://user:${SECRET}@host/db`;
+      expect(redactSecrets(`failed: ${process.env[name]}`)).not.toContain(SECRET);
+    });
+  });
 });

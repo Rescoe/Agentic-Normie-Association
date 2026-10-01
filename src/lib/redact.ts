@@ -30,7 +30,15 @@ const SENSITIVE_ENV_VAR_NAMES = [
   "RELAYER_PRIVATE_KEY",
   "GROQ_API_KEY",
   "ONE_MIN_AI_API_KEY",
+  "BASESCAN_API_KEY",
   "CRON_SECRET",
+  // db.ts tries these Neon connection-string env vars in order (Vercel's
+  // actual integration names differ from the manual/legacy one) — every
+  // variant must be covered, not just the one someone remembers by name.
+  "NEON_DB_ANA_POSTGRES_URL",
+  "NEON_DB_ANA_POSTGRES_DATABASE_URL",
+  "NEON_DB_ANA_POSTGRES_POSTGRES_URL",
+  "NEON_DB_ANA_DATABASE_URL",
   "NEON_DB_ANA",
   "BASE_RPC_URL",
 ] as const;
@@ -57,6 +65,12 @@ const URL_QUERY_KEY_RE = /([?&](?:api[_-]?key|key|token|secret)=)[^&\s"'<>]+/gi;
 const BEARER_RE = /\bBearer\s+[A-Za-z0-9._-]{10,}/gi;
 const AUTH_HEADER_KV_RE = /(authorization["']?\s*[:=]\s*["']?)[A-Za-z0-9._-]{10,}/gi;
 
+// postgres://user:password@host/db — a driver error (connection refused, DNS
+// failure, auth failure) can embed the full connection string including its
+// password. Defense in depth alongside the exact NEON_DB_ANA* env matches
+// above (which only catch the value exactly as currently configured).
+const POSTGRES_URL_CREDENTIALS_RE = /(postgres(?:ql)?:\/\/[^:/@\s]+:)[^@\s]+(@)/gi;
+
 /**
  * Removes every known secret shape from `input`. Idempotent — running it
  * twice produces the same output as running it once, so it's safe to apply
@@ -74,6 +88,7 @@ export function redactSecrets(input: string): string {
   out = out.replace(URL_QUERY_KEY_RE, (_m, prefix: string) => `${prefix}${REDACTED}`);
   out = out.replace(BEARER_RE, `Bearer ${REDACTED}`);
   out = out.replace(AUTH_HEADER_KV_RE, (_m, prefix: string) => `${prefix}${REDACTED}`);
+  out = out.replace(POSTGRES_URL_CREDENTIALS_RE, (_m, prefix: string, suffix: string) => `${prefix}${REDACTED}${suffix}`);
 
   return out;
 }

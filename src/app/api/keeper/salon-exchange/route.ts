@@ -11,6 +11,7 @@
  */
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { redactSecrets } from "@/lib/redact";
 import { createPublicClient } from "viem";
 import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
@@ -595,7 +596,7 @@ export async function POST(req: NextRequest) {
       workLifecycle = r.ok ? await r.json() as Record<string, unknown> : { error: `HTTP ${r.status}` };
     } catch (e) {
       console.error("[salon-exchange] work-lifecycle self-fetch failed:", e);
-      workLifecycle = { error: e instanceof Error ? e.message : String(e) };
+      workLifecycle = { error: redactSecrets(e instanceof Error ? e.message : String(e)) };
     }
 
     return NextResponse.json({

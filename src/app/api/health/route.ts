@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { sql, USE_NEON, getNeonHost } from "@/lib/db";
+import { redactSecrets } from "@/lib/redact";
 
 export async function GET() {
   const neonHost = getNeonHost();
@@ -33,7 +34,11 @@ export async function GET() {
       { status: 200 },
     );
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    // This route is fully public (no auth) — a raw Postgres driver error can
+    // embed the connection string itself (seen elsewhere, 29/09/2026: a raw
+    // RPC URL with its key reached a public response the same way). Never
+    // return e.message unredacted here.
+    const msg = redactSecrets(e instanceof Error ? e.message : String(e));
     return NextResponse.json(
       { ok: false, neon: false, host: neonHost, error: msg },
       { status: 503 },

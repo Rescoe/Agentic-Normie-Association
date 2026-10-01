@@ -32,6 +32,7 @@ import { kvGet, kvSet } from "@/lib/db";
 import { FIRST_ELECTION_OPEN_AT, ELECTION_TERM_MS, ELECTION_VOTE_WINDOW_SECONDS } from "@/lib/electionSchedule";
 import { runAutoVotePhase, type AutoVoteBody, type Candidacy } from "@/lib/autoVote";
 import { baseRpcTransport } from "@/lib/baseRpc";
+import { redactSecrets } from "@/lib/redact";
 
 // Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026
 // audit finding — was the reverse).
@@ -166,7 +167,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ step: "openSession", txHash: hash });
     } catch (e) {
-      return NextResponse.json({ error: `openSession failed: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
+      return NextResponse.json({ error: redactSecrets(`openSession failed: ${e instanceof Error ? e.message : String(e)}`) }, { status: 500 });
     }
   }
 
@@ -176,7 +177,7 @@ export async function POST(req: NextRequest) {
       const result = await callAutoVote({ phase: "close" });
       return NextResponse.json({ step: "close", result });
     } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+      return NextResponse.json({ error: redactSecrets(e instanceof Error ? e.message : String(e)) }, { status: 500 });
     }
   }
 
@@ -224,7 +225,7 @@ export async function POST(req: NextRequest) {
       await saveCycleState(afterCandidacy);
       return NextResponse.json({ step: "candidacy", result });
     } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+      return NextResponse.json({ error: redactSecrets(e instanceof Error ? e.message : String(e)) }, { status: 500 });
     }
   }
 
@@ -248,7 +249,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ step: "vote", result });
     } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+      return NextResponse.json({ error: redactSecrets(e instanceof Error ? e.message : String(e)) }, { status: 500 });
     }
   }
 

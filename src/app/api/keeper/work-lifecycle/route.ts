@@ -2107,7 +2107,7 @@ async function stepPublishing(work: ANAWork): Promise<boolean | string> {
     for (const celebrationId of work.celebrationIds) {
       const linkResult = await linkCelebrationWork({
         celebrationId, onChainWorkId, editionsAddr: collectionAddress, workId: work.id,
-      }).catch(e => ({ success: false, error: e instanceof Error ? e.message : String(e) }));
+      }).catch(e => ({ success: false, error: redactSecrets(e instanceof Error ? e.message : String(e)) }));
       if (!linkResult.success) {
         console.warn(`[work-lifecycle] linkCelebrationWork failed for celebration #${celebrationId}: ${linkResult.error}`);
       }
@@ -2778,7 +2778,15 @@ export async function POST(req: NextRequest) {
     }
 
     const advanced = result === true;
-    const error    = typeof result === "string" ? result : undefined;
+    // 01/10/2026 incident: this `error` reaches the raw HTTP JSON response
+    // (results[].error, rendered directly in the admin panel) — unlike
+    // validationNote/operationalErrorMessage, it never went through
+    // workStore.updateWork()'s write-time redaction, so a raw provider error
+    // (observed: a live Alchemy RPC URL with its key, straight from viem's
+    // own eth_sendRawTransaction rejection message) reached the admin UI
+    // verbatim. Every exit point from advanceWork() that can carry a raw
+    // provider message must be redacted here, not assumed to already be clean.
+    const error = typeof result === "string" ? redactSecrets(result) : undefined;
 
     // VOTE_OPEN legitimately returns false while waiting on the 24h voting window
     // (not everyone has voted yet) — that is normal, not a failure, never auto-reject it.

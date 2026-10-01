@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { backfillTxLog, blockNumberAtTimestamp, relabelIncompleteTxLog } from "@/lib/etherscanBackfill";
 import { verifyAdminRequest } from "@/lib/adminAuth";
+import { redactSecrets } from "@/lib/redact";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60; // Vercel Hobby plan cap — safe to call again, inserts are idempotent (ON CONFLICT DO NOTHING)
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
       const result = await relabelIncompleteTxLog();
       return NextResponse.json(result);
     } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+      return NextResponse.json({ error: redactSecrets(e instanceof Error ? e.message : String(e)) }, { status: 500 });
     }
   }
 
@@ -52,6 +53,6 @@ export async function POST(req: NextRequest) {
     const relabel      = await relabelIncompleteTxLog();
     return NextResponse.json({ since: sinceDate.toISOString(), sinceBlock, ...result, relabel });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    return NextResponse.json({ error: redactSecrets(e instanceof Error ? e.message : String(e)) }, { status: 500 });
   }
 }

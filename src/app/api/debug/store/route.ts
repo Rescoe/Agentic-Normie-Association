@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getDebugInfo } from "@/lib/salonStore";
 import { USE_NEON, kvGet, getNeonHost } from "@/lib/db";
+import { redactSecrets } from "@/lib/redact";
 
 function maskUrl(url: string | undefined): string | null {
   if (!url) return null;
@@ -37,7 +38,8 @@ export async function GET() {
       rawWorkStore = { error: "kvGet('work-store') returned null/empty" };
     }
   } catch (e) {
-    rawWorkStore = { error: e instanceof Error ? e.message : String(e) };
+    // This route is fully public, no auth — never return a raw caught error.
+    rawWorkStore = { error: redactSecrets(e instanceof Error ? e.message : String(e)) };
   }
 
   return NextResponse.json(

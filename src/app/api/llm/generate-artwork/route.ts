@@ -12,6 +12,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import type { NormiePersona } from "@/lib/normiesPersona";
+import { redactSecrets } from "@/lib/redact";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL        = "openai/gpt-oss-120b";
@@ -115,7 +116,7 @@ Complete, self-contained, standalone HTML code. Start with <!DOCTYPE html>.`;
     return NextResponse.json({ html });
   } catch (e) {
     return NextResponse.json({
-      error: e instanceof Error ? e.message : "Unexpected error",
+      error: redactSecrets(e instanceof Error ? e.message : "Unexpected error"),
     }, { status: 500 });
   }
 }

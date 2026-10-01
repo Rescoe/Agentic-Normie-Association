@@ -20,6 +20,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { personaToPromptBlock, type NormiePersona } from "@/lib/normiesPersona";
+import { redactSecrets } from "@/lib/redact";
 
 interface ElectedMember {
   role:          string;
@@ -173,6 +174,6 @@ export async function POST(req: NextRequest) {
     if (msg.includes("GROQ_API_KEY not configured")) {
       return NextResponse.json({ error: "LLM not configured — set GROQ_API_KEY" }, { status: 503 });
     }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: redactSecrets(msg) }, { status: 500 });
   }
 }

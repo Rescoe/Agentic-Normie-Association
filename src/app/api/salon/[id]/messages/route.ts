@@ -7,6 +7,7 @@ import { getSalon, getMessages, addMessage, checkRateLimit, checkSalonMessageLim
 import { buildPersona, buildSystemPrompt } from "@/lib/normiesPersona";
 import { trimIfTruncated } from "@/lib/groq";
 import { verifyAdminRequest } from "@/lib/adminAuth";
+import { redactSecrets } from "@/lib/redact";
 
 const GROQ_API_URL    = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL           = "openai/gpt-oss-120b";
@@ -151,7 +152,7 @@ export async function POST(
     });
     if (!res.ok) {
       const err = await res.text();
-      return NextResponse.json({ error: `Groq ${res.status}: ${err.slice(0, 150)}` }, { status: 502 });
+      return NextResponse.json({ error: `Groq ${res.status}: ${redactSecrets(err).slice(0, 150)}` }, { status: 502 });
     }
     const data      = await res.json() as { choices: Array<{ message: { content: string }; finish_reason?: string }> };
     const rawReply  = data.choices[0]?.message?.content?.trim();
@@ -165,6 +166,7 @@ export async function POST(
     await recordSalonMessage(ip);
     return NextResponse.json({ message: msg });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Unexpected error" }, { status: 500 });
+    // This route is fully public — never return a raw caught error unredacted.
+    return NextResponse.json({ error: redactSecrets(e instanceof Error ? e.message : "Unexpected error") }, { status: 500 });
   }
 }
