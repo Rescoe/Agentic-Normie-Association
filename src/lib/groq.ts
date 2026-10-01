@@ -99,9 +99,22 @@ export function trimIfTruncated(content: string, finishReason: string | undefine
   return content.slice(0, lastSentenceEnd + 1).trim();
 }
 
+// 01/10/2026 incident: neither this fetch nor 1min.ai's (oneMinAi.ts) had
+// any request timeout. work-lifecycle's own Vercel budget is 60s
+// (vercel.json) shared across every active work it processes in one tick —
+// a single slow provider response (observed: a DeepSeek/1min.ai call still
+// billing ~90s after Vercel had already force-killed the function) silently
+// ate the ENTIRE invocation, leaving zero time for any other work that tick
+// (e.g. "Unburned Roots' Reverie" never even got a turn) and producing a
+// bare 504 with no diagnostic captured anywhere. Bounding each individual
+// provider call lets the EXISTING fallback/retry logic (e.g. stepCreating's
+// 1min.ai → Groq fallback) actually run instead of the whole tick dying.
+const GROQ_REQUEST_TIMEOUT_MS = 25_000;
+
 export async function groqFetch(
   body:       GroqBody,
   maxRetries: number = 3,
+  timeoutMs:  number = GROQ_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
   const key = process.env.GROQ_API_KEY;
   const headers = {
@@ -111,7 +124,20 @@ export async function groqFetch(
 
   let attempt = 0;
   while (true) {
-    const res = await fetch(GROQ_URL, { method: "POST", headers, body: JSON.stringify(body) });
+    // Never throws — a timeout/network failure degrades to a synthetic
+    // non-ok Response (same contract every caller already handles for a
+    // real 5xx), rather than an uncaught exception from a now-aborted fetch.
+    let res: Response;
+    try {
+      res = await fetch(GROQ_URL, {
+        method: "POST", headers, body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      const isTimeout = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+      console.error(`[groq] request failed${isTimeout ? ` (timed out after ${timeoutMs}ms)` : ""}: ${e instanceof Error ? e.message : String(e)}`);
+      return new Response(JSON.stringify({ error: isTimeout ? "request timed out" : "request failed" }), { status: 504 });
+    }
 
     if (res.status !== 429) return res;
 

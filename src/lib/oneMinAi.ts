@@ -89,7 +89,20 @@ interface OneMinAiResponse {
   error?: { code?: string; message?: string };
 }
 
-export async function callOneMinAi(prompt: string, model: string): Promise<string | null> {
+// 01/10/2026 incident: this fetch had no timeout. work-lifecycle's own
+// Vercel budget is 60s (vercel.json), shared across every active work it
+// processes in one tick — a single slow 1min.ai response (observed: still
+// billing credits ~90s after Vercel had already force-killed the function
+// on a 60s timeout) silently ate the ENTIRE invocation, leaving zero time
+// for any other active work that tick and producing a bare 504 with no
+// diagnostic captured anywhere. Bounding the request lets the existing
+// 1min.ai → Groq fallback (stepCreating, work-lifecycle/route.ts) actually
+// run instead of the whole tick dying. "code" (full HTML generation) gets a
+// longer budget than the short JSON/text tasks.
+const DEFAULT_TIMEOUT_MS = 20_000;
+const CODE_TIMEOUT_MS    = 35_000;
+
+export async function callOneMinAi(prompt: string, model: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<string | null> {
   const key = process.env.ONE_MIN_AI_API_KEY;
   if (!key) return null;
 
@@ -102,6 +115,7 @@ export async function callOneMinAi(prompt: string, model: string): Promise<strin
         model,
         promptObject: { prompt },
       }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
@@ -116,7 +130,8 @@ export async function callOneMinAi(prompt: string, model: string): Promise<strin
     }
     return data.aiRecord?.aiRecordDetail?.resultObject?.[0]?.trim() || null;
   } catch (e) {
-    console.error("[1minAI] request failed:", e);
+    const isTimeout = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+    console.error(`[1minAI] request failed${isTimeout ? ` (timed out after ${timeoutMs}ms)` : ""}:`, e);
     return null;
   }
 }
@@ -146,7 +161,7 @@ export async function oneMinAiCode(
 ): Promise<string | null> {
   const model  = modelForOneMinAiTask("code");
   const prompt = `${joinMessages(messages)}\n\nReturn a complete but compact document. Keep the UTF-8 HTML under 18,000 bytes. Never truncate code.`;
-  return callOneMinAi(prompt, model);
+  return callOneMinAi(prompt, model, CODE_TIMEOUT_MS);
 }
 
 /** Generic critical path for prompts that already contain their complete
