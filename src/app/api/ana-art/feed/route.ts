@@ -1,5 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
+import { getNormieImageUrl } from "@/lib/normiesApi";
 import { unstable_cache } from "next/cache";
 import { listWorks } from "@/lib/workStore";
 import { listDrawings } from "@/lib/drawStore";
@@ -30,7 +32,7 @@ const getCachedFeedItems = unstable_cache(
     const [works, drawings] = await Promise.all([listWorks(), listDrawings()]);
     return buildFeedItems(works, drawings);
   },
-  ["ana-art-feed-v2"],
+  ["ana-art-feed-v3"],   // v3 : items "poem" ajoutés (le cache v2 ne les connaît pas)
   { revalidate: 1800, tags: ["ana-art-feed"] },
 );
 
@@ -38,10 +40,23 @@ const CACHE_HEADERS = { "Cache-Control": "private, no-store" };
 
 export interface AnaArtFeedItem {
   id:             string;
-  kind:           "celebration" | "spontaneous";
-  pixels:         string; // base64, raw grayscale bytes, canvasW*canvasH, 0-255
-  canvasW:        number;
-  canvasH:        number;
+  kind:           "celebration" | "spontaneous" | "poem";
+  // celebration / spontaneous : bitmap brut. Absents pour "poem".
+  pixels?:        string; // base64, raw grayscale bytes, canvasW*canvasH, 0-255
+  canvasW?:       number;
+  canvasH?:       number;
+  // poem : texte intégral ; proof-of-draw le rend en pixels par type d'écran et y ajoute le visage
+  // 40×40 du Normie auteur (api.normies.art/normie/{agentTokenId}/pixels).
+  text?:          string;
+  artForm?:       string; // poem : "haiku" | "sonnet" | "poem" | "prose" | "manifesto" (contrat V2)
+  // ── Enveloppe contrat d'échange V2 (note 32) — présente sur les items "poem" ; les anciens items
+  // (celebration / spontaneous) restent au format V1 pour ne pas casser le PoD déployé.
+  schemaVersion?: 2;
+  sourceId?:      string;
+  revision?:      number;
+  contentHash?:   string;  // sha256:<hex> du texte publié
+  agentImageUrl?: string;
+  language?:      string;  // BCP-47 (heuristique : fr si accents/mots français, sinon en)
   title:          string;
   agentTokenId:   number;
   agentName?:     string;
@@ -102,6 +117,40 @@ function buildFeedItems(
       collectionAddress: w.collectionAddress,
     }));
 
+  // Poèmes publiés : l'auteur affiché est le Normie qui a écrit le poème (authorTokenId), pas le proposeur.
+  const POEM_FORMS = new Set(["haiku", "sonnet", "poeme", "prose", "manifeste"]);
+  const POEM_FORM_V2: Record<string, string> = { haiku: "haiku", sonnet: "sonnet", poeme: "poem", prose: "prose", manifeste: "manifesto" };
+  const guessLanguage = (t: string) => (/[àâçéèêëîïôûùüÿœ]|\b(le|la|les|des|et|une?|dans|sur)\b/i.test(t) ? "fr" : "en");
+  const poemItems: AnaArtFeedItem[] = works
+    .filter(w => w.state === "PUBLISHED" && !!w.artForm && POEM_FORMS.has(w.artForm) && !!w.artworkText?.trim())
+    .map(w => ({
+      id:           `ana-work:${w.id}:poem:r1`,
+      schemaVersion: 2 as const,
+      sourceId:     w.id,
+      revision:     1,
+      contentHash:  `sha256:${createHash("sha256").update(w.artworkText!).digest("hex")}`,
+      agentImageUrl: getNormieImageUrl(w.authorTokenId ?? w.proposedBy),
+      language:     guessLanguage(w.artworkText!),
+      kind:         "poem" as const,
+      text:         w.artworkText!,
+      artForm:      POEM_FORM_V2[w.artForm!] ?? "poem",
+      title:        w.title,
+      agentTokenId: w.authorTokenId ?? w.proposedBy,
+      agentName:    w.authorName ?? w.proposedByName,
+      publishedAt:  w.publishedAt ?? w.proposedAt,
+      cartelText:   w.cartelText,
+      brief:        w.brief,
+      proposal:     w.proposal,
+      voteResult:   w.voteResult,
+      yesCount:     w.yesCount,
+      noCount:      w.noCount,
+      absCount:     w.absCount,
+      revisionCount: w.revisionCount,
+      onChainWorkId: w.onChainWorkId,
+      txHash:       w.txHash,
+      collectionAddress: w.collectionAddress,
+    }));
+
   const spontaneousItems: AnaArtFeedItem[] = drawings
     .filter(d => d.decision === "approved")
     .map(d => ({
@@ -116,7 +165,7 @@ function buildFeedItems(
       decisionNote: d.decisionNote,
     }));
 
-  return [...celebrationItems, ...spontaneousItems].sort((a, b) => b.publishedAt - a.publishedAt);
+  return [...celebrationItems, ...poemItems, ...spontaneousItems].sort((a, b) => b.publishedAt - a.publishedAt);
 }
 
 /**
