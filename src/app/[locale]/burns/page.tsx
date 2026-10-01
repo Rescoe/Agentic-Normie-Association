@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { GallerySubNav } from "@/components/GallerySubNav";
 import { BurnsClient } from "@/app/[locale]/burns/BurnsClient";
 
 export const metadata: Metadata = {
@@ -34,6 +35,8 @@ export default async function BurnsPage() {
             </p>
           </div>
         </section>
+
+        <GallerySubNav />
 
         <section className="px-6">
           <div className="max-w-6xl mx-auto">

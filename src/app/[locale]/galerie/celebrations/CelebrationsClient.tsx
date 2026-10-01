@@ -1,12 +1,10 @@
 "use client";
 
 /**
- * CelebrationsClient.tsx — purely the gallery of memorial editions now
- * (MemorialMintPanel, the real on-chain ANAMemorials data). Burn tracking,
- * the "request a memorial" flow, and the recently-burned grid all moved to
- * /burns on 23/09 — this page used to bundle both, which read as duplicated
- * content (the same published memorials listed twice, once here and once in
- * the on-chain gallery) and mixed burn EVENTS into a gallery of WORKS.
+ * CelebrationsClient.tsx — the gallery of memorial editions plus a compact
+ * bridge back to the burn events that prompted them. Full burn tracking and
+ * the "request a memorial" flow remain on /burns; this page only previews the
+ * latest events, avoiding the old duplication between EVENTS and WORKS.
  *
  * ClaimableCelebrations (the old CelebrationRegistry sponsored-claim widget)
  * dropped entirely — confirmed dead code in the 23/09 audit: its on-chain
@@ -14,10 +12,12 @@
  * ANAMemorials' own reservedClaims/claimFree.
  */
 import { MemorialMintPanel } from "./MemorialMintPanel";
+import { RecentBurnsPreview } from "./RecentBurnsPreview";
 
 export function CelebrationsClient() {
   return (
     <div className="space-y-16">
+      <RecentBurnsPreview />
       <MemorialMintPanel />
     </div>
   );

@@ -37,6 +37,7 @@ export function Footer() {
         { href: "/galerie",  label: t("works") },
         { href: "/salon",    label: "Normie Salon" },
         { href: "/galerie/celebrations", label: "Memorials" },
+        { href: "/burns", label: "Burns" },
       ],
     },
     {

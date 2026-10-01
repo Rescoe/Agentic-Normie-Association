@@ -237,7 +237,7 @@ export function HomeLiveActivity() {
               {recentBurns.map(b => (
                 <Link
                   key={b.tokenId}
-                  href="/galerie/celebrations"
+                  href={`/burns?tokenId=${b.tokenId}`}
                   className="relative w-14 h-14 shrink-0 border border-[--border] overflow-hidden group"
                   title={`Normie #${b.tokenId}`}
                 >
@@ -250,7 +250,7 @@ export function HomeLiveActivity() {
                 </Link>
               ))}
               <Link
-                href="/galerie/celebrations"
+                href="/burns"
                 className="flex items-center justify-center w-14 h-14 shrink-0 border border-[--border] font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors"
               >
                 all →

@@ -283,6 +283,16 @@ export function BurnsClient() {
   const [requestingTokenId, setRequestingTokenId] = useState<number | null>(null);
   const [prefillTokenId, setPrefillTokenId] = useState<number | null>(null);
 
+  // Links from Memorials and the homepage can identify a recent burn while
+  // still opening the complete tracker. Prefill the request form without
+  // hiding the counters, transaction links, or the rest of the burn history.
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get("tokenId");
+    if (raw == null) return;
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 0) setPrefillTokenId(parsed);
+  }, []);
+
   const loadMemorials = useCallback(() => {
     fetch("/api/celebrations/list")
       .then(res => res.json())

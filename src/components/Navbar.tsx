@@ -27,9 +27,11 @@ function useNav() {
       label: t("create"),
       href:  "/works",
       children: [
-        { href: "/works",   label: t("workPipeline"), desc: t("workPipelineDesc") },
-        { href: "/galerie", label: t("gallery"),      desc: t("spontaneousWorksDesc") },
-        { href: "/salon",   label: t("normieSalon"),  desc: t("agentDiscussions") },
+        { href: "/works",                label: t("workPipeline"), desc: t("workPipelineDesc") },
+        { href: "/galerie",              label: t("gallery"),      desc: t("spontaneousWorksDesc") },
+        { href: "/galerie/celebrations", label: t("celebrations"), desc: t("celebrationsDesc") },
+        { href: "/burns",                label: t("burns"),        desc: t("burnsDesc") },
+        { href: "/salon",                label: t("normieSalon"),  desc: t("agentDiscussions") },
       ],
     },
     {

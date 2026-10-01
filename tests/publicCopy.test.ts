@@ -86,4 +86,13 @@ describe("public copy and navigation guardrails", () => {
       expect(discovery).toContain(route);
     }
   });
+
+  it("keeps burns reachable from the creation navigation and Memorials", () => {
+    expect(read("src/components/Navbar.tsx")).toContain('{ href: "/burns"');
+    expect(read("src/components/GallerySubNav.tsx")).toContain('{ href: "/burns"');
+    expect(read("src/app/[locale]/galerie/celebrations/CelebrationsClient.tsx"))
+      .toContain("RecentBurnsPreview");
+    expect(read("src/app/[locale]/burns/page.tsx")).toContain("GallerySubNav");
+    expect(read("src/components/HomeLiveActivity.tsx")).toContain('href="/burns"');
+  });
 });

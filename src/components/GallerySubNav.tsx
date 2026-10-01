@@ -11,6 +11,7 @@ export function GallerySubNav() {
   const tabs = [
     { href: "/galerie",              label: t("spontaneousWorks") },
     { href: "/galerie/celebrations", label: t("celebrations") },
+    { href: "/burns",                label: t("burns") },
   ];
 
   return (
