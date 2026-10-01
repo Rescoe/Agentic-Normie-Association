@@ -2373,6 +2373,7 @@ export async function POST(req: NextRequest) {
   // Admin-only: force a stuck work to REJECTED so the pipeline can restart.
   // Body: { forceReject: "<workId>" }
   let body: {
+    workId?: string;
     forceReject?: string;
     retryGenerative?: string;
     forceVoteResult?: { workId: string; result: "pass" | "fail" };
@@ -2380,6 +2381,13 @@ export async function POST(req: NextRequest) {
     reconcileWork?: { workId: string; dryRun?: boolean };
   } = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
+
+  const targetedWorkId = typeof body.workId === "string" && body.workId.trim()
+    ? body.workId.trim()
+    : undefined;
+  if (targetedWorkId && !isAdminCall) {
+    return NextResponse.json({ error: "workId targeting requires a valid admin signature" }, { status: 403 });
+  }
 
   if (body.forceReject) {
     if (!isAdminCall) return NextResponse.json({ error: "forceReject requires a valid admin signature" }, { status: 403 });
@@ -2530,7 +2538,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No critical LLM configured — set ONE_MIN_AI_API_KEY or GROQ_API_KEY" }, { status: 500 });
   }
 
-  const recoveredWorks = await recoverLegacyPipelineRejections();
+  // A targeted admin run must be strictly isolated: it must not recover,
+  // advance, publish or maintain any other work as a side effect. Cron and
+  // the untargeted admin action keep the existing global maintenance path.
+  const recoveredWorks = targetedWorkId ? 0 : await recoverLegacyPipelineRejections();
   const [activeWorks, memberIds] = await Promise.all([getActiveWorks(), getMemberIds()]);
 
   const personaResults = await Promise.allSettled(memberIds.map(id => buildPersona(id)));
@@ -2580,18 +2591,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, workId: target.id, forced: result, state: current?.state });
   }
 
-  // Check if AG constitutive is complete → auto-create founding work (runs every tick)
-  const foundingCreated = await checkAndCreateFoundingWork(personas).catch(e => {
+  // Check if AG constitutive is complete → auto-create founding work on the
+  // global path only. A targeted run promises to touch one existing work.
+  const foundingCreated = targetedWorkId ? false : await checkAndCreateFoundingWork(personas).catch(e => {
     console.error("[work-lifecycle] founding work check failed:", e);
     return false;
   });
 
-  if (activeWorks.length === 0 && !foundingCreated) {
+  if (!targetedWorkId && activeWorks.length === 0 && !foundingCreated) {
     return NextResponse.json({ message: "No active works to advance", advanced: [], foundingCreated: false, recoveredWorks });
   }
 
-  // Re-fetch active works in case founding work was just created
-  const worksToProcess = foundingCreated ? await getActiveWorks() : activeWorks;
+  // Re-fetch active works in case founding work was just created. For an
+  // explicit target, refuse a missing/terminal work instead of silently
+  // falling back to all active works.
+  const allWorksToProcess = foundingCreated ? await getActiveWorks() : activeWorks;
+  const worksToProcess = targetedWorkId
+    ? allWorksToProcess.filter((work) => work.id === targetedWorkId)
+    : allWorksToProcess;
+  if (targetedWorkId && worksToProcess.length === 0) {
+    const target = await getWork(targetedWorkId);
+    return NextResponse.json({
+      error: target
+        ? `Work ${targetedWorkId} is ${target.state}, not active — nothing to advance`
+        : `Work ${targetedWorkId} not found`,
+    }, { status: target ? 409 : 404 });
+  }
   const results: Array<{ id: string; title: string; from: string; to: string; advanced: boolean; error?: string; pausedForReview?: boolean }> = [];
 
   // CREATING is the one step whose Groq call can be genuinely large (up to 3750
@@ -2694,14 +2719,14 @@ export async function POST(req: NextRequest) {
   }
 
   // Retry collection initialization for any PUBLISHED work whose ERC-721 init failed.
-  const reinited = await retryPendingInits().catch(e => {
+  const reinited = targetedWorkId ? 0 : await retryPendingInits().catch(e => {
     console.error("[work-lifecycle] retryPendingInits error:", e);
     return 0;
   });
 
   // Let a few non-creator Normies react to recently-published works, and wrap up
   // critique windows that have elapsed into a one-line takeaway for future briefs.
-  const critique = await runCritiquePhase(personas).catch(e => {
+  const critique = targetedWorkId ? { reactionsPosted: 0, summariesWritten: 0 } : await runCritiquePhase(personas).catch(e => {
     console.error("[work-lifecycle] runCritiquePhase error:", e);
     return { reactionsPosted: 0, summariesWritten: 0 };
   });

@@ -42,7 +42,7 @@ const CACHE_HEADERS = { "Cache-Control": "private, no-store" };
 
 export interface AnaArtFeedItem {
   id:             string;
-  kind:           "celebration" | "spontaneous" | "poem";
+  kind:           "celebration" | "spontaneous" | "poem" | "generative-capture";
   // celebration / spontaneous : bitmap brut. Absents pour "poem".
   pixels?:        string; // base64, raw grayscale bytes, canvasW*canvasH, 0-255
   canvasW?:       number;
@@ -59,6 +59,20 @@ export interface AnaArtFeedItem {
   contentHash?:   string;  // sha256:<hex> du texte publié
   agentImageUrl?: string;
   language?:      string;  // BCP-47 (heuristique : fr si accents/mots français, sinon en)
+  sourceHash?:    string;
+  capture?: {
+    type: "raw-grayscale";
+    pixelEncoding: "gray8";
+    pixels: string;
+    width: number;
+    height: number;
+    captureHash: string;
+    capturedAt: number;
+    viewport: { width: number; height: number };
+    seed: string;
+    timeMs: number;
+    rendererVersion: "ana-browser-capture-v1";
+  };
   title:          string;
   agentTokenId:   number;
   agentName?:     string;
@@ -154,6 +168,56 @@ function buildFeedItems(
       collectionAddress: w.collectionAddress,
     }));
 
+  // Current ESP8266 devices cannot execute arbitrary HTML/JS. A deliberately
+  // captured browser frame is therefore the safe transitional representation
+  // of a published generative work. The exact HTML remains canonical in ANA.
+  const generativeCaptureItems: AnaArtFeedItem[] = works
+    .filter(w => w.state === "PUBLISHED" && w.artForm?.startsWith("html-")
+      && !!w.artworkText && !!w.podCapturePixels
+      && w.podCaptureWidth === 128 && w.podCaptureHeight === 160
+      && !!w.podCaptureHash && !!w.podCaptureSourceHash && !!w.podCaptureAt
+      // Never publish a frame captured from an earlier revision of the HTML.
+      && w.podCaptureSourceHash === `sha256:${createHash("sha256").update(w.artworkText).digest("hex")}`)
+    .map(w => ({
+      id:           `ana-work:${w.id}:capture:r1`,
+      schemaVersion: 2 as const,
+      sourceId:     w.id,
+      revision:     1,
+      kind:         "generative-capture" as const,
+      artForm:      w.artForm!,
+      sourceHash:   w.podCaptureSourceHash!,
+      contentHash:  `sha256:${createHash("sha256").update(`${w.podCaptureSourceHash}:${w.podCaptureHash}`).digest("hex")}`,
+      title:        w.title,
+      agentTokenId: w.authorTokenId ?? w.proposedBy,
+      agentName:    w.authorName ?? w.proposedByName,
+      agentImageUrl: getNormieImageUrl(w.authorTokenId ?? w.proposedBy),
+      publishedAt:  w.publishedAt ?? w.proposedAt,
+      capture: {
+        type: "raw-grayscale" as const,
+        pixelEncoding: "gray8" as const,
+        pixels: w.podCapturePixels!,
+        width: w.podCaptureWidth!,
+        height: w.podCaptureHeight!,
+        captureHash: w.podCaptureHash!,
+        capturedAt: w.podCaptureAt!,
+        viewport: { width: w.podCaptureWidth!, height: w.podCaptureHeight! },
+        seed: w.podCaptureSourceHash!,
+        timeMs: w.podCaptureTimeMs ?? 0,
+        rendererVersion: "ana-browser-capture-v1" as const,
+      },
+      cartelText:   w.cartelText,
+      brief:        w.brief,
+      proposal:     w.proposal,
+      voteResult:   w.voteResult,
+      yesCount:     w.yesCount,
+      noCount:      w.noCount,
+      absCount:     w.absCount,
+      revisionCount: w.revisionCount,
+      onChainWorkId: w.onChainWorkId,
+      txHash:       w.txHash,
+      collectionAddress: w.collectionAddress,
+    }));
+
   const spontaneousItems: AnaArtFeedItem[] = drawings
     .filter(d => d.decision === "approved")
     .map(d => ({
@@ -168,7 +232,8 @@ function buildFeedItems(
       decisionNote: d.decisionNote,
     }));
 
-  return [...celebrationItems, ...poemItems, ...spontaneousItems].sort((a, b) => b.publishedAt - a.publishedAt);
+  return [...celebrationItems, ...poemItems, ...generativeCaptureItems, ...spontaneousItems]
+    .sort((a, b) => b.publishedAt - a.publishedAt);
 }
 
 /**

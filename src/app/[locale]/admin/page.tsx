@@ -12,7 +12,7 @@
  *   ConstituentAssembly → openSession, closeSession
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
   useAccount,
@@ -1201,6 +1201,11 @@ type ANAWorkFull = ANAWorkSummary & {
   proposal?: string;
   brief?: string;
   artworkText?: string;
+  podCapturePixels?: string;
+  podCaptureWidth?: number;
+  podCaptureHeight?: number;
+  podCaptureAt?: number;
+  podCaptureHash?: string;
   cartelText?: string;
   artForm?: string;
   burnedTokenId?: number;
@@ -1248,6 +1253,49 @@ const STATE_COLOR: Record<string, string> = {
   BLOCKED_TECHNICAL:  "text-orange-700",
 };
 
+const POD_CAPTURE_W = 128;
+const POD_CAPTURE_H = 160;
+
+/** Adds a message-only capture bridge inside the already-sandboxed preview.
+ * The generated work keeps an opaque origin and never gets DOM access to the
+ * admin page. Only its canvas pixels cross the boundary after an explicit
+ * button click. */
+function withPodCaptureBridge(html: string): string {
+  const bridge = `<script>
+window.addEventListener("message",function(event){
+  var m=event.data;
+  if(!m||m.type!=="ANA_POD_CAPTURE_REQUEST"||typeof m.requestId!=="string")return;
+  try{
+    var canvases=Array.prototype.slice.call(document.querySelectorAll("canvas"));
+    canvases.sort(function(a,b){return (b.width*b.height)-(a.width*a.height);});
+    var source=canvases[0];
+    if(!source||!source.width||!source.height)throw new Error("Aucun canvas rendu dans l'oeuvre");
+    var out=document.createElement("canvas");out.width=${POD_CAPTURE_W};out.height=${POD_CAPTURE_H};
+    var ctx=out.getContext("2d",{willReadFrequently:true});
+    if(!ctx)throw new Error("Canvas 2D indisponible");
+    ctx.fillStyle="#fff";ctx.fillRect(0,0,out.width,out.height);
+    var scale=Math.min(out.width/source.width,out.height/source.height);
+    var dw=Math.max(1,Math.round(source.width*scale)),dh=Math.max(1,Math.round(source.height*scale));
+    var dx=Math.floor((out.width-dw)/2),dy=Math.floor((out.height-dh)/2);
+    ctx.drawImage(source,dx,dy,dw,dh);
+    var rgba=ctx.getImageData(0,0,out.width,out.height).data;
+    var binary="";
+    for(var i=0;i<rgba.length;i+=4){
+      var a=rgba[i+3]/255;
+      var r=rgba[i]*a+255*(1-a),g=rgba[i+1]*a+255*(1-a),b=rgba[i+2]*a+255*(1-a);
+      binary+=String.fromCharCode(Math.max(0,Math.min(255,Math.round(r*.299+g*.587+b*.114))));
+    }
+    parent.postMessage({type:"ANA_POD_CAPTURE_RESULT",requestId:m.requestId,pixels:btoa(binary),width:out.width,height:out.height,timeMs:Math.round(performance.now())},"*");
+  }catch(error){
+    parent.postMessage({type:"ANA_POD_CAPTURE_ERROR",requestId:m.requestId,error:error instanceof Error?error.message:String(error)},"*");
+  }
+});
+</script>`;
+  return /<\/body\s*>/i.test(html)
+    ? html.replace(/<\/body\s*>/i, `${bridge}</body>`)
+    : `${html}${bridge}`;
+}
+
 
 function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [works,   setWorks]   = useState<ANAWorkFull[]>([]);
@@ -1255,11 +1303,16 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   const [lcResult, setLcResult] = useState<Record<string, unknown> | null>(null);
   const [lcError,  setLcError]  = useState<string | null>(null);
   const [lcRunning, setLcRunning] = useState(false);
+  const [lcTargetId, setLcTargetId] = useState("");
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [recallingId, setRecallingId] = useState<string | null>(null);
   const [genStatus, setGenStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [genMessage, setGenMessage] = useState<string | null>(null);
   const [codeView, setCodeView] = useState<ANAWorkFull | null>(null);
+  const captureFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const captureRequestRef = useRef<string | null>(null);
+  const [captureStatus, setCaptureStatus] = useState<"idle" | "waiting" | "saving" | "saved" | "error">("idle");
+  const [captureMessage, setCaptureMessage] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -1284,6 +1337,70 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   }, [getAdminHeaders]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    const onCaptureMessage = (event: MessageEvent) => {
+      if (event.source !== captureFrameRef.current?.contentWindow) return;
+      const data = event.data as { type?: string; requestId?: string; pixels?: string; width?: number; height?: number; timeMs?: number; error?: string } | null;
+      if (!data || data.requestId !== captureRequestRef.current || !codeView) return;
+      if (data.type === "ANA_POD_CAPTURE_ERROR") {
+        captureRequestRef.current = null;
+        setCaptureStatus("error");
+        setCaptureMessage(data.error ?? "Capture impossible");
+        return;
+      }
+      if (data.type !== "ANA_POD_CAPTURE_RESULT" || !data.pixels) return;
+      captureRequestRef.current = null;
+      setCaptureStatus("saving");
+      void (async () => {
+        try {
+          const response = await fetch("/api/admin/works", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+            body: JSON.stringify({
+              workId: codeView.id, pixels: data.pixels,
+              width: data.width, height: data.height, timeMs: data.timeMs,
+            }),
+          });
+          const raw = await response.text();
+          let result: { error?: string; feedEligible?: boolean; captureHash?: string };
+          try { result = JSON.parse(raw) as typeof result; }
+          catch { throw new Error(`capture HTTP ${response.status}: ${raw.slice(0, 240) || "réponse vide"}`); }
+          if (!response.ok) throw new Error(result.error ?? `capture HTTP ${response.status}`);
+          setCaptureStatus("saved");
+          setCaptureMessage(result.feedEligible
+            ? "Frame enregistrée et éligible au feed PoD."
+            : "Frame enregistrée ; elle entrera dans le feed lorsque l'œuvre sera publiée.");
+          void loadDiagnostics();
+        } catch (error) {
+          setCaptureStatus("error");
+          setCaptureMessage(error instanceof Error ? error.message : String(error));
+        }
+      })();
+    };
+    window.addEventListener("message", onCaptureMessage);
+    return () => window.removeEventListener("message", onCaptureMessage);
+  }, [codeView, getAdminHeaders, loadDiagnostics]);
+
+  const requestPodCapture = () => {
+    const frame = captureFrameRef.current?.contentWindow;
+    if (!frame) {
+      setCaptureStatus("error");
+      setCaptureMessage("Aperçu génératif indisponible");
+      return;
+    }
+    const requestId = crypto.randomUUID();
+    captureRequestRef.current = requestId;
+    setCaptureStatus("waiting");
+    setCaptureMessage("Capture de la frame courante…");
+    frame.postMessage({ type: "ANA_POD_CAPTURE_REQUEST", requestId }, "*");
+    window.setTimeout(() => {
+      if (captureRequestRef.current !== requestId) return;
+      captureRequestRef.current = null;
+      setCaptureStatus("error");
+      setCaptureMessage("Le canvas n'a pas répondu dans les 5 secondes.");
+    }, 5000);
+  };
 
   const forceReject = async (workId: string) => {
     if (!confirm("Forcer REJECTED sur cette œuvre ? Elle sera archivée et la pipeline sera libérée.")) return;
@@ -1373,8 +1490,12 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
       const r = await fetch("/api/keeper/work-lifecycle", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify(lcTargetId ? { workId: lcTargetId } : {}),
       });
-      const d = await r.json() as Record<string, unknown>;
+      const raw = await r.text();
+      let d: Record<string, unknown>;
+      try { d = JSON.parse(raw) as Record<string, unknown>; }
+      catch { throw new Error(`work-lifecycle HTTP ${r.status}: ${raw.slice(0, 240) || "réponse vide"}`); }
       if (!r.ok) setLcError((d.error as string) ?? `HTTP ${r.status}`);
       else { setLcResult(d); void refresh(); }
     } catch (e) {
@@ -1469,12 +1590,24 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
+        <select
+          value={lcTargetId}
+          onChange={(e) => setLcTargetId(e.target.value)}
+          disabled={lcRunning}
+          className="font-mono text-xs border border-[--border] bg-[--bg] px-3 py-2.5 max-w-md"
+          title="Choisir une œuvre garantit que ce déclenchement n'avance aucune autre œuvre"
+        >
+          <option value="">Toutes les œuvres actives</option>
+          {activeWorks.map((work) => (
+            <option key={work.id} value={work.id}>{work.title} — {work.state}</option>
+          ))}
+        </select>
         <button
           onClick={runLifecycle}
           disabled={lcRunning}
           className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait"
         >
-          {lcRunning ? "En cours…" : "🎨 Déclencher work-lifecycle"}
+          {lcRunning ? "En cours…" : lcTargetId ? "🎨 Avancer uniquement cette œuvre" : "🎨 Déclencher work-lifecycle"}
         </button>
         <button
           onClick={() => void refresh()}
@@ -1842,9 +1975,44 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                 ✕ Fermer
               </button>
             </div>
-            <pre className="font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all overflow-auto p-4 flex-1">
-              {codeView.artworkText}
-            </pre>
+            {codeView.artForm?.startsWith("html-") && codeView.artworkText && (
+              <div className="p-4 space-y-3 overflow-auto">
+                <iframe
+                  ref={captureFrameRef}
+                  srcDoc={withPodCaptureBridge(codeView.artworkText)}
+                  sandbox="allow-scripts"
+                  title={`Aperçu génératif — ${codeView.title}`}
+                  className="w-full border border-[--border] bg-black"
+                  style={{ aspectRatio: "4 / 3" }}
+                />
+                <div className="flex items-center gap-3 flex-wrap">
+                  <button
+                    onClick={requestPodCapture}
+                    disabled={captureStatus === "waiting" || captureStatus === "saving"}
+                    className="font-mono text-xs border border-purple-400 text-purple-700 px-3 py-2 hover:bg-purple-50/20 disabled:opacity-40"
+                  >
+                    {captureStatus === "waiting" ? "Capture…" : captureStatus === "saving" ? "Enregistrement…" : "📸 Capturer la frame pour PoD"}
+                  </button>
+                  {codeView.podCaptureHash && (
+                    <span className="font-mono text-[10px] text-green-700">Frame existante : {codeView.podCaptureHash.slice(0, 22)}…</span>
+                  )}
+                </div>
+                {captureMessage && (
+                  <p className={`font-mono text-[10px] ${captureStatus === "error" ? "text-red-600" : "text-green-700"}`}>{captureMessage}</p>
+                )}
+                <details className="border border-[--border]">
+                  <summary className="font-mono text-[10px] px-3 py-2 cursor-pointer">Voir le code source</summary>
+                  <pre className="font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all overflow-auto p-4 max-h-64 border-t border-[--border]">
+                    {codeView.artworkText}
+                  </pre>
+                </details>
+              </div>
+            )}
+            {!codeView.artForm?.startsWith("html-") && (
+              <pre className="font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all overflow-auto p-4 flex-1">
+                {codeView.artworkText}
+              </pre>
+            )}
             {codeView.validationNote && (
               <div className="border-t border-[--border] px-4 py-2">
                 <p className="font-mono text-[10px] text-red-600">⚠ {codeView.validationNote}</p>
@@ -1947,11 +2115,15 @@ function WorkTestPipelineSection({ getAdminHeaders }: { getAdminHeaders: GetAdmi
         const r = await fetch("/api/keeper/work-lifecycle", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+          body: JSON.stringify({ workId }),
         });
-        const d = await r.json() as {
+        const raw = await r.text();
+        let d: {
           results?: Array<{ id: string; from: string; to: string; advanced: boolean; error?: string }>;
           error?: string;
         };
+        try { d = JSON.parse(raw) as typeof d; }
+        catch { throw new Error(`lifecycle HTTP ${r.status}: ${raw.slice(0, 240) || "réponse vide"}`); }
 
         if (!r.ok) throw new Error(d.error ?? `lifecycle HTTP ${r.status}`);
 
