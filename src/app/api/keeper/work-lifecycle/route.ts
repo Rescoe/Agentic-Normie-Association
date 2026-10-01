@@ -41,6 +41,7 @@ import { recordLlmCall } from "@/lib/llmLedger";
 import { findMostSimilarFingerprint, extractFingerprintFields, saveFingerprint, FINGERPRINT_SIMILARITY_THRESHOLD } from "@/lib/creativeFingerprint";
 import { jaccardSimilarity } from "@/lib/topicEngine";
 import { isTechnicalRetryDue, nextTechnicalRetryAt, technicalResumeDestination } from "@/lib/technicalRetry";
+import { tryAcquirePublishLock, releasePublishLock } from "@/lib/publishLock";
 import { validateLiteraryArtwork } from "@/lib/literaryArtwork";
 
 const MODEL        = "openai/gpt-oss-120b";
@@ -1871,7 +1872,37 @@ async function stepPublishingMemorial(work: ANAWork): Promise<boolean | string> 
   return true;
 }
 
+/**
+ * Thin concurrency guard around the real publishing logic (stepPublishingInner
+ * below). 01/10/2026 incident: nothing stopped two overlapping
+ * work-lifecycle invocations (the scheduled orchestrator tick + an impatient
+ * admin re-trigger) from both reaching the on-chain steps for the SAME work
+ * at once — each independently asked the relayer wallet for "the next
+ * nonce", producing a live "replacement transaction underpriced" followed
+ * by a different submission failing with a generic Alchemy rejection once
+ * the nonce sequence no longer matched what that signed transaction
+ * expected. See publishLock.ts's doc comment for the full mechanism.
+ *
+ * Returns bare `false` (not a descriptive string) on lock contention — the
+ * ONLY path in this whole publishing pipeline that does, specifically so
+ * the generic circuit breaker (POST handler's main loop) can recognize it
+ * and never count it as a real failure, exactly like VOTE_OPEN's own
+ * legitimate "still waiting" false.
+ */
 async function stepPublishing(work: ANAWork): Promise<boolean | string> {
+  const gotLock = await tryAcquirePublishLock(work.id);
+  if (!gotLock) {
+    console.log(`[work-lifecycle] "${work.title}" publish lock held by another invocation — skipping this tick (not counted as a failure)`);
+    return false;
+  }
+  try {
+    return await stepPublishingInner(work);
+  } finally {
+    await releasePublishLock(work.id);
+  }
+}
+
+async function stepPublishingInner(work: ANAWork): Promise<boolean | string> {
   if (work.memorialKind) return stepPublishingMemorial(work);
 
   if (!work.authorTokenId || !work.curatorTokenId || !work.rapporteurTokenId || !work.artworkText) {
@@ -2798,8 +2829,13 @@ export async function POST(req: NextRequest) {
     // not the work's original `from` state, so a memorial that cascades past
     // VOTE_OPEN and then genuinely fails at e.g. PUBLISHING isn't mistaken
     // for "still voting".
+    // stepPublishing's own lock-contention signal (bare `false`, no error
+    // string — see its doc comment) is the only way PUBLISHING ever returns
+    // false without a descriptive reason; exempted for the same reason
+    // VOTE_OPEN is — it's not a failure, just "try again next tick".
+    const isLockSkip = stalledAt === "PUBLISHING" && !advanced && error === undefined;
     let pausedForReview = false;
-    if (!advanced && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK" && stalledAt !== "BLOCKED_TECHNICAL") {
+    if (!advanced && !isLockSkip && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK" && stalledAt !== "BLOCKED_TECHNICAL") {
       // Any other non-advancing step counts — even steps that only return false
       // on failure (no descriptive string) must not block the pipeline forever.
       const reason    = error ?? `no progress at ${stalledAt} (step returned false — likely a transient LLM/data issue)`;
