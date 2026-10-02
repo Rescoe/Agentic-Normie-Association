@@ -14,13 +14,14 @@ import type { ANANewsItem, NewsLink } from "@/lib/newsStore";
 function NewsMediaThumb({ item }: { item: ANANewsItem }) {
   const src = item.media?.sourceUrl;
   if (!src) return null;
+  const isPortrait = item.media?.kind === "normie";
   return (
-    <div className="relative w-full overflow-hidden border border-[--border] bg-[--bg-card]" style={{ aspectRatio: "16/9" }}>
+    <div className={`relative overflow-hidden border border-[--border] bg-[--bg-card] ${isPortrait ? "w-24 aspect-square sm:w-full sm:aspect-video" : "w-full aspect-video"}`}>
       {/* eslint-disable-next-line @next/next/no-img-element -- external/data-URI source, next/image would need per-host config for api.normies.art */}
       <img
         src={src}
         alt={item.media?.alt ?? item.title}
-        className="w-full h-full object-cover"
+        className={`w-full h-full ${isPortrait ? "object-contain sm:object-cover" : "object-cover"}`}
         style={{ imageRendering: item.media?.kind === "normie" ? "pixelated" : "auto" }}
         loading="lazy"
         onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
@@ -35,7 +36,7 @@ function LinkButton({ link }: { link: NewsLink }) {
       href={link.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="font-mono text-[10px] border border-[--border] px-2 py-1.5 hover:bg-[--bg-card] hover:border-[--fg] transition-colors"
+      className="font-mono text-[10px] border border-[--border] px-2 py-1.5 max-w-full break-words hover:bg-[--bg-card] hover:border-[--fg] transition-colors"
     >
       {link.label} ↗
     </a>
@@ -50,7 +51,7 @@ function NewsCard({ item, compact = false }: { item: ANANewsItem; compact?: bool
     setTimeout(() => setCopied(false), 1600);
   };
   return (
-    <article id={`news-${item.id}`} className="border border-[--border] bg-[--bg] p-5 flex flex-col gap-4 scroll-mt-24">
+    <article id={`news-${item.id}`} className="min-w-0 max-w-full overflow-hidden border border-[--border] bg-[--bg] p-4 sm:p-5 flex flex-col gap-4 scroll-mt-24">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">
           <div className="relative w-8 h-8 shrink-0 overflow-hidden">
@@ -70,14 +71,14 @@ function NewsCard({ item, compact = false }: { item: ANANewsItem; compact?: bool
       <NewsMediaThumb item={item} />
 
       <div className="space-y-2 flex-1">
-        <h2 className={`${compact ? "text-lg" : "text-2xl"} font-bold leading-tight`}>
+        <h2 className={`${compact ? "text-lg" : "text-xl sm:text-2xl"} font-bold leading-tight break-words`}>
           <a href={`#news-${item.id}`} className="hover:underline">{item.title}</a>
         </h2>
-        <p className={`text-[--fg-muted] leading-relaxed ${compact ? "text-sm line-clamp-3" : "text-base"}`}>{item.body}</p>
+        <p className={`text-[--fg-muted] leading-relaxed break-words [overflow-wrap:anywhere] ${compact ? "text-sm line-clamp-3" : "text-sm sm:text-base"}`}>{item.body}</p>
       </div>
 
       <div className="border-t border-[--border] pt-3 space-y-3">
-        <p className="font-mono text-xs leading-relaxed text-[--fg-muted]">{item.socialText}</p>
+        <p className="font-mono text-xs leading-relaxed text-[--fg-muted] break-words [overflow-wrap:anywhere]">{item.socialText}</p>
         <div className="flex flex-wrap gap-2">
           <button onClick={copy} className="font-mono text-xs border border-[--fg] px-3 py-2 hover:bg-[--fg] hover:text-[--bg] transition-colors">
             {copied ? "✓ Copied" : "Copy for social"}
