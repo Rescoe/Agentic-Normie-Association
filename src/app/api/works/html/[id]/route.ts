@@ -31,10 +31,12 @@ function isHtmlWork(work: ANAWork): boolean {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   const onChainId = Number(params.id);
+  // ?preview=1 : vignette de galerie — sketch lancé seul et muet (lib/previewShim.ts). Plein écran / certificat : inchangés.
+  const preview = req.nextUrl.searchParams.get("preview") === "1";
   // Allow ID 0 — WorkRegistry stores works 0-indexed (first work = ID 0)
   if (!Number.isInteger(onChainId) || onChainId < 0) {
     return new NextResponse("Invalid work id", { status: 400 });
@@ -54,7 +56,7 @@ export async function GET(
         const html = fromCollection ?? work.artworkText ?? null;
         if (html) {
           console.log(`[works/html] generative artwork hit for #${onChainId} — "${work.title}"`);
-          return serveGenerativeHtml(html, work.artForm, `work #${onChainId}`);
+          return serveGenerativeHtml(html, work.artForm, `work #${onChainId}`, { preview });
         }
         console.warn(`[works/html] #${onChainId} is html-* but no artwork content found — falling back to certificate`);
       }
@@ -96,7 +98,7 @@ export async function GET(
         const artwork = await fetchCollectionArtwork(collectionAddr);
         if (artwork) {
           console.log(`[works/html] resolved #${onChainId} certificate -> collection ${collectionAddr} artwork`);
-          return serveGenerativeHtml(artwork, undefined, `work #${onChainId}`);
+          return serveGenerativeHtml(artwork, undefined, `work #${onChainId}`, { preview });
         }
         console.warn(`[works/html] #${onChainId} certificate references collection ${collectionAddr} but artworkContent() returned nothing — falling back to certificate`);
       }

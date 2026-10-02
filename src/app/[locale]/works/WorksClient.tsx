@@ -823,7 +823,7 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
           /* HTML/generative — live but non-interactive preview */
           <div className="relative bg-black" style={{ aspectRatio: "4/3" }}>
             <iframe
-              src={certUrl}
+              src={`${certUrl}?preview=1`}
               className="w-full h-full border-0"
               sandbox="allow-scripts"
               title={work.title}
@@ -1181,7 +1181,7 @@ function OnChainWorkCard({ workId }: { workId: number }) {
           className="relative bg-black overflow-hidden cursor-pointer group"
           style={{ aspectRatio: "4/3" }}
         >
-          <iframe src={certUrl} className="w-full h-full border-0" sandbox="allow-scripts"
+          <iframe src={`${certUrl}?preview=1`} className="w-full h-full border-0" sandbox="allow-scripts"
             title={cert.title} style={{ pointerEvents: "none" }} />
           <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40">
             <span className="font-mono text-xs text-white border border-white/40 px-3 py-1.5">⤢ open fullscreen</span>

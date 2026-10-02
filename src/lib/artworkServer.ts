@@ -11,6 +11,7 @@ import { base } from "viem/chains";
 import { ANAEditionsAbi } from "@/lib/abis/ANAEditions";
 import { WorkRegistryAbi } from "@/lib/abis/WorkRegistry";
 import { validateGenerativeHtml, buildGenerativeCsp } from "@/lib/generativeArtwork";
+import { injectPreviewShim } from "@/lib/previewShim";
 
 export const artworkChainClient = createPublicClient({
   chain:     base,
@@ -176,13 +177,16 @@ export async function readWorkRegistryWork(
 }
 
 /** Re-validates (defense in depth) and serves a generative artwork with a strict, hash-based CSP. */
-export function serveGenerativeHtml(rawHtml: string, artForm: string | undefined, label: string): NextResponse {
+export function serveGenerativeHtml(rawHtml: string, artForm: string | undefined, label: string, opts: { preview?: boolean } = {}): NextResponse {
   const check = validateGenerativeHtml(rawHtml, artForm);
   if (!check.valid) {
     console.error(`[artworkServer] ${label} failed re-validation at serve time: ${check.errors.join("; ")}`);
   }
-  const csp = buildGenerativeCsp(check.html);
-  return new NextResponse(check.html, { headers: htmlHeaders(csp) });
+  // Vignette de galerie (?preview=1) : sketch lancé seul et MUET (lib/previewShim.ts). Injecté APRÈS la validation et AVANT le calcul
+  // du CSP : le shim est un script inline comme un autre, couvert par son propre hash — jamais de 'unsafe-inline'.
+  const html = opts.preview ? injectPreviewShim(check.html) : check.html;
+  const csp = buildGenerativeCsp(html);
+  return new NextResponse(html, { headers: htmlHeaders(csp) });
 }
 
 export function notFoundHtml(message: string): NextResponse {
