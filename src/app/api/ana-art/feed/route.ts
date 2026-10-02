@@ -2,9 +2,11 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { getNormieImageUrl } from "@/lib/normiesApi";
-import { unstable_cache } from "next/cache";
+import { revalidateTag, unstable_cache } from "next/cache";
 import { listWorks } from "@/lib/workStore";
 import { listDrawings } from "@/lib/drawStore";
+import { canonicalizeSceneV1, hashArtworkSource, hashGenerativeBundle, validateSceneV1, type AnaSceneV1 } from "@/lib/anaSceneV1";
+import { USE_NEON, kvGet, kvSet } from "@/lib/db";
 
 const FEED_SECRET = process.env.ANA_ART_FEED_SECRET ?? "";
 
@@ -27,15 +29,83 @@ const FEED_SECRET = process.env.ANA_ART_FEED_SECRET ?? "";
 // independently of the secret/limit/request -- auth still runs on every
 // request via FEED_SECRET before this is ever called, so an unauthorized
 // caller never even reaches the cache.
+const FEED_SNAPSHOT_POINTER_KEY = "ana-art-feed:snapshot:pointer:v4";
+const FEED_SNAPSHOT_SLOT_PREFIX = "ana-art-feed:snapshot:slot:v4:";
+const FEED_SNAPSHOT_MAX_ITEMS = 200;
+type FeedSnapshotSlot = "a" | "b";
+
+interface PersistedFeedSnapshot {
+  schema: "ana-art-feed-snapshot-v4";
+  generation: FeedSnapshotSlot;
+  buildId: string;
+  createdAt: number;
+  items: AnaArtFeedItem[];
+}
+
+async function readDurableFeedSnapshot(): Promise<AnaArtFeedItem[] | null> {
+  if (!USE_NEON) return null;
+  const pointerRaw = await kvGet(FEED_SNAPSHOT_POINTER_KEY);
+  if (!pointerRaw) return null;
+  let generation: FeedSnapshotSlot;
+  try {
+    const pointer = JSON.parse(pointerRaw) as { generation?: unknown };
+    generation = pointer.generation === "a" || pointer.generation === "b" ? pointer.generation : "a";
+  } catch { return null; }
+  for (const slot of [generation, generation === "a" ? "b" : "a"] as FeedSnapshotSlot[]) {
+    const snapshotRaw = await kvGet(`${FEED_SNAPSHOT_SLOT_PREFIX}${slot}`);
+    if (!snapshotRaw) continue;
+    try {
+      const snapshot = JSON.parse(snapshotRaw) as PersistedFeedSnapshot;
+      if (snapshot.schema === "ana-art-feed-snapshot-v4" && snapshot.generation === slot && Array.isArray(snapshot.items)) {
+        return snapshot.items.slice(0, FEED_SNAPSHOT_MAX_ITEMS);
+      }
+    } catch { /* try the previous slot */ }
+  }
+  return null;
+}
+
+async function persistFeedSnapshot(items: AnaArtFeedItem[]): Promise<void> {
+  if (!USE_NEON) return;
+  const boundedItems = items.slice(0, FEED_SNAPSHOT_MAX_ITEMS);
+  const payloadHash = createHash("sha256").update(JSON.stringify(boundedItems), "utf8").digest("hex");
+  let activeSlot: FeedSnapshotSlot | null = null;
+  const pointerRaw = await kvGet(FEED_SNAPSHOT_POINTER_KEY);
+  if (pointerRaw) {
+    try {
+      const pointer = JSON.parse(pointerRaw) as { generation?: unknown };
+      if (pointer.generation === "a" || pointer.generation === "b") activeSlot = pointer.generation;
+    } catch { /* bootstrap below */ }
+  }
+  const generation: FeedSnapshotSlot = activeSlot === "a" ? "b" : "a";
+  const snapshot: PersistedFeedSnapshot = {
+    schema: "ana-art-feed-snapshot-v4",
+    generation,
+    buildId: `${Date.now()}-${payloadHash.slice(0, 16)}`,
+    createdAt: Date.now(),
+    items: boundedItems,
+  };
+  // Inactive slot first, pointer last. The two-slot ring bounds storage while
+  // retaining the previous complete snapshot across a partial write/failure.
+  await kvSet(`${FEED_SNAPSHOT_SLOT_PREFIX}${generation}`, JSON.stringify(snapshot));
+  await kvSet(FEED_SNAPSHOT_POINTER_KEY, JSON.stringify({ generation }));
+}
+
 const getCachedFeedItems = unstable_cache(
   async (): Promise<AnaArtFeedItem[]> => {
+    const durable = await readDurableFeedSnapshot();
+    if (durable) return durable;
     const [works, drawings] = await Promise.all([listWorks(), listDrawings()]);
-    return buildFeedItems(works, drawings);
+    const items = buildFeedItems(works, drawings).slice(0, FEED_SNAPSHOT_MAX_ITEMS);
+    // Bootstrap only. Normal publication writes and prewarms the generation
+    // while Neon is already active, before an external PoD pull can arrive.
+    await persistFeedSnapshot(items);
+    return items;
   },
-  ["ana-art-feed-v3"],   // v3 : items "poem" ajoutés (le cache v2 ne les connaît pas)
-  // Interim (note 36 P0) : pas d'expiration courte — le snapshot ne se reconstruit qu'à l'invalidation faite
-  // à la publication (workStore → revalidateTag). À remplacer par des générations + pointeur atomique.
-  { revalidate: 86400, tags: ["ana-art-feed"] },
+  ["ana-art-feed-v4"],   // v4 : bundle generatif scene-v1 + capture, adresse par contenu
+  // No autonomous expiry: a PoD pull cannot turn time/device count into a
+  // Neon read multiplier. Mutations rebuild a durable generation, atomically
+  // move the pointer, invalidate, and prewarm this shared cache entry.
+  { revalidate: false, tags: ["ana-art-feed"] },
 );
 
 const CACHE_HEADERS = { "Cache-Control": "private, no-store" };
@@ -73,6 +143,18 @@ export interface AnaArtFeedItem {
     timeMs: number;
     rendererVersion: "ana-browser-capture-v1";
   };
+  // A validated, closed companion for OLED/TFT. It shares this feed item
+  // with the capture so old PoD deployments can keep using the latter while
+  // scene-aware PoD selects the local runtime only for capable devices.
+  scene?: {
+    schema: "ana-scene-v1";
+    encoding: "json";
+    manifest: AnaSceneV1;
+    sceneHash: string;
+    sourceHash: string;
+    bytes: number;
+    rendererVersion: 1;
+  };
   title:          string;
   agentTokenId:   number;
   agentName?:     string;
@@ -99,7 +181,7 @@ export interface AnaArtFeedItem {
   decisionNote?:    string;   // spontaneous drawings: reviewer's note
 }
 
-function buildFeedItems(
+export function buildFeedItems(
   works: Awaited<ReturnType<typeof listWorks>>,
   drawings: Awaited<ReturnType<typeof listDrawings>>,
 ): AnaArtFeedItem[] {
@@ -168,43 +250,49 @@ function buildFeedItems(
       collectionAddress: w.collectionAddress,
     }));
 
-  // Current ESP8266 devices cannot execute arbitrary HTML/JS. A deliberately
-  // captured browser frame is therefore the safe transitional representation
-  // of a published generative work. The exact HTML remains canonical in ANA.
-  const generativeCaptureItems: AnaArtFeedItem[] = works
-    .filter(w => w.state === "PUBLISHED" && w.artForm?.startsWith("html-")
-      && !!w.artworkText && !!w.podCapturePixels
+  // One content-addressed bundle per published generative source. It may carry
+  // a scene, a capture, or both. Keeping kind=generative-capture during the
+  // transition is intentional: the deployed PoD parser ignores unknown scene
+  // fields and still consumes capture, while the new parser prefers scene-v1
+  // for capable OLED/TFT devices and uses a server-rendered frame for e-ink.
+  const generativeCaptureItems: AnaArtFeedItem[] = works.flatMap(w => {
+    if (w.state !== "PUBLISHED" || !w.artForm?.startsWith("html-") || !w.artworkText) return [];
+    const sourceHash = hashArtworkSource(w.artworkText);
+    const captureValid = !!w.podCapturePixels
       && w.podCaptureWidth === 128 && w.podCaptureHeight === 160
       && !!w.podCaptureHash && !!w.podCaptureSourceHash && !!w.podCaptureAt
-      // Never publish a frame captured from an earlier revision of the HTML.
-      && w.podCaptureSourceHash === `sha256:${createHash("sha256").update(w.artworkText).digest("hex")}`)
-    .map(w => ({
-      id:           `ana-work:${w.id}:capture:r1`,
-      schemaVersion: 2 as const,
+      && w.podCaptureSourceHash === sourceHash;
+
+    let sceneValidation: ReturnType<typeof validateSceneV1> | null = null;
+    if (w.podSceneJson && w.podSceneSourceHash === sourceHash && w.podSceneHash) {
+      try {
+        sceneValidation = validateSceneV1(JSON.parse(w.podSceneJson));
+        if (!sceneValidation.valid || sceneValidation.sceneHash !== w.podSceneHash) sceneValidation = null;
+      } catch { sceneValidation = null; }
+    }
+    const sceneValid = !!sceneValidation?.scene && !!sceneValidation.sceneHash && !!sceneValidation.canonicalJson;
+    if (!captureValid && !sceneValid) return [];
+
+    const sceneHash = sceneValid ? sceneValidation!.sceneHash! : "none";
+    const captureHash = captureValid ? w.podCaptureHash! : "none";
+    const revision = Math.max(1, w.podSceneRevision ?? 1);
+    const contentHash = hashGenerativeBundle(w.id, revision, sourceHash, sceneHash, captureHash);
+    const hashSuffix = contentHash.slice("sha256:".length);
+
+    const item: AnaArtFeedItem = {
+      id:           `ana-work:${w.id}:generative:${hashSuffix}`,
+      schemaVersion: 2,
       sourceId:     w.id,
-      revision:     1,
-      kind:         "generative-capture" as const,
-      artForm:      w.artForm!,
-      sourceHash:   w.podCaptureSourceHash!,
-      contentHash:  `sha256:${createHash("sha256").update(`${w.podCaptureSourceHash}:${w.podCaptureHash}`).digest("hex")}`,
+      revision,
+      kind:         "generative-capture",
+      artForm:      w.artForm,
+      sourceHash,
+      contentHash,
       title:        w.title,
       agentTokenId: w.authorTokenId ?? w.proposedBy,
       agentName:    w.authorName ?? w.proposedByName,
       agentImageUrl: getNormieImageUrl(w.authorTokenId ?? w.proposedBy),
       publishedAt:  w.publishedAt ?? w.proposedAt,
-      capture: {
-        type: "raw-grayscale" as const,
-        pixelEncoding: "gray8" as const,
-        pixels: w.podCapturePixels!,
-        width: w.podCaptureWidth!,
-        height: w.podCaptureHeight!,
-        captureHash: w.podCaptureHash!,
-        capturedAt: w.podCaptureAt!,
-        viewport: { width: w.podCaptureWidth!, height: w.podCaptureHeight! },
-        seed: w.podCaptureSourceHash!,
-        timeMs: w.podCaptureTimeMs ?? 0,
-        rendererVersion: "ana-browser-capture-v1" as const,
-      },
       cartelText:   w.cartelText,
       brief:        w.brief,
       proposal:     w.proposal,
@@ -216,7 +304,31 @@ function buildFeedItems(
       onChainWorkId: w.onChainWorkId,
       txHash:       w.txHash,
       collectionAddress: w.collectionAddress,
-    }));
+    };
+    if (captureValid) item.capture = {
+      type: "raw-grayscale",
+      pixelEncoding: "gray8",
+      pixels: w.podCapturePixels!,
+      width: w.podCaptureWidth!,
+      height: w.podCaptureHeight!,
+      captureHash: w.podCaptureHash!,
+      capturedAt: w.podCaptureAt!,
+      viewport: { width: w.podCaptureWidth!, height: w.podCaptureHeight! },
+      seed: sourceHash,
+      timeMs: w.podCaptureTimeMs ?? 0,
+      rendererVersion: "ana-browser-capture-v1",
+    };
+    if (sceneValid) item.scene = {
+      schema: "ana-scene-v1",
+      encoding: "json",
+      manifest: sceneValidation!.scene!,
+      sceneHash: sceneValidation!.sceneHash!,
+      sourceHash,
+      bytes: Buffer.byteLength(canonicalizeSceneV1(sceneValidation!.scene!), "utf8"),
+      rendererVersion: 1,
+    };
+    return [item];
+  });
 
   const spontaneousItems: AnaArtFeedItem[] = drawings
     .filter(d => d.decision === "approved")
@@ -234,6 +346,20 @@ function buildFeedItems(
 
   return [...celebrationItems, ...poemItems, ...generativeCaptureItems, ...spontaneousItems]
     .sort((a, b) => b.publishedAt - a.publishedAt);
+}
+
+/**
+ * Rebuilds a new immutable snapshot while ANA is already handling the source
+ * mutation, then atomically switches the durable pointer and prewarms the
+ * shared Data Cache. If construction/persistence fails, revalidation never
+ * happens and the last valid snapshot remains served.
+ */
+export async function rebuildAndPrewarmAnaArtFeed(): Promise<void> {
+  const [works, drawings] = await Promise.all([listWorks(), listDrawings()]);
+  const items = buildFeedItems(works, drawings).slice(0, FEED_SNAPSHOT_MAX_ITEMS);
+  await persistFeedSnapshot(items);
+  revalidateTag("ana-art-feed");
+  await getCachedFeedItems();
 }
 
 /**

@@ -14,7 +14,7 @@ import { createPublicClient, http, parseEther } from "viem";
 import { base } from "viem/chains";
 import { ROLES, ROLE_LABELS, ASSOCIATION_CORE_ABI, ANA_EDITIONS_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import {
-  getActiveWorks, listWorks, getWork, updateWork, advanceState, addVote,
+  getActiveWorks, listWorks, getWork, updateWork, updatePodArtifactsForSource, advanceState, addVote,
   hasVoted, buildWorkHtml, createWork, getFoundingWork,
   VOTE_WINDOW_MS, CELEBRATION_VOTE_WINDOW_MS, nextInDispatchRotation,
   type ANAWork, type WorkVote, type WorkState, type OperationalErrorCode,
@@ -43,6 +43,8 @@ import { jaccardSimilarity } from "@/lib/topicEngine";
 import { isTechnicalRetryDue, nextTechnicalRetryAt, technicalResumeDestination } from "@/lib/technicalRetry";
 import { tryAcquirePublishLock, releasePublishLock } from "@/lib/publishLock";
 import { validateLiteraryArtwork } from "@/lib/literaryArtwork";
+import { generateSceneCompanion } from "@/lib/anaSceneAuthoring";
+import { canonicalizeSceneV1, hashArtworkSource } from "@/lib/anaSceneV1";
 
 const MODEL        = "openai/gpt-oss-120b";
 // Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
@@ -1219,7 +1221,27 @@ No introduction, no meta-commentary. Just the artwork itself.`,
     );
   }
 
-  await updateWork(work.id, { artworkText, artworkAt: Date.now() });
+  await updateWork(work.id, {
+    artworkText,
+    artworkAt: Date.now(),
+    // Any PoD derivative belongs to the previous exact source revision. Clear
+    // it in the same row write; feed-time hash checks remain defense in depth.
+    podCapturePixels: undefined,
+    podCaptureWidth: undefined,
+    podCaptureHeight: undefined,
+    podCaptureAt: undefined,
+    podCaptureTimeMs: undefined,
+    podCaptureHash: undefined,
+    podCaptureSourceHash: undefined,
+    podSceneJson: undefined,
+    podSceneHash: undefined,
+    podSceneSourceHash: undefined,
+    podSceneAt: undefined,
+    podSceneCorrespondence: undefined,
+    podSceneAttemptedSourceHash: undefined,
+    podSceneStatus: undefined,
+    podSceneError: undefined,
+  });
   await advanceState(work.id, "VALIDATING", `Work created by ${author.name}`);
 
   const revPrefix    = (work.revisionCount ?? 0) > 0 ? `🔄 Revision #${work.revisionCount} — ` : "";
@@ -1914,6 +1936,50 @@ async function stepPublishingInner(work: ANAWork): Promise<boolean | string> {
     ].filter(Boolean).join(", ")})`;
     console.error(`[work-lifecycle] ${msg} for ${work.id}`);
     return msg;
+  }
+
+  // Generate the bounded PoD companion exactly once per HTML revision, in a
+  // dedicated lifecycle tick before any on-chain transaction. This keeps the
+  // already-long CREATING call from timing out and makes retries idempotent:
+  // failure records a capture fallback marker, never calls the model again on
+  // the next tick, and never blocks publication of the canonical web artwork.
+  if (work.artForm?.startsWith("html-")) {
+    const currentSourceHash = hashArtworkSource(work.artworkText);
+    if (work.podSceneAttemptedSourceHash !== currentSourceHash) {
+      const generated = await generateSceneCompanion({
+        workId: work.id,
+        title: work.title,
+        artForm: work.artForm,
+        proposal: work.proposal,
+        brief: work.brief,
+        artworkText: work.artworkText,
+      });
+      const updates: Partial<ANAWork> = generated.ok && generated.scene && generated.sceneHash
+        ? {
+            podSceneJson: canonicalizeSceneV1(generated.scene),
+            podSceneHash: generated.sceneHash,
+            podSceneSourceHash: generated.sourceHash,
+            podSceneAt: Date.now(),
+            podSceneRevision: (work.podSceneRevision ?? 0) + 1,
+            podSceneCorrespondence: generated.correspondence,
+            podSceneAttemptedSourceHash: currentSourceHash,
+            podSceneStatus: "ready",
+            podSceneError: undefined,
+          }
+        : {
+            podSceneAttemptedSourceHash: currentSourceHash,
+            podSceneStatus: "fallback",
+            podSceneError: generated.error?.slice(0, 500) ?? "scene-v1 generation failed",
+          };
+      const writeResult = await updatePodArtifactsForSource(work.id, currentSourceHash, updates);
+      if (writeResult === "not-found") return "scene-v1 preparation: work disappeared";
+      if (writeResult === "source-mismatch") {
+        console.warn(`[work-lifecycle] scene-v1 source changed during compilation for ${work.id}; retrying next tick`);
+        return true;
+      }
+      console.log(`[work-lifecycle] scene-v1 ${generated.ok ? "ready" : "fell back to capture"} for ${work.id}`);
+      return true;
+    }
   }
 
   const authorName      = work.authorName ?? `Normie #${work.authorTokenId}`;

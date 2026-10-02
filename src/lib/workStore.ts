@@ -13,7 +13,6 @@
 
 import fs   from "fs";
 import path from "path";
-import { revalidateTag } from "next/cache";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { cleanDiagnosticText } from "@/lib/redact";
 
@@ -160,6 +159,19 @@ export interface ANAWork {
   podCaptureTimeMs?:     number;
   podCaptureHash?:       string; // sha256:<hex> of decoded gray8 bytes
   podCaptureSourceHash?: string; // sha256:<hex> of the exact artworkText
+  // Closed declarative companion for PoD OLED/TFT. The canonical JSON string
+  // is stored byte-for-byte so the validated/hashable representation cannot
+  // drift when it crosses the ANA -> PoD boundary. It is never public through
+  // /api/works; only the authenticated admin route and the PoD feed expose it.
+  podSceneJson?:                string;
+  podSceneHash?:                string;
+  podSceneSourceHash?:          string;
+  podSceneAt?:                  number;
+  podSceneRevision?:            number;
+  podSceneCorrespondence?:      string;
+  podSceneAttemptedSourceHash?: string;
+  podSceneStatus?:              "ready" | "fallback";
+  podSceneError?:               string;
   validationNote?: string;
   revisionCount?:  number;
   pipelineFailCount?: number; // consecutive advanceWork() failures in the current state — pauses for technical review past MAX_PIPELINE_FAILS
@@ -447,6 +459,21 @@ let _listCache: { works: Record<string, ANAWork>; at: number } | null = null;
  * keep serving stale data for up to CACHE_TTL_MS. */
 export function invalidateCache(): void { _listCache = null; }
 
+async function rebuildAnaArtFeedAfterMutation(): Promise<void> {
+  try {
+    // Late import avoids a module cycle at initialization: the feed builder
+    // reads workStore, while this hook only runs after a successful mutation.
+    const { rebuildAndPrewarmAnaArtFeed } = await import("@/app/api/ana-art/feed/route");
+    await rebuildAndPrewarmAnaArtFeed();
+  } catch (error) {
+    // Crucially, the feed helper invalidates only AFTER a new durable
+    // generation exists. A failed rebuild therefore leaves the previous
+    // snapshot available instead of turning the next PoD pull into a retry
+    // storm or a Neon wake-up.
+    console.error("[workStore] ANA art feed rebuild failed; keeping previous snapshot:", error);
+  }
+}
+
 async function neonListAllWorks(): Promise<Record<string, ANAWork>> {
   const works: Record<string, ANAWork> = {};
   try {
@@ -523,7 +550,7 @@ async function readOneWork(id: string): Promise<ANAWork | null> {
 // being a special-cased safety net.
 async function writeOneWork(
   id: string,
-  fn: (w: ANAWork) => void,
+  fn: (w: ANAWork) => void | false,
   opts: { merge?: (fresh: ANAWork, working: ANAWork) => void } = {},
 ): Promise<ANAWork | null> {
   if (await useNeon()) {
@@ -532,7 +559,7 @@ async function writeOneWork(
       const raw = await kvGet(WORK_KEY_PREFIX + id);
       if (!raw) return null;
       const work = JSON.parse(raw) as ANAWork;
-      fn(work);
+      if (fn(work) === false) return work;
       if (opts.merge) {
         const freshRaw = await kvGet(WORK_KEY_PREFIX + id);
         if (freshRaw) opts.merge(JSON.parse(freshRaw) as ANAWork, work);
@@ -548,7 +575,7 @@ async function writeOneWork(
   const store = await (async () => { if (!global.__anaWorkStore) global.__anaWorkStore = fileLoad(); return global.__anaWorkStore; })();
   const work = store.works[id];
   if (!work) return null;
-  fn(work);
+  if (fn(work) === false) return work;
   fileSave(store);
   return work;
 }
@@ -631,7 +658,7 @@ export async function getSalonWorkOutcomes(): Promise<Record<string, SalonWorkOu
 // 29/09/2026 secret-leak incident. Never includes artworkText/brief/proposal:
 // those are creative content, not diagnostics, and must reach storage
 // byte-for-byte.
-const DIAGNOSTIC_TEXT_FIELDS = ["validationNote", "operationalErrorMessage"] as const;
+const DIAGNOSTIC_TEXT_FIELDS = ["validationNote", "operationalErrorMessage", "podSceneError"] as const;
 
 export async function updateWork(id: string, updates: Partial<ANAWork>): Promise<void> {
   const cleaned: Partial<ANAWork> = { ...updates };
@@ -639,7 +666,40 @@ export async function updateWork(id: string, updates: Partial<ANAWork>): Promise
     const value = cleaned[field];
     if (typeof value === "string") (cleaned as Record<string, unknown>)[field] = cleanDiagnosticText(value);
   }
-  await writeOneWork(id, w => Object.assign(w, cleaned));
+  await writeOneWork(id, w => { Object.assign(w, cleaned); });
+}
+
+export type PodArtifactUpdateResult = "updated" | "source-mismatch" | "not-found";
+
+/**
+ * Writes a capture/scene only if it still belongs to the exact HTML revision
+ * the caller rendered or compiled. The comparison and write happen inside the
+ * same single-row mutation, closing the race where an old iframe capture could
+ * otherwise be stamped with a newer artworkText hash.
+ */
+export async function updatePodArtifactsForSource(
+  id: string,
+  expectedSourceHash: string,
+  updates: Partial<ANAWork>,
+): Promise<PodArtifactUpdateResult> {
+  const { createHash } = await import("node:crypto");
+  const cleaned: Partial<ANAWork> = { ...updates };
+  for (const field of DIAGNOSTIC_TEXT_FIELDS) {
+    const value = cleaned[field];
+    if (typeof value === "string") (cleaned as Record<string, unknown>)[field] = cleanDiagnosticText(value);
+  }
+  let accepted = false;
+  const result = await writeOneWork(id, work => {
+    if (!work.artworkText) return false;
+    const currentSourceHash = `sha256:${createHash("sha256").update(work.artworkText, "utf8").digest("hex")}`;
+    if (currentSourceHash !== expectedSourceHash) return false;
+    Object.assign(work, cleaned);
+    accepted = true;
+  });
+  if (!result) return "not-found";
+  if (!accepted) return "source-mismatch";
+  if (result.state === "PUBLISHED") await rebuildAnaArtFeedAfterMutation();
+  return "updated";
 }
 
 export async function advanceState(id: string, newState: WorkState, note?: string): Promise<void> {
@@ -649,12 +709,9 @@ export async function advanceState(id: string, newState: WorkState, note?: strin
     w.stateHistory.push({ state: newState, at: Date.now(), note: cleanNote });
   });
   if (updated) console.log(`[workStore] ${id} → ${newState}${note ? ` (${note})` : ""}`);
-  // A pixel-drawing memorial reaching PUBLISHED is exactly the case
-  // /api/ana-art/feed's cached item list needs to pick up sooner than its
-  // own 30-min revalidate -- cheap to call for every work, not just
-  // pixel-drawing ones, since it just clears a Next.js cache tag (no Neon
-  // read/write of its own).
-  if (updated && newState === "PUBLISHED") revalidateTag("ana-art-feed");
+  // Publication is the bounded event that creates the next durable feed
+  // generation. Device pulls never rebuild it and the cache has no timer.
+  if (updated && newState === "PUBLISHED") await rebuildAnaArtFeedAfterMutation();
 }
 
 export async function addVote(id: string, vote: WorkVote): Promise<void> {

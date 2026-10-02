@@ -1206,6 +1206,13 @@ type ANAWorkFull = ANAWorkSummary & {
   podCaptureHeight?: number;
   podCaptureAt?: number;
   podCaptureHash?: string;
+  podSceneHash?: string;
+  podSceneSourceHash?: string;
+  podSceneAt?: number;
+  podSceneRevision?: number;
+  podSceneCorrespondence?: string;
+  podSceneStatus?: "ready" | "fallback";
+  podSceneError?: string;
   cartelText?: string;
   artForm?: string;
   burnedTokenId?: number;
@@ -1296,6 +1303,12 @@ window.addEventListener("message",function(event){
     : `${html}${bridge}`;
 }
 
+async function sha256Utf8(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 
 function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
   const [works,   setWorks]   = useState<ANAWorkFull[]>([]);
@@ -1311,8 +1324,11 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
   const [codeView, setCodeView] = useState<ANAWorkFull | null>(null);
   const captureFrameRef = useRef<HTMLIFrameElement | null>(null);
   const captureRequestRef = useRef<string | null>(null);
+  const captureSourceHashRef = useRef<string | null>(null);
   const [captureStatus, setCaptureStatus] = useState<"idle" | "waiting" | "saving" | "saved" | "error">("idle");
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
+  const [sceneStatus, setSceneStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [sceneMessage, setSceneMessage] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -1345,12 +1361,20 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
       if (!data || data.requestId !== captureRequestRef.current || !codeView) return;
       if (data.type === "ANA_POD_CAPTURE_ERROR") {
         captureRequestRef.current = null;
+        captureSourceHashRef.current = null;
         setCaptureStatus("error");
         setCaptureMessage(data.error ?? "Capture impossible");
         return;
       }
       if (data.type !== "ANA_POD_CAPTURE_RESULT" || !data.pixels) return;
       captureRequestRef.current = null;
+      const expectedSourceHash = captureSourceHashRef.current;
+      captureSourceHashRef.current = null;
+      if (!expectedSourceHash) {
+        setCaptureStatus("error");
+        setCaptureMessage("Hash de la révision capturée indisponible ; recharge l'œuvre.");
+        return;
+      }
       setCaptureStatus("saving");
       void (async () => {
         try {
@@ -1360,6 +1384,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
             body: JSON.stringify({
               workId: codeView.id, pixels: data.pixels,
               width: data.width, height: data.height, timeMs: data.timeMs,
+              expectedSourceHash,
             }),
           });
           const raw = await response.text();
@@ -1382,14 +1407,15 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
     return () => window.removeEventListener("message", onCaptureMessage);
   }, [codeView, getAdminHeaders, loadDiagnostics]);
 
-  const requestPodCapture = () => {
+  const requestPodCapture = async () => {
     const frame = captureFrameRef.current?.contentWindow;
-    if (!frame) {
+    if (!frame || !codeView?.artworkText) {
       setCaptureStatus("error");
       setCaptureMessage("Aperçu génératif indisponible");
       return;
     }
     const requestId = crypto.randomUUID();
+    captureSourceHashRef.current = await sha256Utf8(codeView.artworkText);
     captureRequestRef.current = requestId;
     setCaptureStatus("waiting");
     setCaptureMessage("Capture de la frame courante…");
@@ -1397,9 +1423,37 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
     window.setTimeout(() => {
       if (captureRequestRef.current !== requestId) return;
       captureRequestRef.current = null;
+      captureSourceHashRef.current = null;
       setCaptureStatus("error");
       setCaptureMessage("Le canvas n'a pas répondu dans les 5 secondes.");
     }, 5000);
+  };
+
+  const compilePodScene = async () => {
+    if (!codeView?.artworkText) return;
+    setSceneStatus("saving");
+    setSceneMessage("Compilation du manifeste scene-v1…");
+    try {
+      const expectedSourceHash = await sha256Utf8(codeView.artworkText);
+      const response = await fetch("/api/admin/works", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
+        body: JSON.stringify({ action: "compile-scene", workId: codeView.id, expectedSourceHash }),
+      });
+      const raw = await response.text();
+      let result: { error?: string; feedEligible?: boolean; sceneHash?: string };
+      try { result = JSON.parse(raw) as typeof result; }
+      catch { throw new Error(`scene-v1 HTTP ${response.status}: ${raw.slice(0, 240) || "réponse vide"}`); }
+      if (!response.ok) throw new Error(result.error ?? `scene-v1 HTTP ${response.status}`);
+      setSceneStatus("saved");
+      setSceneMessage(result.feedEligible
+        ? `Scène enregistrée et éligible au feed PoD (${result.sceneHash?.slice(0, 22)}…).`
+        : "Scène enregistrée ; elle entrera dans le feed lorsque l'œuvre sera publiée.");
+      await loadDiagnostics();
+    } catch (error) {
+      setSceneStatus("error");
+      setSceneMessage(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const forceReject = async (workId: string) => {
@@ -1987,7 +2041,7 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                 />
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
-                    onClick={requestPodCapture}
+                    onClick={() => void requestPodCapture()}
                     disabled={captureStatus === "waiting" || captureStatus === "saving"}
                     className="font-mono text-xs border border-purple-400 text-purple-700 px-3 py-2 hover:bg-purple-50/20 disabled:opacity-40"
                   >
@@ -1996,9 +2050,30 @@ function WorkStatusSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeade
                   {codeView.podCaptureHash && (
                     <span className="font-mono text-[10px] text-green-700">Frame existante : {codeView.podCaptureHash.slice(0, 22)}…</span>
                   )}
+                  <button
+                    onClick={() => void compilePodScene()}
+                    disabled={sceneStatus === "saving"}
+                    className="font-mono text-xs border border-cyan-400 text-cyan-700 px-3 py-2 hover:bg-cyan-50/20 disabled:opacity-40"
+                  >
+                    {sceneStatus === "saving" ? "Compilation…" : codeView.podSceneHash ? "↻ Recompiler scene-v1" : "▶ Compiler scene-v1"}
+                  </button>
+                  {codeView.podSceneHash && (
+                    <span className="font-mono text-[10px] text-cyan-700">
+                      Scène r{codeView.podSceneRevision ?? 1} : {codeView.podSceneHash.slice(0, 22)}…
+                    </span>
+                  )}
                 </div>
                 {captureMessage && (
                   <p className={`font-mono text-[10px] ${captureStatus === "error" ? "text-red-600" : "text-green-700"}`}>{captureMessage}</p>
+                )}
+                {sceneMessage && (
+                  <p className={`font-mono text-[10px] ${sceneStatus === "error" ? "text-red-600" : "text-cyan-700"}`}>{sceneMessage}</p>
+                )}
+                {codeView.podSceneCorrespondence && (
+                  <p className="font-mono text-[10px] text-[--fg-muted]">Correspondance : {codeView.podSceneCorrespondence}</p>
+                )}
+                {codeView.podSceneError && (
+                  <p className="font-mono text-[10px] text-orange-600">Fallback capture : {codeView.podSceneError}</p>
                 )}
                 <details className="border border-[--border]">
                   <summary className="font-mono text-[10px] px-3 py-2 cursor-pointer">Voir le code source</summary>

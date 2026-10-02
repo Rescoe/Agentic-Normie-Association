@@ -1,6 +1,5 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
 import { verifyMemberRequest } from "@/lib/memberAuth";
 import { getDrawing, updateDrawing } from "@/lib/drawStore";
 
@@ -42,10 +41,17 @@ export async function POST(
     decisionNote: body.note,
     decidedAt:    Date.now(),
   });
-  // An approval changes /api/ana-art/feed's item list directly; a rejection
-  // doesn't (rejected drawings were never in it), but tagging both is
-  // simpler than special-casing and costs nothing extra.
-  revalidateTag("ana-art-feed");
+  // Build and prewarm a new durable feed generation while this mutation is
+  // already active. The helper keeps the previous generation if rebuilding
+  // fails, so a later PoD pull never becomes the recovery worker.
+  if (body.decision === "approved") {
+    try {
+      const { rebuildAndPrewarmAnaArtFeed } = await import("@/app/api/ana-art/feed/route");
+      await rebuildAndPrewarmAnaArtFeed();
+    } catch (error) {
+      console.error("[peer-review] ANA art feed rebuild failed; keeping previous snapshot:", error);
+    }
+  }
 
   return NextResponse.json({ ok: true });
 }
