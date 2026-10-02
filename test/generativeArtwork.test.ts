@@ -279,6 +279,25 @@ describe("generativeArtwork — buildGenerativeCsp", () => {
     const withoutCdn = buildGenerativeCsp(`<!DOCTYPE html><html><body><canvas></canvas><script>1;</script></body></html>`);
     expect(withoutCdn).to.not.include("cdnjs.cloudflare.com");
   });
+
+  // 02/10/2026 incident: p5.sound loads AudioWorklet modules from blob: URLs; a CSP
+  // without blob: left p5 stuck on its "Loading..." screen forever.
+  it("allows blob: workers/scripts only when the document loads p5.sound", () => {
+    const withSound = buildGenerativeCsp(validP5Doc());
+    expect(withSound).to.match(/script-src[^;]*\bblob:/);
+    expect(withSound).to.match(/worker-src blob:/);
+
+    const noSound = buildGenerativeCsp(`<!DOCTYPE html><html><body><canvas></canvas><script>1;</script></body></html>`);
+    expect(noSound).to.not.match(/script-src[^;]*\bblob:/);
+    expect(noSound).to.not.include("worker-src");
+  });
+
+  it("keeps network egress closed even when blob: is allowed", () => {
+    const csp = buildGenerativeCsp(validP5Doc());
+    expect(csp).to.include("connect-src 'none'");
+    expect(csp).to.include("frame-src 'none'");
+    expect(csp).to.include("default-src 'none'");
+  });
 });
 
 describe("generativeArtwork — cdnForForm", () => {

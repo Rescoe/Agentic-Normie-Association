@@ -251,12 +251,18 @@ export function buildGenerativeCsp(html: string): string {
   }
 
   const needsCdn = html.includes(CDN_HOST);
-  const scriptSrc = ["'self'", ...scriptHashes, ...(needsCdn ? [CDN_HOST] : [])].join(" ");
+  // p5.sound builds its AudioWorklet/Worker modules from blob: URLs at load time.
+  // Without blob: p5 never finishes preloading and the piece hangs on "Loading..."
+  // (02/10/2026 incident). Scoped to works that load p5.sound only; network egress
+  // stays fully closed by connect-src/frame-src/default-src 'none'.
+  const needsBlob = /p5\.sound(\.min)?\.js/.test(html);
+  const scriptSrc = ["'self'", ...scriptHashes, ...(needsCdn ? [CDN_HOST] : []), ...(needsBlob ? ["blob:"] : [])].join(" ");
   const styleSrc  = ["'self'", ...styleHashes].join(" ");
 
   return [
     "default-src 'none'",
     `script-src ${scriptSrc}`,
+    ...(needsBlob ? ["worker-src blob:"] : []),
     `style-src ${styleSrc}`,
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
