@@ -112,7 +112,7 @@ const CACHE_HEADERS = { "Cache-Control": "private, no-store" };
 
 export interface AnaArtFeedItem {
   id:             string;
-  kind:           "celebration" | "spontaneous" | "poem" | "generative-capture";
+  kind:           "celebration" | "spontaneous" | "poem" | "generative-capture" | "generative-scene";
   // celebration / spontaneous : bitmap brut. Absents pour "poem".
   pixels?:        string; // base64, raw grayscale bytes, canvasW*canvasH, 0-255
   canvasW?:       number;
@@ -252,9 +252,10 @@ export function buildFeedItems(
 
   // One content-addressed bundle per published generative source. It may carry
   // a scene, a capture, or both. Keeping kind=generative-capture during the
-  // transition is intentional: the deployed PoD parser ignores unknown scene
-  // fields and still consumes capture, while the new parser prefers scene-v1
-  // for capable OLED/TFT devices and uses a server-rendered frame for e-ink.
+  // transition is intentional: when a capture exists the deployed PoD parser
+  // consumes it and ignores the extra scene field. A scene-only bundle uses
+  // kind=generative-scene, which that parser explicitly ignores WITHOUT
+  // marking invalid; the upgraded parser handles both forms.
   const generativeCaptureItems: AnaArtFeedItem[] = works.flatMap(w => {
     if (w.state !== "PUBLISHED" || !w.artForm?.startsWith("html-") || !w.artworkText) return [];
     const sourceHash = hashArtworkSource(w.artworkText);
@@ -284,7 +285,7 @@ export function buildFeedItems(
       schemaVersion: 2,
       sourceId:     w.id,
       revision,
-      kind:         "generative-capture",
+      kind:         captureValid ? "generative-capture" : "generative-scene",
       artForm:      w.artForm,
       sourceHash,
       contentHash,

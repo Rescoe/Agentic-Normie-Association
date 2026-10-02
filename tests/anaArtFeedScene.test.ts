@@ -70,6 +70,7 @@ describe("ANA art feed generative bundle", () => {
       podCaptureSourceHash: undefined,
     }) as never], []);
     expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("generative-scene");
     expect(items[0].scene).toBeDefined();
     expect(items[0].capture).toBeUndefined();
   });
