@@ -24,6 +24,28 @@ const viemClient = createPublicClient({
 const WR_ADDR  = CONTRACT_ADDRESSES.WorkRegistry as `0x${string}`;
 const deployed = !!CONTRACT_ADDRESSES.WorkRegistry;
 
+function OpenSeaIndexLink({ address }: { address: string }) {
+  return (
+    <a
+      href={`https://opensea.io/assets/base/${address}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="OpenSea is an external index and may delay or restrict a collection independently of its on-chain status."
+      className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
+    >
+      OpenSea (external index) ↗
+    </a>
+  );
+}
+
+function MarketplaceIndexNotice() {
+  return (
+    <p className="font-mono text-[9px] leading-relaxed text-amber-600/80">
+      Marketplace visibility is controlled by OpenSea. Verify the collection and ownership on Base.
+    </p>
+  );
+}
+
 // A paused work (NEEDS_RETHINK/BLOCKED_TECHNICAL) is neither published nor
 // rejected — it stays in the in-progress list rather than vanishing (the
 // 29/09/2026 incident: a technically-paused work disappeared from every
@@ -912,15 +934,9 @@ function WorkCard({ work, onChainId, getName }: { work: ANAWork; onChainId: numb
               >
                 {work.collectionAddress.slice(0, 6)}…{work.collectionAddress.slice(-4)} ↗
               </a>
-              <a
-                href={`https://opensea.io/assets/base/${work.collectionAddress}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
-              >
-                OpenSea ↗
-              </a>
+              <OpenSeaIndexLink address={work.collectionAddress} />
             </div>
+            <MarketplaceIndexNotice />
             <EditionMintPanel
               collectionAddress={work.collectionAddress as `0x${string}`}
               editionPriceEthFallback={work.editionPrice}
@@ -1219,14 +1235,9 @@ function OnChainWorkCard({ workId }: { workId: number }) {
                 >
                   {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
                 </a>
-                <a
-                  href={`https://opensea.io/assets/base/${cert.collectionAddress}`}
-                  target="_blank" rel="noopener noreferrer"
-                  className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
-                >
-                  OpenSea ↗
-                </a>
+                <OpenSeaIndexLink address={cert.collectionAddress} />
               </div>
+              <MarketplaceIndexNotice />
               <EditionMintPanel
                 collectionAddress={cert.collectionAddress as `0x${string}`}
                 editionPriceEthFallback={cert.editionPrice}
@@ -1326,14 +1337,9 @@ function OnChainWorkCard({ workId }: { workId: number }) {
               >
                 {cert.collectionAddress.slice(0, 6)}…{cert.collectionAddress.slice(-4)} ↗
               </a>
-              <a
-                href={`https://opensea.io/assets/base/${cert.collectionAddress}`}
-                target="_blank" rel="noopener noreferrer"
-                className="font-mono text-[10px] text-[--fg-muted] hover:text-[--fg] transition-colors"
-              >
-                OpenSea ↗
-              </a>
+              <OpenSeaIndexLink address={cert.collectionAddress} />
             </div>
+            <MarketplaceIndexNotice />
             <EditionMintPanel
               collectionAddress={cert.collectionAddress as `0x${string}`}
               editionPriceEthFallback={cert.editionPrice}

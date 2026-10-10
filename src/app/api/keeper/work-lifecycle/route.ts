@@ -2015,6 +2015,7 @@ async function stepPublishingInner(work: ANAWork): Promise<boolean | string> {
         curatorTokenId:    work.curatorTokenId!,
         rapporteurTokenId: work.rapporteurTokenId!,
         authorName,
+        workTitle:         work.title,
         editionCount,
         editionPrice:      editionPriceWei,
         workId:            work.id,

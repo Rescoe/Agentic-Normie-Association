@@ -96,9 +96,9 @@ export const basescanAddressLink = (address: string): NewsLink =>
 export const etherscanTxLink = (txHash: string): NewsLink =>
   ({ kind: "etherscan_tx", label: "Ethereum burn transaction", url: `https://etherscan.io/tx/${txHash}` });
 export const openSeaCollectionLink = (collectionAddress: string): NewsLink =>
-  ({ kind: "opensea_collection", label: "OpenSea collection", url: `https://opensea.io/assets/base/${collectionAddress}` });
+  ({ kind: "opensea_collection", label: "OpenSea (external index)", url: `https://opensea.io/assets/base/${collectionAddress}` });
 export const openSeaAssetLink = (collectionAddress: string, tokenId: number): NewsLink =>
-  ({ kind: "opensea_asset", label: "OpenSea edition", url: `https://opensea.io/assets/base/${collectionAddress}/${tokenId}` });
+  ({ kind: "opensea_asset", label: "OpenSea edition (external index)", url: `https://opensea.io/assets/base/${collectionAddress}/${tokenId}` });
 
 // ─── Media/link builders per event category ───────────────────────────────────
 

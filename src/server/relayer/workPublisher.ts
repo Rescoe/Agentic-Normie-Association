@@ -35,6 +35,7 @@ import {
   CONTRACT_ADDRESSES,
 } from "@/lib/contracts";
 import { logTxSubmitted, logTxConfirmed, logTxFailed } from "@/lib/txLog";
+import { buildCollectionIdentity } from "@/lib/collectionIdentity";
 
 // Base mainnet is the default; Sepolia is an explicit opt-in (26/09/2026 audit finding).
 const TARGET_CHAIN = process.env.NEXT_PUBLIC_CHAIN === "baseSepolia" ? baseSepolia : base;
@@ -57,10 +58,11 @@ export interface DeployCollectionParams {
   curatorTokenId:    number;
   rapporteurTokenId: number;
   authorName:        string;
+  workTitle:         string;
   editionCount:      number;  // from collective vote
   editionPrice:      bigint;  // in wei, from collective vote
   existingCollection?: string; // if already deployed, skip
-  workId?:           string;  // ANAWork id, for tx_log only
+  workId:            string;  // ANAWork id, collection identity + tx_log
 }
 
 export interface DeployCollectionResult {
@@ -117,8 +119,13 @@ export async function deployCollection(
   const curatorWallet     = await _getMemberOwner(publicClient, coreAddr, params.curatorTokenId,    relayerAddr);
   const rapporteurWallet  = await _getMemberOwner(publicClient, coreAddr, params.rapporteurTokenId, relayerAddr);
 
-  const collSymbol = params.authorName.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5) || "ANA";
-  const collName   = `${params.authorName} — ANA`;
+  const collectionIdentity = buildCollectionIdentity({
+    workId: params.workId,
+    title: params.workTitle,
+    authorName: params.authorName,
+  });
+  const collName = collectionIdentity.name;
+  const collSymbol = collectionIdentity.symbol;
 
   try {
     const hash = await walletClient.writeContract({

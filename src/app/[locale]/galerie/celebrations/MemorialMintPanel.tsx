@@ -59,7 +59,7 @@ export function MemorialMintPanel() {
             target="_blank" rel="noopener noreferrer"
             className="font-mono text-[10px] border border-[--border] px-2 py-1 text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] transition-colors shrink-0"
           >
-            View on OpenSea ↗
+            OpenSea (external index) ↗
           </a>
         )}
       </div>

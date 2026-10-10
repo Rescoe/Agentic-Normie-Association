@@ -161,7 +161,7 @@ async function collectFacts(): Promise<NewsFact[]> {
         media: institutionalMedia("ANA — edition collection deployed"),
         links: [
           { kind: "basescan_address", label: "Basescan collection", url: `https://basescan.org/address/${event.address}` },
-          { kind: "opensea_collection", label: "OpenSea collection", url: `https://opensea.io/assets/base/${event.address}` },
+          { kind: "opensea_collection", label: "OpenSea (external index)", url: `https://opensea.io/assets/base/${event.address}` },
         ],
       });
       continue;
