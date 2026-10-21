@@ -37,7 +37,51 @@ export const AG_TEMPLATE_META = {
   description: "Procès-verbal complet d'une assemblée générale : membres élus, discussion pré-création, brief artistique, œuvre, trace on-chain. Format institutionnel ANA.",
 };
 
-export function buildAGReportHtml(work: ANAWork): string {
+/**
+ * Ceiling for the certificate's HTML, in bytes. WorkRegistry.publish() SSTOREs
+ * the whole base64 data URI (~22k gas per 32-byte slot) and mainnet.base.org
+ * caps a tx at ~16.77M gas, so publish() runs with a 15M budget: the real
+ * ceiling is ~15.5 KB of HTML. 13 KB leaves margin. The founding act's first
+ * version was 23 KB and reverted out-of-gas (gasUsed exactly 15,000,000) on
+ * every retry for three weeks — see the 21/10/2026 incident.
+ */
+export const AG_CERTIFICATE_MAX_BYTES = 13_000;
+
+type FoundingCtx = NonNullable<ANAWork["foundingContext"]>;
+
+function clip(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** Strips comments and indentation from the static <style>/<script> blocks only
+ *  (never from user content, which may legitimately contain "/*"). */
+function squeezeBlocks(html: string): string {
+  return html.replace(/<(style|script)>([\s\S]*?)<\/\1>/g, (_m, tag: string, body: string) =>
+    `<${tag}>${body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]+/gm, "").replace(/\n{2,}/g, "\n")}</${tag}>`);
+}
+
+/**
+ * Builds the founding-act certificate, shrinking the Agora excerpts (the only
+ * unbounded, non-essential section) tier by tier until it fits
+ * AG_CERTIFICATE_MAX_BYTES. The full discussion stays in the Agora; the
+ * certificate keeps the elected members, brief, artwork and process trace.
+ */
+export function buildAGReportHtml(work: ANAWork, maxBytes = AG_CERTIFICATE_MAX_BYTES): string {
+  const all = work.foundingContext ?? [];
+  const tiers: Array<{ keep: number; chars: number }> = [
+    { keep: 20, chars: 600 }, { keep: 12, chars: 320 }, { keep: 8, chars: 220 },
+    { keep: 5, chars: 160 }, { keep: 3, chars: 120 }, { keep: 0, chars: 0 },
+  ];
+  let html = "";
+  for (const t of tiers) {
+    const ctx = (t.keep === 0 ? [] : all.slice(-t.keep)).map(m => ({ ...m, content: clip(m.content, t.chars) }));
+    html = renderAGReportHtml(work, ctx);
+    if (Buffer.byteLength(html, "utf8") <= maxBytes) break;
+  }
+  return html;
+}
+
+function renderAGReportHtml(work: ANAWork, ctx: FoundingCtx): string {
   // ── Elected members grid ────────────────────────────────────────────────────
   const elected = work.allElectedRoles ?? [];
 
@@ -53,7 +97,6 @@ export function buildAGReportHtml(work: ANAWork): string {
 <div class="role-card"><div class="role-label">Curateur</div><div class="role-name">${esc(work.curatorName ?? "—")}</div><div class="role-id">#${work.curatorTokenId ?? "?"}</div></div>`;
 
   // ── Agora discussion context ────────────────────────────────────────────────
-  const ctx = work.foundingContext ?? [];
   const discussionHtml = ctx.length > 0
     ? ctx.map(m => {
         const d = new Date(m.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
@@ -75,9 +118,24 @@ export function buildAGReportHtml(work: ANAWork): string {
   }).join("");
 
   // ── State trace ─────────────────────────────────────────────────────────────
-  const stateTrace = work.stateHistory.map(h => {
+  // Technical pause/resume cycles are folded into one line: every failed
+  // publication retry would otherwise add ~200 bytes to a certificate that has
+  // to fit publish()'s gas budget (AG_CERTIFICATE_MAX_BYTES).
+  const isRetryNoise = (h: ANAWork["stateHistory"][number]) =>
+    h.state === "BLOCKED_TECHNICAL" || (h.state === "PUBLISHING" && /retry|resum/i.test(h.note ?? ""));
+  const pauses = work.stateHistory.filter(h => h.state === "BLOCKED_TECHNICAL");
+  const traceEntries: ANAWork["stateHistory"] = work.stateHistory.filter(h => !isRetryNoise(h));
+  if (pauses.length > 0) {
+    const lastPause = pauses[pauses.length - 1];
+    const at = traceEntries.findIndex(h => h.state === "PUBLISHING") + 1;
+    traceEntries.splice(at || traceEntries.length, 0, {
+      state: "PUBLISHING", at: lastPause.at,
+      note: `${pauses.length} pause(s) technique(s) d'infrastructure, reprises automatiques`,
+    });
+  }
+  const stateTrace = traceEntries.map(h => {
     const d = fmtDate(h.at, true);
-    return `<div class="trace-entry"><span class="trace-state">${h.state}</span><span class="trace-at">${d}</span>${h.note ? `<span class="trace-note">${esc(h.note)}</span>` : ""}</div>`;
+    return `<div class="trace-entry"><span class="trace-state">${h.state}</span><span class="trace-at">${d}</span>${h.note ? `<span class="trace-note">${esc(clip(h.note, 140))}</span>` : ""}</div>`;
   }).join("");
 
   const foundedDate    = fmtDate(work.proposedAt);
@@ -100,7 +158,7 @@ export function buildAGReportHtml(work: ANAWork): string {
 
   const dotJson = JSON.stringify(dotData);
 
-  return `<!DOCTYPE html>
+  return squeezeBlocks(`<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -302,5 +360,5 @@ ${work.artworkText ? `
 })();
 </script>
 </body>
-</html>`;
+</html>`);
 }

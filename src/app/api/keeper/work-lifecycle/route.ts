@@ -89,6 +89,8 @@ const REQUIRED_FIELDS_BY_STATE: Partial<Record<WorkState, Array<keyof ANAWork>>>
   PUBLISHING: ["authorTokenId", "artworkText"],
 };
 
+const MAX_PUBLISHABLE_CERTIFICATE_BYTES = 16_000;
+
 function opFail(code: OperationalErrorCode, message: string): string {
   return `${code}::${message}`;
 }
@@ -2051,6 +2053,17 @@ async function stepPublishingInner(work: ANAWork): Promise<boolean | string> {
     // ── Step 2: Build certificate HTML (now includes collectionAddress) ──
     const workWithCollection = collectionAddress ? { ...work, collectionAddress } : work;
     const html = work.isFoundingWork ? buildAGReportHtml(workWithCollection) : await buildWorkHtml(workWithCollection);
+
+    // publish() SSTOREs the whole base64 certificate; past ~15.5 KB of HTML it
+    // runs out of its 15M-gas budget (the RPC caps a tx at ~16.77M) and reverts
+    // with gasUsed == 15,000,000, burning real gas on every retry. Refuse before
+    // sending rather than paying for a revert we can predict.
+    const certBytes = Buffer.byteLength(html, "utf8");
+    if (certBytes > MAX_PUBLISHABLE_CERTIFICATE_BYTES) {
+      const errMsg = `certificate is ${certBytes} bytes, above the ${MAX_PUBLISHABLE_CERTIFICATE_BYTES}-byte ceiling publish() can store within its gas budget — not sent`;
+      await updateWork(work.id, { validationNote: errMsg });
+      return opFail("TX_SEND_REJECTED", errMsg);
+    }
 
     // ── Step 3: Publish certificate to WorkRegistry ──
     const result = await publishWork(
