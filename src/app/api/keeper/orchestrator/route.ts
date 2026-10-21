@@ -9,8 +9,9 @@
  *
  * Sept 2026 pérennisation study's calendar (section 3):
  *   every tick   → activity catchup, threshold-based synthesis
- *   every ~2h    → salon exchange, work lifecycle, burns
- *   every ~6h    → election cycle
+ *   every ~2h    → work lifecycle, burns
+ *   every ~6h    → salon exchange, news, election cycle (salon exchange and
+ *                  news were 2h until the 21/10/2026 1min.ai credit exhaustion)
  *   every ~24h   → daily synthesis catch-all + external signals + health ping
  *
  * "Every ~2h/6h/24h" is measured as elapsed wall-clock time since each TASK's
@@ -177,13 +178,17 @@ export async function POST(req: NextRequest) {
     { name: "activity-catchup",   intervalMs: 0, fn: () => callRoute(req, cronSecret, "/api/activity/events", "GET") },
     { name: "synthesis-threshold", intervalMs: 0, fn: () => callRoute(req, cronSecret, "/api/keeper/synthesize", "POST", { mode: "threshold" }) },
 
-    // ~Every 2h since this task's own last SUCCESS.
-    { name: "salon-exchange", intervalMs: INTERVAL_2H, fn: () => callRoute(req, cronSecret, "/api/keeper/salon-exchange", "POST", {}) },
+    // ~Every 2h since this task's own last SUCCESS. Only the tasks whose cost
+    // is bounded by the pipeline itself stay at 2h: work-lifecycle advances
+    // works one step per tick (idle = no LLM call), check-burns has no LLM.
     { name: "work-lifecycle", intervalMs: INTERVAL_2H, fn: () => callRoute(req, cronSecret, "/api/keeper/work-lifecycle", "POST", {}) },
     { name: "check-burns",    intervalMs: INTERVAL_2H, fn: () => callRoute(req, cronSecret, "/api/keeper/check-burns", "POST", {}) },
-    { name: "generate-news",  intervalMs: INTERVAL_2H, fn: () => callRoute(req, cronSecret, "/api/keeper/generate-news", "POST", {}) },
 
-    // ~Every 6h since its own last success.
+    // ~Every 6h since its own last success. The Normies' conversations were
+    // every 2h until 21/10/2026, when the 1min.ai balance (~6.8M credits) ran
+    // out in 25 days — see oneMinAi.ts's monthly credit governor.
+    { name: "salon-exchange", intervalMs: INTERVAL_6H, fn: () => callRoute(req, cronSecret, "/api/keeper/salon-exchange", "POST", {}) },
+    { name: "generate-news",  intervalMs: INTERVAL_6H, fn: () => callRoute(req, cronSecret, "/api/keeper/generate-news", "POST", {}) },
     { name: "election-cycle", intervalMs: INTERVAL_6H, fn: () => callRoute(req, cronSecret, "/api/keeper/election-cycle", "POST", {}) },
 
     // ~Every 24h since its own last success: full synthesis catch-all + keepalive ping.

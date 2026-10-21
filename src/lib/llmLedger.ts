@@ -95,6 +95,48 @@ export async function getLedgerForMonth(month: string = currentMonth()): Promise
     });
 }
 
+// ─── 1min.ai credit estimate (monthly governor, see oneMinAi.ts) ───────────
+//
+// 1min.ai gives no way to read the remaining balance per call, so spend is
+// ESTIMATED: one more row in this same table, (month, 1minai, _budget,
+// credits-est), whose tokens_est column accumulates the estimated credits of
+// every call that was actually sent. Same atomic in-place increment as
+// recordLlmCall — concurrent orchestrator tasks cannot lose an update.
+
+const CREDIT_ROW_MODEL = "_budget";
+const CREDIT_ROW_TASK  = "credits-est";
+
+export async function getOneMinAiCreditsSpent(month: string = currentMonth()): Promise<number> {
+  if (USE_NEON) {
+    const rows = await query<{ tokens_est: number | string }>(
+      "SELECT tokens_est FROM llm_ledger WHERE month = $1 AND provider = '1minai' AND model = $2 AND task = $3",
+      [month, CREDIT_ROW_MODEL, CREDIT_ROW_TASK],
+    );
+    return Number(rows[0]?.tokens_est ?? 0);
+  }
+  return localLedger.get(localKey(month, "1minai", CREDIT_ROW_MODEL, CREDIT_ROW_TASK))?.tokensEst ?? 0;
+}
+
+export async function addOneMinAiCredits(amount: number): Promise<void> {
+  const month = currentMonth();
+  if (USE_NEON) {
+    await query(
+      `INSERT INTO llm_ledger (month, provider, model, task, calls, successes, failures, retries, tokens_est)
+       VALUES ($1, '1minai', $2, $3, 1, 0, 0, 0, $4)
+       ON CONFLICT (month, provider, model, task) DO UPDATE SET
+         calls      = llm_ledger.calls + 1,
+         tokens_est = llm_ledger.tokens_est + $4`,
+      [month, CREDIT_ROW_MODEL, CREDIT_ROW_TASK, amount],
+    );
+    return;
+  }
+  const key = localKey(month, "1minai", CREDIT_ROW_MODEL, CREDIT_ROW_TASK);
+  const cur = localLedger.get(key) ?? { calls: 0, successes: 0, failures: 0, retries: 0, tokensEst: 0 };
+  cur.calls++;
+  cur.tokensEst += amount;
+  localLedger.set(key, cur);
+}
+
 // ─── Provider budget / economy-mode ────────────────────────────────────────
 //
 // Monthly caps are configured via env (no hardcoded provider prices — the

@@ -5,6 +5,7 @@ import { base } from "viem/chains";
 import { ASSOCIATION_CORE_ABI, CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { listSalons, createSalon, getActiveSalonByCreator } from "@/lib/salonStore";
 import { getSalonWorkOutcomes } from "@/lib/workStore";
+import { isCronOrAdmin } from "@/lib/keeperAuth";
 
 const client = createPublicClient({
   chain:     base,
@@ -56,6 +57,13 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  // Closed to anonymous callers (21/10/2026): every open salon is a standing
+  // consumer of LLM credits and any visitor could open one with just a member
+  // tokenId. Salons now open only through the Normies' own thematic logic.
+  if (!(await isCronOrAdmin(req))) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
+  }
+
   let body: { tokenId?: number; name?: string; description?: string; members?: number[] };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }

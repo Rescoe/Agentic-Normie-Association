@@ -664,47 +664,14 @@ function SalonChat({
 // ─── Salon sidebar (left panel) ───────────────────────────────────────────────
 
 function SalonSidebar({
-  salons, selectedId, onSelect, onCreated,
+  salons, selectedId, onSelect,
 }: {
   salons:      Salon[];
   selectedId:  string | null;
   onSelect:    (s: Salon) => void;
-  onCreated:   (s: Salon) => void;
 }) {
   const t = useTranslations("salon");
-  const [showCreate,    setShowCreate]    = useState(false);
-  const [tokenId,       setTokenId]       = useState("");
-  const [newName,       setNewName]       = useState("");
-  const [newDesc,       setNewDesc]       = useState("");
-  const [creating,      setCreating]      = useState(false);
-  const [createError,   setCreateError]   = useState<string | null>(null);
   const [tab,           setTab]           = useState<"active" | "archived">("active");
-
-  const createSalon = async () => {
-    const id = parseInt(tokenId, 10);
-    if (!id || !newName.trim()) return;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const res  = await fetch("/api/salon", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ tokenId: id, name: newName.trim(), description: newDesc.trim() }),
-      });
-      const data = await res.json() as { salon?: Salon; error?: string; existingSalonId?: string };
-      if (!res.ok || !data.salon) {
-        setCreateError(data.error ?? t("sidebar.createError"));
-      } else {
-        onCreated(data.salon);
-        setShowCreate(false);
-        setTokenId(""); setNewName(""); setNewDesc("");
-      }
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : t("sidebar.networkError"));
-    } finally {
-      setCreating(false);
-    }
-  };
 
   return (
     <div className="flex flex-col h-full border-r border-[--border] bg-[--bg]">
@@ -714,52 +681,7 @@ function SalonSidebar({
           <h1 className="font-mono text-sm font-bold">{t("sidebar.title")}</h1>
           <p className="font-mono text-[10px] text-[--fg-muted]">{t("sidebar.subtitle")}</p>
         </div>
-        <button
-          onClick={() => setShowCreate(v => !v)}
-          className="font-mono text-xs border border-[--border] text-[--fg-muted] hover:text-[--fg] hover:border-[--fg] px-2 py-1 transition-colors"
-          title={t("sidebar.createSalonTitle")}
-        >
-          {showCreate ? "✕" : t("sidebar.newSalonButton")}
-        </button>
       </div>
-
-      {/* Create form */}
-      {showCreate && (
-        <div className="border-b border-[--border] px-4 py-3 space-y-2 bg-[--bg-card] shrink-0">
-          <p className="font-mono text-[10px] text-[--fg-muted] uppercase tracking-widest">{t("sidebar.newSalonLabel")}</p>
-          <input
-            type="number"
-            placeholder={t("sidebar.tokenIdPlaceholder")}
-            value={tokenId}
-            onChange={e => setTokenId(e.target.value)}
-            className="w-full font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg]"
-          />
-          <input
-            type="text"
-            placeholder={t("sidebar.namePlaceholder")}
-            value={newName}
-            onChange={e => setNewName(e.target.value)}
-            maxLength={60}
-            className="w-full font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg]"
-          />
-          <input
-            type="text"
-            placeholder={t("sidebar.descriptionPlaceholder")}
-            value={newDesc}
-            onChange={e => setNewDesc(e.target.value)}
-            maxLength={200}
-            className="w-full font-mono text-xs border border-[--border] bg-[--bg] text-[--fg] px-2 py-1.5 focus:outline-none focus:border-[--fg]"
-          />
-          {createError && <p className="font-mono text-[10px] text-red-500">{createError}</p>}
-          <button
-            onClick={createSalon}
-            disabled={creating || !newName.trim() || !tokenId}
-            className="w-full font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] py-1.5 hover:opacity-80 disabled:opacity-40 transition-opacity"
-          >
-            {creating ? t("sidebar.creating") : t("sidebar.createButton")}
-          </button>
-        </div>
-      )}
 
       {/* Tabs */}
       {(() => {
@@ -887,11 +809,6 @@ export default function SalonClient() {
       .catch(() => {});
   };
 
-  const handleCreated = (s: Salon) => {
-    setSalons(prev => [s, ...prev]);
-    handleSelect(s);
-  };
-
   const handleSalonUpdate = (updated: Salon) => {
     setSalons(prev => prev.map(s => s.id === updated.id ? updated : s));
     setSelected(updated);
@@ -931,7 +848,6 @@ export default function SalonClient() {
           salons={salons}
           selectedId={selected?.id ?? null}
           onSelect={s => handleSelect(s)}
-          onCreated={handleCreated}
         />
       </div>
 

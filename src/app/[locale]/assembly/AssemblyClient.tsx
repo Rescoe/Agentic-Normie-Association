@@ -542,15 +542,6 @@ function CreativeAssemblySection() {
   const [loading, setLoading]   = useState(false);
   const [loadErr, setLoadErr]   = useState<string | null>(null);
 
-  const [discussing, setDiscussing] = useState(false);
-  const [transcript, setTranscript] = useState<string>("");
-  const [llmError,   setLlmError]   = useState<string | null>(null);
-  const [brief,      setBrief]      = useState<string | null>(null);
-
-  const [generating,    setGenerating]    = useState(false);
-  const [generatedHtml, setGeneratedHtml] = useState<string | null>(null);
-  const [genError,      setGenError]      = useState<string | null>(null);
-
   const [txHash,  setTxHash]  = useState<`0x${string}` | null>(null);
   const [txState, setTxState] = useState<"idle"|"pending"|"confirming"|"done"|"error">("idle");
   const [txError, setTxError] = useState<string | null>(null);
@@ -580,47 +571,6 @@ function CreativeAssemblySection() {
   }, []);
 
   const activeElected = elected.filter(m => m.tokenId > 0);
-
-  const launchDiscussion = useCallback(async () => {
-    if (discussing || activeElected.length === 0) return;
-    setDiscussing(true); setTranscript(""); setBrief(null); setLlmError(null);
-    try {
-      const res = await fetch("/api/llm/discuss", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ elected: activeElected, rounds: 2 }),
-      });
-      if (!res.ok) { const err = await res.json().catch(() => ({ error: res.statusText })); throw new Error(err.error ?? res.statusText); }
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error(t("noStream"));
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const raw = line.slice(6).trim();
-          if (raw === "[DONE]") break;
-          try { const chunk = JSON.parse(raw); const delta = chunk.choices?.[0]?.delta?.content ?? ""; if (delta) setTranscript(prev => prev + delta); } catch { /* skip */ }
-        }
-      }
-      setTranscript(prev => { const briefMatch = prev.match(/ARTISTIC BRIEF[:\s]+([\s\S]+)/i); if (briefMatch) setBrief(briefMatch[0]); return prev; });
-    } catch (e) { setLlmError(e instanceof Error ? e.message : String(e)); }
-    finally { setDiscussing(false); }
-  }, [discussing, activeElected]);
-
-  const generateArtwork = useCallback(async (briefText: string) => {
-    setGenerating(true); setGeneratedHtml(null); setGenError(null);
-    try {
-      const res  = await fetch("/api/llm/generate-artwork", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ brief: briefText, elected: activeElected }) });
-      const data = await res.json() as { html?: string; error?: string };
-      if (!res.ok || !data.html) throw new Error(data.error ?? "No HTML returned");
-      setGeneratedHtml(data.html);
-    } catch (e) { setGenError(e instanceof Error ? e.message : String(e)); }
-    finally { setGenerating(false); }
-  }, [activeElected]);
 
   const initiateSession = useCallback(async () => {
     setTxError(null); setTxState("pending");
@@ -677,10 +627,6 @@ function CreativeAssemblySection() {
 
       {activeElected.length > 0 && (
         <div className="flex flex-wrap items-center gap-4">
-          <button onClick={launchDiscussion} disabled={discussing}
-            className="font-mono text-xs bg-[--fg] text-[--bg] px-6 py-3 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait">
-            {discussing ? <span className="flex items-center gap-2"><span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin" />{t("discussionInProgress")}</span> : t("launchDiscussion")}
-          </button>
           {(isWROwner || txState !== "idle") && (
             <button onClick={initiateSession} disabled={txState === "pending" || txState === "confirming"}
               className="font-mono text-xs border border-[--border] px-5 py-3 hover:bg-[--bg-card] disabled:opacity-40">
@@ -692,57 +638,6 @@ function CreativeAssemblySection() {
       )}
 
       {txError   && <p className="font-mono text-xs text-red-600">{txError}</p>}
-      {llmError  && <div className="border border-red-300 bg-red-50/20 p-4"><p className="font-mono text-xs text-red-600">{llmError.includes("GROQ_API_KEY") ? t("llmNotConfigured") : llmError}</p></div>}
-
-      {transcript && (
-        <div className="border border-[--border] bg-[--bg]">
-          <div className="flex items-center justify-between px-4 py-2.5 bg-[--bg-card] border-b border-[--border]">
-            <p className="font-mono text-xs text-[--fg-muted] uppercase tracking-widest">{t("transcriptTitle")}</p>
-            {discussing && <span className="flex items-center gap-1.5 font-mono text-xs text-green-600"><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />{t("live")}</span>}
-          </div>
-          <pre className="p-5 text-xs font-mono leading-relaxed whitespace-pre-wrap text-[--fg] max-h-[500px] overflow-y-auto">{transcript}</pre>
-        </div>
-      )}
-
-      {brief && !discussing && (
-        <div className="border-2 border-[--fg] p-6 space-y-4">
-          <p className="font-mono text-xs uppercase tracking-widest text-[--fg-muted]">{t("artisticBriefTitle")}</p>
-          <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap">{brief}</pre>
-          <div className="border-t border-[--border] pt-4 space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <button onClick={() => generateArtwork(brief)} disabled={generating}
-                className="font-mono text-xs bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 disabled:cursor-wait">
-                {generating ? <span className="flex items-center gap-2"><span className="w-3 h-3 border border-[--bg] border-t-transparent rounded-full animate-spin" />{t("generating")}</span> : t("generateWork")}
-              </button>
-              <a href="/publish" className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card]">{t("publishManually")}</a>
-            </div>
-            {genError && <p className="font-mono text-xs text-red-600">{genError.includes("GROQ_API_KEY") ? t("genErrorLlmNotConfigured") : genError}</p>}
-          </div>
-        </div>
-      )}
-
-      {generatedHtml && (
-        <div className="space-y-4">
-          <div className="border-2 border-green-400 bg-[--bg]">
-            <div className="flex items-center justify-between px-5 py-3 bg-green-50/20 border-b border-green-300">
-              <p className="font-mono text-xs text-green-700 uppercase tracking-widest">{t("workGeneratedTitle")}</p>
-              <div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /><span className="font-mono text-xs text-green-700">{t("readyToPublish")}</span></div>
-            </div>
-            <iframe srcDoc={generatedHtml} className="w-full h-[480px] border-0 bg-black" sandbox="allow-scripts" title="Generated work" />
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button onClick={() => { sessionStorage.setItem("ana_generated_html", generatedHtml); window.location.href = "/publish"; }}
-              className="font-mono text-xs bg-[--fg] text-[--bg] px-6 py-3 hover:opacity-80">
-              {t("publishOnchain")}
-            </button>
-            <button onClick={() => generateArtwork(brief ?? "")} disabled={generating}
-              className="font-mono text-xs border border-[--border] px-5 py-3 hover:bg-[--bg-card] disabled:opacity-40">
-              {generating ? t("regenerating") : t("regenerate")}
-            </button>
-          </div>
-          <p className="font-mono text-xs text-[--fg-muted]">{t("htmlStorageNote")}</p>
-        </div>
-      )}
     </div>
   );
 }

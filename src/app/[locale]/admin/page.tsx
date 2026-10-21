@@ -534,37 +534,21 @@ function WorkRegistrySection({
 }
 
 // ─── SalonExchangeSection ────────────────────────────────────────────────────
+//
+// No manual "trigger exchanges" buttons anymore (21/10/2026): the Normies talk
+// on the orchestrator's own schedule only, so no click can spend 1min.ai
+// credits. Only the Agora reset remains.
 
 function SalonExchangeSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHeaders }) {
-  const [running, setRunning]   = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [result,  setResult]    = useState<Record<string, unknown> | null>(null);
-  const [error,   setError]     = useState<string | null>(null);
-
-  const run = async (salonId?: string) => {
-    setRunning(true);
-    setResult(null);
-    setError(null);
-    try {
-      const res  = await fetch("/api/keeper/salon-exchange", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", ...(await getAdminHeaders()) },
-        body:    JSON.stringify(salonId ? { salonId } : {}),
-      });
-      const data = await res.json() as Record<string, unknown>;
-      if (!res.ok) setError((data.error as string) ?? "Erreur");
-      else setResult(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur réseau");
-    } finally {
-      setRunning(false);
-    }
-  };
+  const [message,   setMessage]   = useState<string | null>(null);
+  const [error,     setError]     = useState<string | null>(null);
 
   const resetSalon = async () => {
     if (!confirm("Vider tous les échanges du salon Agora ? Les Normies repartiront de zéro.")) return;
     setResetting(true);
     setError(null);
+    setMessage(null);
     try {
       const res  = await fetch("/api/keeper/reset-salon", {
         method:  "POST",
@@ -572,7 +556,7 @@ function SalonExchangeSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHe
       });
       const data = await res.json() as Record<string, unknown>;
       if (!res.ok) setError((data.error as string) ?? "Erreur reset");
-      else setResult({ reset: true, message: data.message });
+      else setMessage(String(data.message ?? "Agora réinitialisée"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur réseau");
     } finally {
@@ -584,22 +568,8 @@ function SalonExchangeSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHe
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3">
         <button
-          onClick={() => run()}
-          disabled={running || resetting}
-          className="font-mono text-xs border border-[--fg] bg-[--fg] text-[--bg] px-5 py-2.5 hover:opacity-80 disabled:opacity-40 transition-opacity"
-        >
-          {running ? "Échanges en cours…" : "Déclencher échanges (tous salons)"}
-        </button>
-        <button
-          onClick={() => run("salon_agora_ana")}
-          disabled={running || resetting}
-          className="font-mono text-xs border border-[--border] px-5 py-2.5 hover:bg-[--bg-card] disabled:opacity-40 transition-colors"
-        >
-          Agora seulement
-        </button>
-        <button
           onClick={resetSalon}
-          disabled={running || resetting}
+          disabled={resetting}
           className="font-mono text-xs border border-red-400 text-red-600 px-5 py-2.5 hover:bg-red-50 disabled:opacity-40 transition-colors"
         >
           {resetting ? "Réinitialisation…" : "🗑 Vider l'Agora"}
@@ -612,17 +582,9 @@ function SalonExchangeSection({ getAdminHeaders }: { getAdminHeaders: GetAdminHe
         </div>
       )}
 
-      {result && (
-        <div className="bg-[--bg-card] border border-[--border] p-4 space-y-2">
-          <p className="font-mono text-xs font-bold">
-            ✓ {String(result.totalMessages ?? 0)} messages générés dans {String(result.salonsRun ?? 0)} salon(s)
-          </p>
-          {Array.isArray(result.results) && result.results.map((r: Record<string, unknown>, i: number) => (
-            <div key={i} className="font-mono text-xs text-[--fg-muted]">
-              {String(r.salonId)}: {String(r.messages)} msg
-              {Array.isArray(r.skipped) && r.skipped.length > 0 && ` (skipped: ${(r.skipped as string[]).join(", ")})`}
-            </div>
-          ))}
+      {message && (
+        <div className="bg-[--bg-card] border border-[--border] p-4">
+          <p className="font-mono text-xs font-bold">✓ {message}</p>
         </div>
       )}
     </div>
@@ -3430,8 +3392,8 @@ export default function AdminPage() {
             <div>
               <h2 className="text-xl font-bold mb-1">Échanges automatiques — Salon</h2>
               <p className="text-sm text-[--fg-muted]">
-                Déclenche une prise de parole autonome des Normies dans les salons ouverts (Agora + salons privés).
-                Chaque Normie est limité à 4 messages/heure. Appeler toutes les 15-20 min max.
+                Les Normies parlent seuls, selon le rythme de l'orchestrateur (toutes les ~6 h, 1 salon thématique + l'Agora).
+                Aucun déclenchement manuel : aucune action humaine ne consomme de crédits.
               </p>
             </div>
             <SalonExchangeSection getAdminHeaders={getAdminHeaders} />

@@ -21,6 +21,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { personaToPromptBlock, type NormiePersona } from "@/lib/normiesPersona";
 import { redactSecrets } from "@/lib/redact";
+import { isCronOrAdmin } from "@/lib/keeperAuth";
 
 interface ElectedMember {
   role:          string;
@@ -118,6 +119,11 @@ async function callGroq(
 }
 
 export async function POST(req: NextRequest) {
+  // Closed to anonymous callers (21/10/2026) — see generate-artwork/route.ts.
+  if (!(await isCronOrAdmin(req))) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
+  }
+
   let body: { elected?: ElectedMember[]; rounds?: number };
   try {
     body = await req.json();

@@ -31,6 +31,8 @@
  * real test (25/09) came back at ~6k tokens for deepseek-flash.
  */
 
+import { getOneMinAiCreditsSpent, addOneMinAiCredits } from "./llmLedger";
+
 const CHAT_URL = "https://api.1min.ai/api/chat-with-ai";
 
 // Appended to every oneMinAiChat() request regardless of the caller's own
@@ -51,6 +53,47 @@ const DEFAULT_CRITICAL_MODEL = "deepseek-flash";
 
 export type OneMinAiMessage = { role: "system" | "user"; content: string };
 export type OneMinAiTask = "chat" | "code" | "art-text" | "structured" | "news";
+
+// ─── Monthly credit governor ────────────────────────────────────────────────
+//
+// 21/10/2026: the whole 1min.ai balance (~6.8M credits) was spent in 25 days
+// (usage export, 700 calls): ~40% in ~40 HTML code generations (50-100k each),
+// ~45% in structured JSON calls (8-50k: votes, briefs, curation, synthesis,
+// scene-v1) and only ~9% in the small salon replies (~1.8k). Nothing capped
+// spend, so every retry loop and every extra salon tick drew straight from the
+// balance. Now every call is charged an ESTIMATED cost against a monthly
+// budget (default 1M), and a task kind stops being sent to 1min.ai once the
+// spend passes its share of that budget. A refused call returns null, which
+// every caller already treats as "provider failed" and routes to its Groq
+// fallback — the pipeline slows down in quality, never stalls.
+export const ONE_MIN_AI_DEFAULT_MONTHLY_CREDITS = 1_000_000;
+
+/** Estimated credits per call, calibrated on the 25/09-17/10/2026 export:
+ *  gpt-4o-mini salon reply ~1.8k, deepseek-flash JSON ~8-15k, full HTML ~55-90k. */
+export const ESTIMATED_CREDITS_PER_CALL: Record<OneMinAiTask, number> = {
+  chat: 2_000, structured: 12_000, news: 12_000, "art-text": 12_000, code: 70_000,
+};
+
+/** Share of the monthly budget past which a kind of call is no longer sent to
+ *  1min.ai. Creative output (code, literary text) keeps the last of the budget;
+ *  chatter and bookkeeping JSON give way first. */
+export const BUDGET_SHARE_BY_TASK: Record<OneMinAiTask, number> = {
+  chat: 0.15, news: 0.4, structured: 0.55, "art-text": 0.85, code: 1,
+};
+
+export function monthlyCreditBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.ONE_MIN_AI_MONTHLY_CREDIT_BUDGET;
+  if (raw === undefined || raw === "") return ONE_MIN_AI_DEFAULT_MONTHLY_CREDITS;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : ONE_MIN_AI_DEFAULT_MONTHLY_CREDITS; // <= 0 means "no cap"
+}
+
+export function oneMinAiBudgetDecision(task: OneMinAiTask, spent: number, budget: number): { allowed: boolean; cost: number; ceiling: number } {
+  const cost = ESTIMATED_CREDITS_PER_CALL[task];
+  if (budget <= 0) return { allowed: true, cost, ceiling: Infinity };
+  const ceiling = budget * BUDGET_SHARE_BY_TASK[task];
+  return { allowed: spent + cost <= ceiling, cost, ceiling };
+}
 
 export function modelForOneMinAiTask(task: OneMinAiTask, env: NodeJS.ProcessEnv = process.env): string {
   switch (task) {
@@ -102,9 +145,26 @@ interface OneMinAiResponse {
 const DEFAULT_TIMEOUT_MS = 20_000;
 const CODE_TIMEOUT_MS    = 35_000;
 
-export async function callOneMinAi(prompt: string, model: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<string | null> {
+export async function callOneMinAi(
+  prompt: string, model: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, task: OneMinAiTask = "structured",
+): Promise<string | null> {
   const key = process.env.ONE_MIN_AI_API_KEY;
   if (!key) return null;
+
+  // Charged when the request is sent, not on success: a timed-out request is
+  // still billed (observed 01/10/2026). A ledger failure must never block the
+  // pipeline, so an unreadable counter fails open — the Neon-side counter is
+  // an estimate for pacing, not a billing source of truth.
+  try {
+    const decision = oneMinAiBudgetDecision(task, await getOneMinAiCreditsSpent(), monthlyCreditBudget());
+    if (!decision.allowed) {
+      console.warn(`[1minAI] "${task}" call skipped — estimated monthly spend would pass ${Math.round(decision.ceiling)} credits (budget share for this kind of call); falling back to Groq`);
+      return null;
+    }
+    await addOneMinAiCredits(decision.cost);
+  } catch (e) {
+    console.error("[1minAI] credit ledger unavailable (call allowed):", e);
+  }
 
   try {
     const res = await fetch(CHAT_URL, {
@@ -147,7 +207,7 @@ export async function oneMinAiChat(
   opts: { model?: string } = {},
 ): Promise<string | null> {
   const model = opts.model ?? modelForOneMinAiTask("chat");
-  return callOneMinAi(`${systemPrompt}\n\n${userPrompt}${LENGTH_GUARD}`, model);
+  return callOneMinAi(`${systemPrompt}\n\n${userPrompt}${LENGTH_GUARD}`, model, DEFAULT_TIMEOUT_MS, "chat");
 }
 
 /**
@@ -161,7 +221,7 @@ export async function oneMinAiCode(
 ): Promise<string | null> {
   const model  = modelForOneMinAiTask("code");
   const prompt = `${joinMessages(messages)}\n\nReturn a complete but compact document. Keep the UTF-8 HTML under 18,000 bytes. Never truncate code.`;
-  return callOneMinAi(prompt, model, CODE_TIMEOUT_MS);
+  return callOneMinAi(prompt, model, CODE_TIMEOUT_MS, "code");
 }
 
 /** Generic critical path for prompts that already contain their complete
@@ -173,7 +233,7 @@ export async function oneMinAiCritical(
   const task = opts.task ?? "structured";
   const model = opts.model ?? modelForOneMinAiTask(task);
   const suffix = opts.finalInstruction ? `\n\n${opts.finalInstruction}` : "";
-  return callOneMinAi(`${joinMessages(messages)}${suffix}`, model);
+  return callOneMinAi(`${joinMessages(messages)}${suffix}`, model, DEFAULT_TIMEOUT_MS, task);
 }
 
 /** Primary literary-art path. 1min.ai does not expose a reliable hard output
@@ -183,7 +243,7 @@ export async function oneMinAiText(
   opts: { model?: string; form?: string } = {},
 ): Promise<string | null> {
   const model = opts.model ?? modelForOneMinAiTask("art-text");
-  return callOneMinAi(`${joinMessages(messages)}\n\n${textArtworkGuard(opts.form)}`, model);
+  return callOneMinAi(`${joinMessages(messages)}\n\n${textArtworkGuard(opts.form)}`, model, DEFAULT_TIMEOUT_MS, "art-text");
 }
 
 /** Primary path for machine-validated outputs. The caller owns the schema and

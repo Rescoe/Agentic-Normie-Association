@@ -223,15 +223,29 @@ export async function runThresholdSynthesis(): Promise<SynthesizeOutcome[]> {
   return results;
 }
 
+const DAILY_SYNTHESIS_MIN_MESSAGES = 12;
+const DAILY_SYNTHESIS_MAX_SALONS   = 3;
+
 /** Daily catch-all — call once at the midnight orchestrator tick: synthesizes every salon with ANY unsynthesized backlog, plus external signal collection. */
 export async function runDailySynthesis(signals: ExternalSignal[]): Promise<SynthesizeOutcome[]> {
   const { listSalons } = await import("./salonStore");
   const salons = await listSalons();
   const results: SynthesizeOutcome[] = [];
+  // Was: every salon with ANY backlog (even 1-2 messages) got a full
+  // structured LLM pass, every day. A short backlog just waits for the next
+  // day or for the 50-message threshold; the Agora always runs, since it is
+  // the one that carries the day's external signals. At most
+  // DAILY_SYNTHESIS_MAX_SALONS salons per run, largest backlog first.
+  const backlogs: Array<{ id: string; pending: number }> = [];
   for (const salon of salons) {
     const state = await getSalonState(salon.id);
-    if (state.messagesSinceSynthesis === 0) continue;
-    results.push(await synthesizeSalon(salon.id, { signals: salon.id === AGORA_SALON_ID ? signals : undefined, force: true }));
+    if (salon.id === AGORA_SALON_ID ? state.messagesSinceSynthesis > 0 : state.messagesSinceSynthesis >= DAILY_SYNTHESIS_MIN_MESSAGES) {
+      backlogs.push({ id: salon.id, pending: state.messagesSinceSynthesis });
+    }
+  }
+  backlogs.sort((a, b) => (b.id === AGORA_SALON_ID ? 1 : 0) - (a.id === AGORA_SALON_ID ? 1 : 0) || b.pending - a.pending);
+  for (const { id } of backlogs.slice(0, DAILY_SYNTHESIS_MAX_SALONS)) {
+    results.push(await synthesizeSalon(id, { signals: id === AGORA_SALON_ID ? signals : undefined, force: true }));
   }
   return results;
 }

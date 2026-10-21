@@ -37,6 +37,15 @@ import { findMostSimilarFingerprint, FINGERPRINT_SIMILARITY_THRESHOLD } from "@/
 const MODEL = "openai/gpt-oss-120b";
 const CONTEXT_MESSAGES = 12;
 
+// Credit-budget caps (21/10/2026, see oneMinAi.ts's monthly governor): fewer
+// salons per tick, fewer new salons, fewer spontaneous proposals. A proposal
+// is the expensive event — one work costs roughly 250k 1min.ai credits across
+// vote, brief, code generation, curation and scene-v1.
+const CRON_MAX_OTHER_SALONS      = 1;
+const THEMATIC_SALON_PROBABILITY = 0.1;
+const MAX_OPEN_THEMATIC_SALONS   = 8;
+const PROPOSAL_MIN_SPACING_MS    = 4 * 24 * 60 * 60 * 1000;
+
 const client = createPublicClient({
   chain:     base,
   transport: baseRpcTransport(),
@@ -321,7 +330,7 @@ async function runExchange(
       const otherForResp = sampleOtherMembers(allPersonas.filter(p => p.tokenId !== responder.tokenId));
       const freshRecent  = [...recentMsgs, initMsg];
       const respSpeechAct = pickSpeechAct(false);
-      const respContent  = await generateSpeech(responder, otherForResp, freshSalon, freshRecent, "responder", topic, initMsg, "1minai", respSpeechAct);
+      const respContent  = await generateSpeech(responder, otherForResp, freshSalon, freshRecent, "responder", topic, initMsg, "groq", respSpeechAct);
       if (!respContent) {
         skipped.push(`#${responder.tokenId} (LLM failed)`);
       } else {
@@ -346,10 +355,14 @@ async function maybeCreateThematicSalon(
   allPersonas: NormiePersona[],
   allSalons:   Salon[],
 ): Promise<{ created: boolean; salonId?: string }> {
-  if (Math.random() > 0.25) return { created: false };
+  if (Math.random() > THEMATIC_SALON_PROBABILITY) return { created: false };
 
   const llmCount = agora.messages.filter(m => m.isLlm).length;
   if (llmCount < 15) return { created: false };
+
+  // Every open salon is a standing LLM consumer (one exchange per rotation),
+  // so the number of simultaneously open thematic salons is bounded.
+  if (allSalons.filter(s => s.id !== AGORA_SALON_ID && s.isOpen).length >= MAX_OPEN_THEMATIC_SALONS) return { created: false };
 
   const alreadyExists = allSalons.some(
     s => s.id !== AGORA_SALON_ID && s.isOpen &&
@@ -392,6 +405,9 @@ async function maybeGenerateWorkProposal(
   const [active, allWorks] = await Promise.all([getActiveWorks({ excludeMemorials: true }), listWorks()]);
   const capacity = maxConcurrentCreativeWorks(allPersonas.length);
   if (active.length >= capacity) return null;
+
+  const lastProposedAt = Math.max(0, ...allWorks.filter(w => !w.memorialKind).map(w => w.proposedAt ?? 0));
+  if (Date.now() - lastProposedAt < PROPOSAL_MIN_SPACING_MS) return null;
 
   const baseProbability = isUserStim ? 0.08 : 0.15;
   const memberFactor = Math.min(1 + allPersonas.length / 20, 2.5);
@@ -637,7 +653,7 @@ export async function POST(req: NextRequest) {
     }
     const others = allOpen.filter(s => s.id !== AGORA_SALON_ID);
 
-    const MAX_OTHER = isCron ? 2 : others.length;
+    const MAX_OTHER = isCron ? CRON_MAX_OTHER_SALONS : others.length;
     const sorted = [...others].sort((a, b) => (a.lastMessageAt ?? 0) - (b.lastMessageAt ?? 0));
 
     salonsToProcess = [

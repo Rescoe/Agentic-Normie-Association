@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import type { NormiePersona } from "@/lib/normiesPersona";
 import { redactSecrets } from "@/lib/redact";
+import { isCronOrAdmin } from "@/lib/keeperAuth";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL        = "openai/gpt-oss-120b";
@@ -39,6 +40,13 @@ ABSOLUTE RULES:
 - Start directly with <!DOCTYPE html>`;
 
 export async function POST(req: NextRequest) {
+  // Closed to anonymous callers (21/10/2026): the Normies are fully autonomous
+  // and no page triggers this anymore, so an open endpoint was only a way for
+  // anyone to spend LLM quota.
+  if (!(await isCronOrAdmin(req))) {
+    return NextResponse.json({ error: "Unauthorized — x-cron-secret or a valid admin signature required" }, { status: 401 });
+  }
+
   let body: { brief?: string; elected?: ElectedMember[] };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
