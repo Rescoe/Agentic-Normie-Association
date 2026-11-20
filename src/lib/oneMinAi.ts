@@ -62,11 +62,11 @@ export type OneMinAiTask = "chat" | "code" | "art-text" | "structured" | "news";
 // scene-v1) and only ~9% in the small salon replies (~1.8k). Nothing capped
 // spend, so every retry loop and every extra salon tick drew straight from the
 // balance. Now every call is charged an ESTIMATED cost against a monthly
-// budget (default 1M), and a task kind stops being sent to 1min.ai once the
+// budget (default 500k), and a task kind stops being sent to 1min.ai once the
 // spend passes its share of that budget. A refused call returns null, which
 // every caller already treats as "provider failed" and routes to its Groq
 // fallback — the pipeline slows down in quality, never stalls.
-export const ONE_MIN_AI_DEFAULT_MONTHLY_CREDITS = 1_000_000;
+export const ONE_MIN_AI_DEFAULT_MONTHLY_CREDITS = 500_000;
 
 /** Estimated credits per call, calibrated on the 25/09-17/10/2026 export:
  *  gpt-4o-mini salon reply ~1.8k, deepseek-flash JSON ~8-15k, full HTML ~55-90k. */
