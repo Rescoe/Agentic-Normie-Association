@@ -46,6 +46,14 @@ const THEMATIC_SALON_PROBABILITY = 0.1;
 const MAX_OPEN_THEMATIC_SALONS   = 8;
 const PROPOSAL_MIN_SPACING_MS    = 4 * 24 * 60 * 60 * 1000;
 
+// Time budget (20/11/2026): the orchestrator gives this route 45s
+// (TASK_TIMEOUT_MS) and Vercel kills it at 60s. A tick = persona fetch + up to
+// 2 salons x 2 sequential LLM calls + optional proposal/thematic salon, which
+// regularly overran 45s and failed the whole GitHub run (3 consecutive runs).
+// Past this point no NEW salon or optional extra is started; they simply wait
+// for the next tick (salons are sorted least-recently-active first).
+const SOFT_DEADLINE_MS = 28_000;
+
 const client = createPublicClient({
   chain:     base,
   transport: baseRpcTransport(),
@@ -580,6 +588,7 @@ export async function POST(req: NextRequest) {
 
   const force = isCron ? false : (body.force ?? true);
 
+  const tickStartedAt = Date.now();
   const activeWorks   = await getActiveWorks();
   // Cron calls never take this piggyback path (Sept 2026 pérennisation pass):
   // orchestrator.yml now calls /api/keeper/work-lifecycle directly and
@@ -674,13 +683,19 @@ export async function POST(req: NextRequest) {
 
   const allOpenSalons = await listSalons();
 
+  const overBudget = () => isCron && Date.now() - tickStartedAt > SOFT_DEADLINE_MS;
+
   for (let i = 0; i < salonsToProcess.length; i++) {
+    if (i > 0 && overBudget()) {
+      console.warn(`[salon-exchange] time budget reached — ${salonsToProcess.length - i} salon(s) deferred to the next tick`);
+      break;
+    }
     const salon = salonsToProcess[i];
     const result = await runExchange(salon, allPersonas, force, !isCron);
     results.push({ salonId: salon.id, messages: result.messages.length, skipped: result.skipped, topic: result.topic });
     allGenerated.push(...result.messages);
 
-    if (salon.id === AGORA_SALON_ID && result.messages.length > 0) {
+    if (salon.id === AGORA_SALON_ID && result.messages.length > 0 && !overBudget()) {
       if (!workProposal) {
         const initiator = allPersonas.find(p => p.tokenId === result.messages[0]?.tokenId) ?? allPersonas[0];
         workProposal = await maybeGenerateWorkProposal(initiator, allPersonas, result.topic, !isCron);
