@@ -53,6 +53,10 @@ const PROPOSAL_MIN_SPACING_MS    = 4 * 24 * 60 * 60 * 1000;
 // Past this point no NEW salon or optional extra is started; they simply wait
 // for the next tick (salons are sorted least-recently-active first).
 const SOFT_DEADLINE_MS = 28_000;
+// Hard stop for LLM calls inside one cron tick (set in POST): Groq alone can spend 4 x 25s timeouts plus 429 waits
+// on ONE speech, which is what kept failing the orchestrator at 45s even with the soft deadline above.
+const TICK_LLM_BUDGET_MS = 38_000;
+let tickLlmDeadlineAt = Infinity;
 
 const client = createPublicClient({
   chain:     base,
@@ -194,6 +198,10 @@ async function generateSpeech(
   speechAct:    SpeechAct = "position",
 ): Promise<string | null> {
   try {
+    if (tickLlmDeadlineAt - Date.now() < 8_000) {
+      console.warn("[salon-exchange] LLM time budget spent — speech skipped until the next tick");
+      return null;
+    }
     const sysPrompt     = buildSystemPrompt(persona, otherMembers);
     const targetedBlock = await buildTargetedContext(salon, persona.tokenId);
     const activityBlock = await buildRealActivityBlock();
@@ -237,11 +245,13 @@ async function generateSpeech(
     ].filter(Boolean).join("\n");
 
     const tryGroq = async (): Promise<string | null> => {
+      const left = tickLlmDeadlineAt - Date.now();
+      if (left < 5_000) return null;
       const res = await groqFetch({
         model: MODEL,
         messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
         max_tokens: 400, temperature: 0.92,
-      });
+      }, 1, Math.min(20_000, left - 2_000), 6_000);
       const success = res.ok;
       await recordLlmCall({ provider: "groq", model: MODEL, task: "salon-speech", success });
       if (!res.ok) { console.warn(`[salon-exchange] Groq ${res.status} (retries exhausted)`); return null; }
@@ -251,6 +261,7 @@ async function generateSpeech(
     };
 
     const tryOneMinAi = async (): Promise<string | null> => {
+      if (tickLlmDeadlineAt - Date.now() < 21_000) return null; // oneMinAiChat waits up to 20s
       const result = await oneMinAiChat(sysPrompt, userPrompt);
       await recordLlmCall({ provider: "1minai", model: process.env.ONE_MIN_AI_CHAT_MODEL ?? "gpt-4o-mini", task: "salon-speech", success: !!result });
       return result;
@@ -485,7 +496,7 @@ Reply with ONLY the raw JSON object below — no reasoning, no explanation, no m
       ],
       max_tokens:  900,
       temperature: 0.97,
-    });
+    }, 0, Math.max(5_000, Math.min(20_000, tickLlmDeadlineAt - Date.now() - 2_000)), 0);
 
     const ok = res.ok;
     await recordLlmCall({ provider: "groq", model: MODEL, task: "propose-work", success: ok });
@@ -589,6 +600,7 @@ export async function POST(req: NextRequest) {
   const force = isCron ? false : (body.force ?? true);
 
   const tickStartedAt = Date.now();
+  tickLlmDeadlineAt = isCron ? tickStartedAt + TICK_LLM_BUDGET_MS : Infinity;
   const activeWorks   = await getActiveWorks();
   // Cron calls never take this piggyback path (Sept 2026 pérennisation pass):
   // orchestrator.yml now calls /api/keeper/work-lifecycle directly and

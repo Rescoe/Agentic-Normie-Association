@@ -115,6 +115,8 @@ export async function groqFetch(
   body:       GroqBody,
   maxRetries: number = 3,
   timeoutMs:  number = GROQ_REQUEST_TIMEOUT_MS,
+  /** Si un 429 demande d'attendre plus que cela, la réponse 429 est rendue tout de suite (l'appelant a un budget de temps). */
+  maxWaitMs:  number = Infinity,
 ): Promise<Response> {
   const key = process.env.GROQ_API_KEY;
   const headers = {
@@ -163,6 +165,10 @@ export async function groqFetch(
       } catch { /* fall through to exponential backoff below */ }
     }
     if (!waitMs) waitMs = Math.min(1000 * 2 ** attempt, 30_000);
+    if (waitMs > maxWaitMs) {
+      console.warn(`[groq] 429 asks for ${Math.round(waitMs)}ms, over this caller's ${maxWaitMs}ms budget — giving up without waiting`);
+      return res;
+    }
 
     console.warn(`[groq] 429 rate limit — waiting ${Math.round(waitMs)}ms before retry ${attempt + 1}/${maxRetries}`);
     await new Promise(r => setTimeout(r, waitMs));
