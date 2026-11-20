@@ -1075,6 +1075,10 @@ ${work.artForm === "html-threejs" ? `- MANDATORY three.js contract: create a THR
 - Handle window 'resize' to update camera aspect and renderer size — never leave a black canvas` : ""}
 ${(work.artForm === "html-canvas" || work.artForm === "html-webgl") ? `- Create a <canvas> sized to the viewport (canvas.width/height = window.innerWidth/innerHeight)
   and call getContext("2d") or getContext("webgl"); clear/paint it every frame — never leave it black` : ""}
+${work.artForm === "html-webgl" ? `- WebGL1 shaders are GLSL ES 1.00: NO integer % operator (use mod(float(a), float(b))), no int/int
+  tricks, loops with constant bounds only. After compileShader/linkProgram, check
+  getShaderParameter(..., gl.COMPILE_STATUS) and fall back to a visible Canvas 2D drawing if it fails —
+  a shader that fails to compile leaves a black screen` : ""}
 - Visually immersive body: dark background by default, fullscreen if possible
 - Something must visibly HAPPEN on screen: motion, color change, glitch, particles, geometry.
 - FORBIDDEN regardless of what else is on screen: calling text()/fillText() to print

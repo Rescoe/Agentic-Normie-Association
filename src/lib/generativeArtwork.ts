@@ -124,6 +124,28 @@ const MAX_TEXT_CALLS_BY_FORM: Partial<Record<GenerativeForm, number>> = {
 };
 const TEXT_CALL_RE = /\b(?:text|fillText)\s*\(/g;
 
+/**
+ * WebGL1 shaders (GLSL ES 1.00) have no integer `%` operator: such a shader fails to compile and the canvas stays
+ * black with no visible error (observed 20/11/2026 on "Governance Grid Revolt", work #9: `float(i%10)` in the
+ * fragment shader). Statically catches that one case in any string literal that looks like a shader source; a
+ * shader declaring `#version 300 es` (WebGL2) is left alone. Not a GLSL compiler — other compile errors are
+ * not detected here.
+ */
+export function webglOneShaderErrors(html: string): string[] {
+  const errors: string[] = [];
+  const literals = html.match(/`[^`]*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g) ?? [];
+  for (const literal of literals) {
+    if (!/\bvoid\s+main\s*\(/.test(literal) || /#version\s+300\s+es/.test(literal)) continue;
+    // Retire les commentaires GLSL avant de chercher l'opérateur.
+    const code = literal.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    if (/[\w)\]]\s*%\s*[\w(]/.test(code)) {
+      errors.push("a shader uses the integer modulus operator `%`, which does not exist in WebGL1 (GLSL ES 1.00) and breaks compilation (black canvas) — use mod(float(a), float(b)) instead");
+      break;
+    }
+  }
+  return errors;
+}
+
 export interface ValidationResult {
   valid: boolean;
   /** Hard technical-contract violations — block publication, trigger a revision. */
@@ -191,6 +213,9 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
       // html-canvas / html-webgl: native canvas, no CDN expected.
       if (!/<canvas[\s>]/i.test(trimmed)) errors.push(`${artForm}: missing <canvas> element`);
       if (!/getContext\s*\(/i.test(trimmed)) errors.push(`${artForm}: missing getContext() call`);
+      if (artForm === "html-webgl") {
+        for (const message of webglOneShaderErrors(trimmed)) errors.push(`html-webgl: ${message}`);
+      }
     }
 
     if (!VISUAL_PRIMITIVES_BY_FORM[artForm].test(trimmed)) {
