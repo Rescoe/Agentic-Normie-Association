@@ -78,3 +78,40 @@ jobs:
 
           echo "Orchestrator unreachable after $MAX_ATTEMPTS attempts (HTTP $STATUS)" >&2
           exit 1
+
+      # ── Real-browser render probe (21/11/2026, after work #9 shipped a shader that never compiled) ─────────
+      # A published work is immutable and nothing on Vercel can run a page, so before a generative artwork is
+      # approved the lifecycle queues it (kv `renderprobe:queue`) and waits. This step — which runs right
+      # after the orchestrator tick, on a runner that already has Google Chrome — opens each queued page
+      # with its production security policy, records shader/JS errors and what was actually drawn, and POSTs
+      # the observation; the SERVER judges it (src/lib/renderProbe.ts). Cost: one curl (~1 s) when nothing is
+      # queued, ~1-2 min when something is. It never fails the job: an infrastructure problem must not send a
+      # failure e-mail for something the pipeline tolerates (the gate fails open after 18 h).
+      - name: Render probe — is anything waiting for a verdict?
+        id: probe_queue
+        if: ${{ !cancelled() }}
+        env:
+          APP_URL: ${{ vars.ANA_APP_URL }}
+          CRON_SECRET: ${{ secrets.ANA_CRON_SECRET }}
+        run: |
+          COUNT=$(curl -s --connect-timeout 10 --max-time 30 -H "x-cron-secret: $CRON_SECRET" "$APP_URL/api/keeper/render-probe" \
+            | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('pending', [])))" 2>/dev/null) || COUNT=0
+          echo "pending=${COUNT:-0}" >> "$GITHUB_OUTPUT"
+          echo "Render probe queue: ${COUNT:-0} pending"
+
+      - name: Render probe — fetch the probe script
+        if: ${{ !cancelled() && steps.probe_queue.outputs.pending != '0' }}
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/render-probe.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Render probe — open each page in Chrome and report
+        if: ${{ !cancelled() && steps.probe_queue.outputs.pending != '0' }}
+        continue-on-error: true
+        env:
+          APP_URL: ${{ vars.ANA_APP_URL }}
+          CRON_SECRET: ${{ secrets.ANA_CRON_SECRET }}
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/probe" playwright-core@1.49.1
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/probe/node_modules/playwright-core/index.mjs" node scripts/render-probe.mjs --pending

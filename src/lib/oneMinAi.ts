@@ -31,7 +31,9 @@
  * real test (25/09) came back at ~6k tokens for deepseek-flash.
  */
 
-import { getOneMinAiCreditsSpent, addOneMinAiCredits } from "./llmLedger";
+import { getOneMinAiCreditsSpent, addOneMinAiCredits, refundOneMinAiCredits } from "./llmLedger";
+import { softKvGet, softKvSet, softKvGetJson, softKvSetJson } from "./softKv";
+import { redactSecrets } from "./redact";
 
 const CHAT_URL = "https://api.1min.ai/api/chat-with-ai";
 
@@ -145,29 +147,30 @@ interface OneMinAiResponse {
 const DEFAULT_TIMEOUT_MS = 20_000;
 const CODE_TIMEOUT_MS    = 35_000;
 
-export async function callOneMinAi(
-  prompt: string, model: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, task: OneMinAiTask = "structured",
-): Promise<string | null> {
-  const key = process.env.ONE_MIN_AI_API_KEY;
-  if (!key) return null;
+/** Outcome of one raw request to 1min.ai — what actually happened, before any ledger or fallback logic. */
+export type OneMinAiOutcome =
+  | { ok: true;  text: string }
+  | { ok: false; kind: "http" | "record" | "empty" | "timeout" | "network"; status?: number; code?: string; message: string };
 
-  // Charged when the request is sent, not on success: a timed-out request is
-  // still billed (observed 01/10/2026). A ledger failure must never block the
-  // pipeline, so an unreadable counter fails open — the Neon-side counter is
-  // an estimate for pacing, not a billing source of truth.
-  try {
-    const decision = oneMinAiBudgetDecision(task, await getOneMinAiCreditsSpent(), monthlyCreditBudget());
-    if (!decision.allowed) {
-      console.warn(`[1minAI] "${task}" call skipped — estimated monthly spend would pass ${Math.round(decision.ceiling)} credits (budget share for this kind of call); falling back to Groq`);
-      return null;
-    }
-    await addOneMinAiCredits(decision.cost);
-  } catch (e) {
-    console.error("[1minAI] credit ledger unavailable (call allowed):", e);
-  }
+/**
+ * True when the provider provably refused the request BEFORE doing (and billing) the work: an HTTP
+ * error answer (bad key, unknown model, quota, rate limit) or a non-SUCCESS record. A timeout, a
+ * network cut or an empty-but-successful answer may all have been billed (observed 01/10/2026), so
+ * those keep their charge.
+ */
+export function isDefinitelyUnbilled(outcome: OneMinAiOutcome): boolean {
+  if (outcome.ok) return false;
+  if (outcome.kind === "record") return true;
+  if (outcome.kind === "http") return outcome.status !== undefined && (outcome.status < 500 || [500, 501, 502, 503].includes(outcome.status));
+  return false;
+}
 
+/** One request, no ledger, no fallback. Exported for the admin probe and for tests (fetch is injectable). */
+export async function requestOneMinAi(
+  prompt: string, model: string, key: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, fetchImpl: typeof fetch = fetch,
+): Promise<OneMinAiOutcome> {
   try {
-    const res = await fetch(CHAT_URL, {
+    const res = await fetchImpl(CHAT_URL, {
       method: "POST",
       headers: { "API-KEY": key, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -179,21 +182,101 @@ export async function callOneMinAi(
     });
 
     if (!res.ok) {
-      console.error(`[1minAI] ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      return null;
+      const raw = (await res.text()).slice(0, 300);
+      let code: string | undefined; let message = raw;
+      try { const j = JSON.parse(raw) as { errorCode?: string; message?: string }; code = j.errorCode; message = j.message ?? raw; } catch { /* not JSON */ }
+      return { ok: false, kind: "http", status: res.status, code, message };
     }
 
     const data = await res.json() as OneMinAiResponse;
     if (data.aiRecord?.status !== "SUCCESS") {
-      console.error(`[1minAI] non-success status: ${data.aiRecord?.status ?? "unknown"} ${data.error?.message ?? ""}`);
-      return null;
+      return { ok: false, kind: "record", code: data.aiRecord?.status ?? "unknown", message: data.error?.message ?? data.error?.code ?? "non-success record" };
     }
-    return data.aiRecord?.aiRecordDetail?.resultObject?.[0]?.trim() || null;
+    const text = data.aiRecord?.aiRecordDetail?.resultObject?.[0]?.trim();
+    return text ? { ok: true, text } : { ok: false, kind: "empty", message: "SUCCESS record with no content" };
   } catch (e) {
     const isTimeout = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
-    console.error(`[1minAI] request failed${isTimeout ? ` (timed out after ${timeoutMs}ms)` : ""}:`, e);
-    return null;
+    return { ok: false, kind: isTimeout ? "timeout" : "network", message: isTimeout ? `timed out after ${timeoutMs}ms` : (e instanceof Error ? e.message : String(e)) };
   }
+}
+
+// What the last real calls looked like, readable from /api/admin/llm-ledger. Two separate keys so a call
+// costs ONE kv write and never a read first (Neon wake-ups are the scarce resource, not these rows).
+const LAST_ERROR_KEY   = "oneminai:last-error";
+const LAST_SUCCESS_KEY = "oneminai:last-success";
+
+export interface OneMinAiLastError { at: number; kind: string; status?: number; code?: string; message: string; model: string; task: string }
+
+async function noteOneMinAiOutcome(outcome: OneMinAiOutcome, model: string, task: OneMinAiTask): Promise<void> {
+  if (outcome.ok) { await softKvSet(LAST_SUCCESS_KEY, String(Date.now())); return; }
+  const entry: OneMinAiLastError = {
+    at: Date.now(), kind: outcome.kind, status: outcome.status, code: outcome.code,
+    message: redactSecrets(outcome.message).slice(0, 240), model, task,
+  };
+  await softKvSetJson(LAST_ERROR_KEY, entry);
+}
+
+export async function readOneMinAiHealth(): Promise<{ lastError: OneMinAiLastError | null; lastSuccessAt: number | null }> {
+  const [lastError, success] = await Promise.all([softKvGetJson<OneMinAiLastError>(LAST_ERROR_KEY), softKvGet(LAST_SUCCESS_KEY)]);
+  const lastSuccessAt = success && Number.isFinite(Number(success)) ? Number(success) : null;
+  return { lastError, lastSuccessAt };
+}
+
+export async function callOneMinAi(
+  prompt: string, model: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, task: OneMinAiTask = "structured",
+): Promise<string | null> {
+  const key = process.env.ONE_MIN_AI_API_KEY;
+  if (!key) return null;
+
+  // Charged when the request is sent, because a timed-out request is still
+  // billed (observed 01/10/2026) — but GIVEN BACK below when the provider
+  // provably refused it (HTTP error / non-SUCCESS record): such a call costs
+  // nothing, and keeping its charge made a month with zero real spend read
+  // 548 000 / 500 000 (21/11/2026). A ledger failure must never block the
+  // pipeline, so an unreadable counter fails open — the Neon-side counter is
+  // an estimate for pacing, not a billing source of truth.
+  let charged = 0;
+  try {
+    const decision = oneMinAiBudgetDecision(task, await getOneMinAiCreditsSpent(), monthlyCreditBudget());
+    if (!decision.allowed) {
+      console.warn(`[1minAI] "${task}" call skipped — estimated monthly spend would pass ${Math.round(decision.ceiling)} credits (budget share for this kind of call); falling back to Groq`);
+      return null;
+    }
+    await addOneMinAiCredits(decision.cost);
+    charged = decision.cost;
+  } catch (e) {
+    console.error("[1minAI] credit ledger unavailable (call allowed):", e);
+  }
+
+  const outcome = await requestOneMinAi(prompt, model, key, timeoutMs);
+  await noteOneMinAiOutcome(outcome, model, task);
+  if (outcome.ok) return outcome.text;
+
+  console.error(`[1minAI] ${task}/${model} failed (${outcome.kind}${outcome.status ? ` ${outcome.status}` : ""}${outcome.code ? ` ${outcome.code}` : ""}): ${redactSecrets(outcome.message)}`);
+  if (charged > 0 && isDefinitelyUnbilled(outcome)) {
+    await refundOneMinAiCredits(charged).catch(e => console.error("[1minAI] refund failed (non-fatal):", e));
+  }
+  return null;
+}
+
+/**
+ * Admin diagnostic: one minimal real request per model, outside the governor (it neither checks nor
+ * charges the monthly estimate). Costs a few hundred credits at most per model. Answers "why do my
+ * calls fail?" with the provider's own error instead of a bare null.
+ */
+export async function probeOneMinAi(models?: string[]): Promise<Array<{ model: string; ok: boolean; kind?: string; status?: number; code?: string; message?: string; ms: number; reply?: string }>> {
+  const key = process.env.ONE_MIN_AI_API_KEY;
+  if (!key) return [{ model: "-", ok: false, kind: "no-key", message: "ONE_MIN_AI_API_KEY is not set in this environment", ms: 0 }];
+  const list = models?.length ? models : [...new Set([modelForOneMinAiTask("chat"), modelForOneMinAiTask("code"), modelForOneMinAiTask("structured")])];
+  const results = [];
+  for (const model of list) {
+    const t0 = Date.now();
+    const out = await requestOneMinAi("Reply with the single word OK.", model, key, 25_000);
+    results.push(out.ok
+      ? { model, ok: true, ms: Date.now() - t0, reply: out.text.slice(0, 40) }
+      : { model, ok: false, kind: out.kind, status: out.status, code: out.code, message: redactSecrets(out.message).slice(0, 240), ms: Date.now() - t0 });
+  }
+  return results;
 }
 
 /**

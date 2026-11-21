@@ -12,6 +12,7 @@
  * unit-tested directly with mocha (see test/generativeArtwork.test.ts).
  */
 import crypto from "crypto";
+import { lintWebglPage } from "./glslLint";
 
 export const GENERATIVE_FORMS = ["html-canvas", "html-p5js", "html-threejs", "html-webgl"] as const;
 export type GenerativeForm = typeof GENERATIVE_FORMS[number];
@@ -132,22 +133,15 @@ const TEXT_CALL_RE = /\b(?:text|fillText)\s*\(/g;
  * not detected here.
  */
 export function webglOneShaderErrors(html: string): string[] {
-  const errors: string[] = [];
-  const literals = html.match(/`[^`]*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g) ?? [];
-  for (const literal of literals) {
-    if (!/\bvoid\s+main\s*\(/.test(literal) || /#version\s+300\s+es/.test(literal)) continue;
-    // Retire les commentaires GLSL avant de chercher l'opérateur.
-    const code = literal.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-    if (/[\w)\]]\s*%\s*[\w(]/.test(code)) {
-      errors.push("a shader uses the integer modulus operator `%`, which does not exist in WebGL1 (GLSL ES 1.00) and breaks compilation (black canvas) — use mod(float(a), float(b)) instead");
-      break;
-    }
-  }
-  return errors;
+  // Kept for its own tests and callers; the full rule set (this one among them) lives in glslLint.ts.
+  return lintWebglPage(html).filter(i => i.code === "glsl-int-modulo").map(i => i.message);
 }
 
 export interface ValidationResult {
   valid: boolean;
+  /** Stable ids of the hard errors that have one (e.g. "glsl-int-modulo") — what workLessons.ts remembers. */
+  codes?: string[];
+
   /** Hard technical-contract violations — block publication, trigger a revision. */
   errors: string[];
   /** Soft signals (e.g. no shape primitives detected) — surfaced to the curator, never block on their own. */
@@ -164,6 +158,7 @@ export interface ValidationResult {
 export function validateGenerativeHtml(rawHtml: string, artForm?: string): ValidationResult {
   const errors: string[]   = [];
   const warnings: string[] = [];
+  const codes: string[]    = [];
   const trimmed = (rawHtml ?? "").trim();
 
   if (!/^<!DOCTYPE html>/i.test(trimmed)) {
@@ -214,7 +209,7 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
       if (!/<canvas[\s>]/i.test(trimmed)) errors.push(`${artForm}: missing <canvas> element`);
       if (!/getContext\s*\(/i.test(trimmed)) errors.push(`${artForm}: missing getContext() call`);
       if (artForm === "html-webgl") {
-        for (const message of webglOneShaderErrors(trimmed)) errors.push(`html-webgl: ${message}`);
+        for (const issue of lintWebglPage(trimmed)) { errors.push(`html-webgl: ${issue.message}`); codes.push(issue.code); }
       }
     }
 
@@ -244,7 +239,7 @@ export function validateGenerativeHtml(rawHtml: string, artForm?: string): Valid
   // Strip any CSP meta tag the model added — we compute and serve our own via header.
   const normalized = trimmed.replace(CSP_META_RE, "");
 
-  return { valid: errors.length === 0, errors, warnings, html: normalized };
+  return { valid: errors.length === 0, codes, errors, warnings, html: normalized };
 }
 
 // ─── CSP generation (hash-based, never 'unsafe-inline') ───────────────────

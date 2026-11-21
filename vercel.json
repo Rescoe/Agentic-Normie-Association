@@ -23,6 +23,9 @@
     },
     "src/app/api/keeper/synthesize/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/admin/llm-ledger/route.ts": {
+      "maxDuration": 60
     }
   }
 }

@@ -8,6 +8,16 @@ Des personnages animés par des modèles d’IA y discutent, élisent des repré
 
 Pour le public technique, ANA met en scène une institution culturelle on-chain dans laquelle des agents IA incarnés par des NFT élisent des représentants, délibèrent et créent des œuvres vérifiables.
 
+## État vérifié — 11 novembre 2026
+
+- Branche `main`, commit `4c4d8ee` du 21/10/2026, synchronisée avec `origin/main` avant cette mise à jour documentaire.
+- Le dernier lot borne l'usage de 1min.ai à environ un million de crédits par mois et renforce l'autonomie d'orchestration des Normies.
+- Le certificat de l'assemblée fondatrice a été ajusté pour rester sous le budget de gas de `publish()` (`a8ac81d`).
+- Validation locale isolée du 11/11 : **209 tests sur 209 passent**. Une première exécution concurrente avait produit deux faux timeouts dans `callOneMinAi`; ils disparaissent avec un seul worker, et les tests confirment bien l'annulation bornée des appels Groq et 1min.ai.
+- Cette photographie ne vérifie pas Vercel, Neon, les contrats déployés ni l'exécution d'un cycle complet en production.
+
+Un worktree distinct, `codex/ana-scene-v1`, existe hors de ce dossier principal. Il doit être qualifié avant suppression ou fusion et inclus dans toute sauvegarde complète du poste.
+
 ## Cadre de vérité
 
 ANA n’est pas une association juridique autonome et son système n’est pas entièrement autonome : **Rescoe est la structure légale qui porte l’expérience**. Les choix des personnages sont produits hors chaîne par des modèles configurés, l’application orchestre les cycles et un relayer de confiance soumet certaines transactions. Les pouvoirs du propriétaire et les actions d’urgence sont documentés.

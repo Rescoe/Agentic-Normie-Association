@@ -45,6 +45,20 @@ import { tryAcquirePublishLock, releasePublishLock } from "@/lib/publishLock";
 import { validateLiteraryArtwork } from "@/lib/literaryArtwork";
 import { generateSceneCompanion } from "@/lib/anaSceneAuthoring";
 import { canonicalizeSceneV1, hashArtworkSource } from "@/lib/anaSceneV1";
+import { renderProbeEnabled, renderProbeGate, probeFeedback, readProbeResult, sourceHashOf } from "@/lib/renderProbe";
+import { buildLessonsBlock, buildReviewerChecklist, recordValidationFailures, recordWorkFailure, recordWorkSuccess } from "@/lib/workLessons";
+
+// Works currently WAITING for the real-browser render verdict (see stepValidating). Per-invocation memory only:
+// it lets the runner loop tell "waiting for Actions" from "step failed" without changing every step's signature.
+const renderProbeWaiting = new Set<string>();
+
+/** After a publication: remember in the Normies' lessons that this piece ran — and whether a real browser saw it. */
+async function rememberPublishedWork(work: ANAWork): Promise<void> {
+  if (!work.artForm?.startsWith("html-")) return;
+  const probe = await readProbeResult(work.id).catch(() => null);
+  const verifiedInBrowser = !!probe && probe.status === "ok" && probe.sourceHash === sourceHashOf(work.artworkText ?? "");
+  await recordWorkSuccess({ form: work.artForm, title: work.title, html: work.artworkText, verifiedInBrowser });
+}
 
 const MODEL        = "openai/gpt-oss-120b";
 // Groq deprecated llama-3.1-8b-instant, then its replacement (openai/gpt-oss-20b)
@@ -1005,6 +1019,9 @@ async function stepCreating(work: ANAWork, personas: NormiePersona[]): Promise<b
     ? `\n\nFeedback on the previous attempt — you MUST address every point below:\n${work.validationNote}\nRevise taking this feedback into account.`
     : "";
   const authorHistoryBlock = await buildAuthorHistoryBlock(work.authorTokenId, work.id);
+  // The Normies' memory of what worked and what failed — and why (workLessons.ts). Visual forms only: the
+  // lessons are about code that runs; a poem has no compiler.
+  const lessonsBlock = detectHtmlForm(work) ? await buildLessonsBlock(work.artForm) : "";
   const selfCritiqueLine = "\nBefore finalizing: compare this to your own past works above (if any) — is it meaningfully more elaborate, or different in approach? If it would just repeat your last piece, push it further before answering.";
 
   const isHtml = detectHtmlForm(work);
@@ -1029,7 +1046,7 @@ Original proposal: ${work.proposal ?? "—"}
 
 Rapporteur ${work.rapporteurName}'s brief:
 ${work.brief}${revisionCtx}
-${authorHistoryBlock}
+${authorHistoryBlock}${lessonsBlock}
 Ambition level for this piece: ${work.ambitionLevel ?? "standard"}${
   work.ambitionLevel === "ambitious" ? " — go big: more layers, richer motion/composition, take a real creative swing."
   : work.ambitionLevel === "quick" ? " — keep it small and intimate, a quick precise gesture is the goal here."
@@ -1123,6 +1140,9 @@ Generate ONLY the complete HTML, no explanations before or after.`,
       success: oneMinHtmlCheck?.valid === true,
     });
     artworkText = oneMinHtmlCheck?.valid ? oneMinHtmlCheck.html : null;
+    if (oneMinHtmlCheck && !oneMinHtmlCheck.valid) {
+      await recordValidationFailures(work.artForm ?? "html", oneMinHtmlCheck.errors, oneMinHtmlCheck.codes, work.title);
+    }
     if (!artworkText) {
       const why = oneMinHtmlCheck ? oneMinHtmlCheck.errors.join("; ") : "no usable content";
       console.warn(`[work-lifecycle] CREATING: 1min.ai output unusable for "${work.title}" (${why}) — falling back to Groq`);
@@ -1135,6 +1155,7 @@ Generate ONLY the complete HTML, no explanations before or after.`,
         const attempt = work.revisionCount ?? 0;
         const reason  = `Automated structural check failed: ${check.errors.join("; ")}`;
         console.warn(`[work-lifecycle] CREATING: "${work.title}" attempt ${attempt + 1} failed validation: ${check.errors.join("; ")}`);
+        await recordValidationFailures(work.artForm ?? "html", check.errors, check.codes, work.title);
 
         const rethink = await trackSimilarFailure(work, reason);
         if (rethink) {
@@ -1480,7 +1501,7 @@ interface TechnicalReviewVerdict {
   issues: string[];
 }
 
-async function technicalReviewOne(work: ANAWork, reviewer: NormiePersona): Promise<TechnicalReviewVerdict | null> {
+async function technicalReviewOne(work: ANAWork, reviewer: NormiePersona, checklist: string): Promise<TechnicalReviewVerdict | null> {
   const raw = await criticalLlm(
     [
       { role: "system", content: buildSystemPrompt(reviewer) },
@@ -1494,7 +1515,7 @@ Look specifically for things that would make it crash, freeze, stay blank, or vi
 - a sensor/analyzer (e.g. an FFT) that is never actually connected to the thing it is supposed to visualize
 - a variable or function used before it is defined
 - any other concrete syntax or logic error you can point to in the code itself
-
+${checklist}
 Do NOT flag style, performance, or anything you are merely guessing at — only confident, specific, concrete problems you can quote or point to in the code below.
 
 FULL SOURCE:
@@ -1526,7 +1547,8 @@ async function runTechnicalReviewPanel(
   const reviewers = [...pool].sort(() => Math.random() - 0.5).slice(0, Math.min(TECHNICAL_REVIEWERS_COUNT, pool.length));
   if (reviewers.length === 0) return { blocked: false, reviewers: [], issues: [] };
 
-  const settled = await Promise.allSettled(reviewers.map(r => technicalReviewOne(work, r)));
+  const checklist = await buildReviewerChecklist(work.artForm);
+  const settled = await Promise.allSettled(reviewers.map(r => technicalReviewOne(work, r, checklist)));
   const verdicts = settled
     .filter((s): s is PromiseFulfilledResult<TechnicalReviewVerdict | null> => s.status === "fulfilled")
     .map(s => s.value)
@@ -1573,6 +1595,28 @@ async function stepValidating(work: ANAWork, personas: NormiePersona[]): Promise
     structuralNote = check.warnings.length > 0
       ? `Automated structural check: PASSED, with a note: ${check.warnings.join("; ")}. Use your judgment — worked/animated/glitched text is a legitimate generative piece. If this instead reads as a static, purely literary piece, you may set "reclassifyAs" to "poem", "prose", or "manifesto" instead of approving or rejecting it as visual art.`
       : "Automated structural check: PASSED — required functions, drawing primitives and on-chain data constants are all present, and no forbidden APIs were found. Judge artistic merit only, not code correctness.";
+
+    // Real-browser gate (renderProbe.ts): the exact page is loaded in Chrome by GitHub Actions before anyone
+    // is asked to approve it, because a published work is immutable (work #9 shipped a shader that never
+    // compiled). Waiting is normal, not a failure — see renderProbeWaiting in the runner loop. A failed
+    // verdict returns the work to CREATING with the browser's own error as the Author's feedback; no verdict
+    // for 18 h (Actions down) fails open.
+    if (renderProbeEnabled()) {
+      const gate = await renderProbeGate(work.id, work.artworkText ?? "", work.artForm);
+      if (gate.kind === "wait") {
+        renderProbeWaiting.add(work.id);
+        return false;
+      }
+      if (gate.kind === "fail") {
+        await addMessage({
+          salonId: work.salonId ?? AGORA_SALON_ID, tokenId: 0, name: "ANA", imageUrl: "",
+          content: `🔍 "${work.title}" was opened in a real browser before approval and did not run: ${gate.errors[0] ?? "see the revision note"}. It goes back to its Author.`,
+          isLlm: true, timestamp: Date.now(), topic: "art",
+        }).catch(() => null);
+        return await rejectOrRevise(work, personas, curator, probeFeedback(gate.errors), attempt);
+      }
+      if (!gate.probed) console.warn(`[work-lifecycle] "${work.title}" continues unprobed: ${gate.reason}`);
+    }
   }
 
   const others      = sampleOtherMembers(personas.filter(p => p.tokenId !== curator.tokenId));
@@ -1666,6 +1710,7 @@ JSON: {"approved":true|false,"note":"Your decision in 1-2 sentences — be concr
       const exclude = [curator.tokenId, work.authorTokenId, work.rapporteurTokenId].filter((id): id is number => id != null);
       const review = await runTechnicalReviewPanel(work, personas, exclude);
       if (review.blocked) {
+        await recordWorkFailure({ form: work.artForm ?? "html", code: "reviewer-flagged", workTitle: work.title, source: "technical-review", detail: `the technical review panel flagged: ${review.issues[0]}` });
         const reviewerNames = review.reviewers.map(r => r.name).join(" & ");
         await addMessage({
           salonId: work.salonId ?? AGORA_SALON_ID, tokenId: review.reviewers[0].tokenId,
@@ -2917,8 +2962,12 @@ export async function POST(req: NextRequest) {
     // false without a descriptive reason; exempted for the same reason
     // VOTE_OPEN is — it's not a failure, just "try again next tick".
     const isLockSkip = stalledAt === "PUBLISHING" && !advanced && error === undefined;
+    // Waiting for the real-browser render verdict (stepValidating → renderProbeGate) is the same kind of
+    // "not a failure, try again next tick" as a lock skip: counting it toward MAX_PIPELINE_FAILS would
+    // pause a perfectly healthy work as BLOCKED_TECHNICAL just because Actions had not answered yet.
+    const isProbeWait = stalledAt === "VALIDATING" && !advanced && error === undefined && renderProbeWaiting.has(work.id);
     let pausedForReview = false;
-    if (!advanced && !isLockSkip && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK" && stalledAt !== "BLOCKED_TECHNICAL") {
+    if (!advanced && !isLockSkip && !isProbeWait && stalledAt !== "VOTE_OPEN" && stalledAt !== "NEEDS_RETHINK" && stalledAt !== "BLOCKED_TECHNICAL") {
       // Any other non-advancing step counts — even steps that only return false
       // on failure (no descriptive string) must not block the pipeline forever.
       const reason    = error ?? `no progress at ${stalledAt} (step returned false — likely a transient LLM/data issue)`;
@@ -2958,7 +3007,10 @@ export async function POST(req: NextRequest) {
   for (const r of results) {
     if (r.to === "PUBLISHED") {
       const w = await getWork(r.id);
-      if (w) await announceInSalon(w, "published", personas);
+      if (w) {
+        await announceInSalon(w, "published", personas);
+        await rememberPublishedWork(w);
+      }
     }
   }
 

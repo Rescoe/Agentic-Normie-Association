@@ -137,6 +137,56 @@ export async function addOneMinAiCredits(amount: number): Promise<void> {
   localLedger.set(key, cur);
 }
 
+/**
+ * Gives back the estimate charged by addOneMinAiCredits() for a call that provably cost nothing (the
+ * provider answered with an HTTP error or a non-SUCCESS record — see oneMinAi.ts). Never goes below 0,
+ * and decrements the call counter so "calls" keeps meaning "calls that may have been billed".
+ * 21/11/2026 incident: every failed call stayed charged, so a month with ZERO real spend (the 1min.ai
+ * top-up history showed no deduction at all in November) still read 548 000 / 500 000 and locked 1min.ai out.
+ */
+export async function refundOneMinAiCredits(amount: number): Promise<void> {
+  const month = currentMonth();
+  if (USE_NEON) {
+    await query(
+      `UPDATE llm_ledger SET
+         calls      = GREATEST(calls - 1, 0),
+         tokens_est = GREATEST(tokens_est - $4, 0)
+       WHERE month = $1 AND provider = '1minai' AND model = $2 AND task = $3`,
+      [month, CREDIT_ROW_MODEL, CREDIT_ROW_TASK, amount],
+    );
+    return;
+  }
+  const key = localKey(month, "1minai", CREDIT_ROW_MODEL, CREDIT_ROW_TASK);
+  const cur = localLedger.get(key);
+  if (!cur) return;
+  cur.calls = Math.max(cur.calls - 1, 0);
+  cur.tokensEst = Math.max(cur.tokensEst - amount, 0);
+}
+
+/**
+ * Overwrites this month's estimated 1min.ai spend with a value the operator read from the real balance
+ * (admin route POST /api/admin/llm-ledger, action "set-credits"). Returns the previous value.
+ */
+export async function setOneMinAiCreditsSpent(credits: number): Promise<number> {
+  const month = currentMonth();
+  const value = Math.max(0, Math.round(credits));
+  const previous = await getOneMinAiCreditsSpent(month);
+  if (USE_NEON) {
+    await query(
+      `INSERT INTO llm_ledger (month, provider, model, task, calls, successes, failures, retries, tokens_est)
+       VALUES ($1, '1minai', $2, $3, 0, 0, 0, 0, $4)
+       ON CONFLICT (month, provider, model, task) DO UPDATE SET tokens_est = $4`,
+      [month, CREDIT_ROW_MODEL, CREDIT_ROW_TASK, value],
+    );
+    return previous;
+  }
+  const key = localKey(month, "1minai", CREDIT_ROW_MODEL, CREDIT_ROW_TASK);
+  const cur = localLedger.get(key) ?? { calls: 0, successes: 0, failures: 0, retries: 0, tokensEst: 0 };
+  cur.tokensEst = value;
+  localLedger.set(key, cur);
+  return previous;
+}
+
 // ─── Provider budget / economy-mode ────────────────────────────────────────
 //
 // Monthly caps are configured via env (no hardcoded provider prices — the
